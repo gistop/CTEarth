@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CTEarth">
+  <rect width="512" height="512" rx="96" fill="#0f766e"/>
+  <path d="M120 316c48-122 116-183 204-183 35 0 64 8 88 25-52 2-95 22-129 59-35 37-58 87-70 151-40-4-71-21-93-52Z" fill="#d9f99d"/>
+  <path d="M118 331c64 30 135 28 214-6 26-11 51-25 76-41-27 63-78 101-153 113-51 8-97-14-137-66Z" fill="#7dd3fc"/>
+  <circle cx="337" cy="179" r="31" fill="#fef08a"/>
+</svg>
