@@ -1,16 +1,18 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockviewReact,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
 } from 'dockview-react';
 import {
+  ArrowLeft,
   Bell,
   ChevronsDown,
   ChevronsUp,
   ChevronDown,
   Database,
   Download,
+  FolderCog,
   FolderOpen,
   Grid2X2,
   HelpCircle,
@@ -29,14 +31,23 @@ import {
   Search,
   Settings,
   Share2,
+  SlidersHorizontal,
   Sparkles,
   SquareDashedMousePointer,
+  Tags,
+  Wrench,
   Undo2,
   Upload,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
+import {
+  GisProvider,
+  type BufferParameters as BufferRunParameters,
+  type IdwParameters as IdwRunParameters,
+  useGis,
+} from './gisStore';
 
 type RibbonTool = {
   label: string;
@@ -225,6 +236,24 @@ function Ribbon({
 }
 
 function ContentsPanel() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { layer, message, uploadGeoJson, uploadShapefileZip } = useGis();
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
+      await uploadGeoJson(file);
+    } else {
+      await uploadShapefileZip(file);
+    }
+    event.target.value = '';
+  };
+
   return (
     <aside className="panel-shell">
       <div className="panel-search">
@@ -237,6 +266,10 @@ function ContentsPanel() {
         <Map size={18} />
         <PenTool size={18} />
         <Grid2X2 size={18} />
+        <button type="button" title="上传 Shapefile ZIP 或 GeoJSON" aria-label="上传 Shapefile ZIP 或 GeoJSON" onClick={() => fileInputRef.current?.click()}>
+          <Upload size={18} />
+        </button>
+        <input ref={fileInputRef} className="hidden-file-input" type="file" accept=".zip,.geojson,.json" onChange={handleFileChange} />
       </div>
       <section className="layer-tree">
         <h3>绘制顺序</h3>
@@ -245,34 +278,112 @@ function ContentsPanel() {
           <Map size={16} />
           <span>地图</span>
         </div>
-        <div className="tree-row">
-          <input type="checkbox" defaultChecked aria-label="DEM 图层" />
-          <span className="layer-swatch terrain" />
-          <span>ASTGTMV003_N31E121_dem.tif</span>
-        </div>
-        <div className="legend-block">
-          <span>值</span>
-          <div className="legend-gradient color" />
-          <div className="legend-scale"><span>90</span><span>0</span></div>
-        </div>
-        <div className="tree-row selected">
-          <input type="checkbox" defaultChecked aria-label="Hillshade 图层" />
-          <span className="layer-swatch mono" />
-          <span>hill.tif</span>
-        </div>
-        <div className="legend-block">
-          <span>值</span>
-          <div className="legend-gradient mono" />
-          <div className="legend-scale"><span>254</span><span>0</span></div>
-        </div>
+        {layer ? (
+          <>
+            <div className="tree-row selected">
+              <input type="checkbox" defaultChecked aria-label={`${layer.fileName} 图层`} />
+              <span className="layer-swatch point" />
+              <span>{layer.fileName}</span>
+            </div>
+            <div className="layer-note">
+              {layer.geojson.features.length} 个要素
+              {layer.points.features.length > 0 ? `，点：${layer.points.features.length}` : ''}
+              {layer.selectedField ? `，字段：${layer.selectedField}` : ''}
+            </div>
+          </>
+        ) : (
+          <div className="layer-note">点击上方上传按钮，选择 Shapefile ZIP 或 GeoJSON。</div>
+        )}
+        <div className="layer-note status">{message}</div>
       </section>
     </aside>
   );
 }
 
+type InspectorTabId = 'statistics' | 'mask' | 'annotation' | 'tools';
+type ToolView = 'tree' | 'detail';
+type ToolDetailTab = 'parameters' | 'environment';
+type AnalysisTool = 'idw' | 'buffer';
+type ToolNode = {
+  id: string;
+  label: string;
+  children?: ToolNode[];
+  tool?: AnalysisTool;
+};
+
+const inspectorTabs: {
+  id: InspectorTabId;
+  label: string;
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+}[] = [
+  { id: 'statistics', label: '统计数据', icon: Database },
+  { id: 'mask', label: '掩膜', icon: SquareDashedMousePointer },
+  { id: 'annotation', label: '高级标注', icon: Tags },
+  { id: 'tools', label: '工具', icon: Wrench },
+];
+
+const toolTree: ToolNode[] = [{
+  id: 'general',
+  label: '通用',
+  children: [
+    {
+      id: 'general-interpolation',
+      label: '插值',
+      children: [{ id: 'general-interpolation-idw', label: '反距离加权', tool: 'idw' }],
+    },
+    {
+      id: 'general-proximity',
+      label: '邻近',
+      children: [{ id: 'general-proximity-buffer', label: '缓冲区', tool: 'buffer' }],
+    },
+  ],
+}, {
+  id: 'industry',
+  label: '行业',
+  children: [
+    { id: 'industry-water', label: '水利' },
+    { id: 'industry-forestry', label: '林业' },
+    { id: 'industry-geology', label: '地质' },
+  ],
+}];
+
 function InspectorPanel() {
+  const [activeTab, setActiveTab] = useState<InspectorTabId>('statistics');
+
   return (
     <aside className="panel-shell inspector-panel">
+      <div className="inspector-content">
+        {activeTab === 'statistics' && <StatisticsTab />}
+        {activeTab === 'mask' && <MaskTab />}
+        {activeTab === 'annotation' && <AnnotationTab />}
+        {activeTab === 'tools' && <ToolsTab />}
+      </div>
+      <div className="inspector-tabs" role="tablist" aria-label="右侧面板">
+        {inspectorTabs.map((tab) => {
+          const Icon = tab.icon;
+
+          return (
+            <button
+              className={activeTab === tab.id ? 'is-selected' : ''}
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <Icon size={16} strokeWidth={1.7} />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+function StatisticsTab() {
+  return (
+    <>
       <div className="inspector-toolbar">
         <button className="is-selected" type="button" title="符号系统" aria-label="符号系统"><PenTool size={20} /></button>
         <button type="button" title="属性" aria-label="属性"><PanelLeft size={20} /></button>
@@ -331,12 +442,520 @@ function InspectorPanel() {
         锐化
         <input defaultValue="0" />
       </label>
-      <div className="inspector-tabs">
-        <button className="is-selected" type="button">统计数据</button>
-        <button type="button">掩膜</button>
-        <button type="button">高级标注</button>
+    </>
+  );
+}
+
+function MaskTab() {
+  return (
+    <section className="inspector-empty">
+      <h3>掩膜</h3>
+      <p>当前未配置掩膜。</p>
+    </section>
+  );
+}
+
+function AnnotationTab() {
+  return (
+    <section className="inspector-empty">
+      <h3>高级标注</h3>
+      <p>当前未配置高级标注。</p>
+    </section>
+  );
+}
+
+function ToolsTab() {
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState<ToolView>('tree');
+  const [detailTab, setDetailTab] = useState<ToolDetailTab>('parameters');
+  const [activeTool, setActiveTool] = useState<AnalysisTool>('idw');
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(() => new Set(['general', 'general-interpolation', 'general-proximity', 'industry']));
+  const trimmedQuery = query.trim();
+  const normalizedQuery = trimmedQuery.toLowerCase();
+  const visibleNodes = useMemo(() => filterToolTree(toolTree, normalizedQuery), [normalizedQuery]);
+  const visibleIds = useMemo(() => new Set(collectNodeIds(visibleNodes)), [visibleNodes]);
+  const expandedIds = useMemo(() => {
+    if (!normalizedQuery) {
+      return expandedNodeIds;
+    }
+
+    return new Set([...expandedNodeIds, ...collectParentIds(visibleNodes)]);
+  }, [expandedNodeIds, normalizedQuery, visibleNodes]);
+  const openTool = (tool: AnalysisTool) => {
+    setActiveTool(tool);
+    setDetailTab('parameters');
+    setView('detail');
+  };
+  const toggleNode = (nodeId: string) => {
+    setExpandedNodeIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+
+      return next;
+    });
+  };
+
+  if (view === 'detail') {
+    return (
+      <ToolDetailView
+        activeTab={detailTab}
+        tool={activeTool}
+        onBack={() => setView('tree')}
+        onChangeTab={setDetailTab}
+      />
+    );
+  }
+
+  return (
+    <section className="tools-panel">
+      <div className="panel-search">
+        <Search size={15} />
+        <input
+          placeholder="搜索工具"
+          aria-label="搜索工具"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
       </div>
-    </aside>
+      <div className="tool-tree" aria-label="工具树">
+        {visibleNodes.map((node) => (
+          <ToolTreeNode
+            key={node.id}
+            depth={0}
+            expandedIds={expandedIds}
+            node={node}
+            query={normalizedQuery}
+            visibleIds={visibleIds}
+            onOpenTool={openTool}
+            onToggle={toggleNode}
+          />
+        ))}
+      </div>
+      {trimmedQuery && visibleNodes.length === 0 && (
+        <p className="tool-empty">没有找到匹配工具。</p>
+      )}
+    </section>
+  );
+}
+
+function ToolTreeNode({
+  node,
+  depth,
+  expandedIds,
+  query,
+  visibleIds,
+  onOpenTool,
+  onToggle,
+}: {
+  node: ToolNode;
+  depth: number;
+  expandedIds: Set<string>;
+  query: string;
+  visibleIds: Set<string>;
+  onOpenTool: (tool: AnalysisTool) => void;
+  onToggle: (nodeId: string) => void;
+}) {
+  const hasChildren = Boolean(node.children?.length);
+  const isExpanded = expandedIds.has(node.id);
+  const isMatched = query.length > 0 && node.label.toLowerCase().includes(query);
+  const handleOpen = node.tool ? () => onOpenTool(node.tool as AnalysisTool) : undefined;
+
+  return (
+    <>
+      <TreeRow
+        depth={depth}
+        label={node.label}
+        leaf={!hasChildren}
+        open={isExpanded}
+        selected={Boolean(node.tool)}
+        matched={isMatched}
+        onOpen={handleOpen}
+        onToggle={hasChildren ? () => onToggle(node.id) : undefined}
+      />
+      {hasChildren && isExpanded && node.children?.filter((child) => visibleIds.has(child.id)).map((child) => (
+        <ToolTreeNode
+          key={child.id}
+          depth={depth + 1}
+          expandedIds={expandedIds}
+          node={child}
+          query={query}
+          visibleIds={visibleIds}
+          onOpenTool={onOpenTool}
+          onToggle={onToggle}
+        />
+      ))}
+    </>
+  );
+}
+
+function TreeRow({
+  depth,
+  label,
+  open = false,
+  leaf = false,
+  selected = false,
+  matched = false,
+  onOpen,
+  onToggle,
+}: {
+  depth: number;
+  label: string;
+  open?: boolean;
+  leaf?: boolean;
+  selected?: boolean;
+  matched?: boolean;
+  onOpen?: () => void;
+  onToggle?: () => void;
+}) {
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'ArrowRight' && onToggle && !open) {
+      event.preventDefault();
+      onToggle();
+      return;
+    }
+
+    if (event.key === 'ArrowLeft' && onToggle && open) {
+      event.preventDefault();
+      onToggle();
+      return;
+    }
+
+    if ((event.key === 'Enter' || event.key === ' ') && onToggle) {
+      event.preventDefault();
+      onToggle();
+      return;
+    }
+
+    if (!onOpen || (event.key !== 'Enter' && event.key !== ' ')) {
+      return;
+    }
+
+    event.preventDefault();
+    onOpen();
+  };
+
+  return (
+    <button
+      className={`tool-tree-row${selected ? ' selected' : ''}${matched ? ' matched' : ''}`}
+      style={{ '--tree-depth': depth } as React.CSSProperties}
+      type="button"
+      onDoubleClick={onOpen}
+      onKeyDown={handleKeyDown}
+      onClick={onToggle ?? onOpen}
+    >
+      <ChevronDown className={`${leaf ? 'is-hidden' : ''}${!open ? ' is-collapsed' : ''}`} size={14} />
+      {leaf ? <Wrench size={16} /> : <FolderCog size={16} />}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function filterToolTree(nodes: ToolNode[], query: string): ToolNode[] {
+  if (!query) {
+    return nodes;
+  }
+
+  return nodes.flatMap((node) => {
+    const children = node.children ? filterToolTree(node.children, query) : [];
+    const matched = node.label.toLowerCase().includes(query);
+
+    if (matched || children.length > 0) {
+      return [{ ...node, children }];
+    }
+
+    return [];
+  });
+}
+
+function collectNodeIds(nodes: ToolNode[]): string[] {
+  return nodes.flatMap((node) => [node.id, ...collectNodeIds(node.children ?? [])]);
+}
+
+function collectParentIds(nodes: ToolNode[]): string[] {
+  return nodes.flatMap((node) => (
+    node.children?.length ? [node.id, ...collectParentIds(node.children)] : []
+  ));
+}
+
+
+function ToolDetailView({
+  activeTab,
+  tool,
+  onBack,
+  onChangeTab,
+}: {
+  activeTab: ToolDetailTab;
+  tool: AnalysisTool;
+  onBack: () => void;
+  onChangeTab: (tab: ToolDetailTab) => void;
+}) {
+  const { isRunning, layer, runBufferAnalysis, runIdwInterpolation, toolsReady } = useGis();
+  const [idwParams, setIdwParams] = useState<IdwRunParameters>({
+    field: layer?.selectedField ?? '',
+    outputName: 'idw-interpolation.tif',
+    cellSize: '0.001',
+    weight: '2',
+    radius: '0',
+    minPoints: '0',
+  });
+  const [bufferParams, setBufferParams] = useState<BufferRunParameters>({
+    outputName: 'buffer.geojson',
+    distance: '0.01',
+    quadrantSegments: '8',
+    capStyle: 'round',
+    joinStyle: 'round',
+    dissolve: false,
+  });
+  const title = tool === 'idw' ? '反距离加权' : '缓冲区';
+
+  useEffect(() => {
+    if (!layer) {
+      return;
+    }
+
+    setIdwParams((current) => ({
+      ...current,
+      field: current.field || layer.selectedField,
+    }));
+  }, [layer]);
+
+  const updateIdwParam = (name: keyof IdwRunParameters, value: string) => {
+    setIdwParams((current) => ({ ...current, [name]: value }));
+  };
+  const updateBufferParam = (name: keyof BufferRunParameters, value: string | boolean) => {
+    setBufferParams((current) => ({ ...current, [name]: value }));
+  };
+  const runActiveTool = () => {
+    if (tool === 'idw') {
+      void runIdwInterpolation(idwParams);
+      return;
+    }
+
+    void runBufferAnalysis(bufferParams);
+  };
+
+  return (
+    <section className="tool-detail">
+      <div className="tool-detail-header">
+        <button type="button" title="返回工具树" aria-label="返回工具树" onClick={onBack}>
+          <ArrowLeft size={19} />
+        </button>
+        <h3>{title}</h3>
+        <button type="button" title="工具选项" aria-label="工具选项">
+          <SlidersHorizontal size={18} />
+        </button>
+      </div>
+      <div className="tool-detail-tabs" role="tablist" aria-label="反距离加权设置">
+        <button
+          className={activeTab === 'parameters' ? 'is-selected' : ''}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'parameters'}
+          onClick={() => onChangeTab('parameters')}
+        >
+          参数
+        </button>
+        <button
+          className={activeTab === 'environment' ? 'is-selected' : ''}
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'environment'}
+          onClick={() => onChangeTab('environment')}
+        >
+          环境
+        </button>
+      </div>
+      <div className="tool-detail-body">
+        {activeTab === 'parameters' && tool === 'idw' ? (
+          <IdwParameters params={idwParams} onChange={updateIdwParam} />
+        ) : null}
+        {activeTab === 'parameters' && tool === 'buffer' ? (
+          <BufferParameters params={bufferParams} onChange={updateBufferParam} />
+        ) : (
+          null
+        )}
+        {activeTab === 'environment' ? <AnalysisEnvironment /> : null}
+      </div>
+      <div className="tool-detail-actions">
+        <button type="button">重置</button>
+        <button
+          className="primary"
+          type="button"
+          disabled={!toolsReady || !layer || isRunning}
+          onClick={runActiveTool}
+        >
+          <Play size={15} />
+          <span>{isRunning ? '运行中' : '运行'}</span>
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function IdwParameters({
+  params,
+  onChange,
+}: {
+  params: IdwRunParameters;
+  onChange: (name: keyof IdwRunParameters, value: string) => void;
+}) {
+  const { layer, setSelectedField } = useGis();
+  const fieldOptions = layer?.numericFields ?? [];
+  const inputName = layer?.fileName ?? '';
+
+  return (
+    <form className="tool-form">
+      <ToolField label="输入点要素" required action="folder">
+        <input value={inputName} readOnly placeholder="请先在左侧上传 Shapefile ZIP" />
+      </ToolField>
+      <ToolField label="Z 值字段" required action="settings">
+        <select
+          value={params.field}
+          onChange={(event) => {
+            onChange('field', event.target.value);
+            setSelectedField(event.target.value);
+          }}
+        >
+          <option value="" disabled>选择字段</option>
+          {fieldOptions.map((field) => (
+            <option key={field} value={field}>{field}</option>
+          ))}
+        </select>
+      </ToolField>
+      <ToolField label="输出栅格" required action="folder">
+        <input value={params.outputName} onChange={(event) => onChange('outputName', event.target.value)} />
+      </ToolField>
+      <ToolField label="输出像元大小">
+        <input value={params.cellSize} onChange={(event) => onChange('cellSize', event.target.value)} />
+      </ToolField>
+      <ToolField label="幂">
+        <input value={params.weight} type="number" min="0.1" step="0.1" onChange={(event) => onChange('weight', event.target.value)} />
+      </ToolField>
+      <ToolField label="搜索半径">
+        <input value={params.radius} type="number" min="0" step="any" onChange={(event) => onChange('radius', event.target.value)} />
+      </ToolField>
+      <ToolField label="点数">
+        <input value={params.minPoints} type="number" min="0" step="1" onChange={(event) => onChange('minPoints', event.target.value)} />
+      </ToolField>
+      <ToolField label="最大距离">
+        <input />
+      </ToolField>
+      <ToolField label="输入障碍折线要素" action="folder">
+        <input />
+      </ToolField>
+    </form>
+  );
+}
+
+function BufferParameters({
+  params,
+  onChange,
+}: {
+  params: BufferRunParameters;
+  onChange: (name: keyof BufferRunParameters, value: string | boolean) => void;
+}) {
+  const { layer } = useGis();
+  const inputName = layer?.fileName ?? '';
+
+  return (
+    <form className="tool-form">
+      <ToolField label="输入要素" required action="folder">
+        <input value={inputName} readOnly placeholder="请先在左侧上传 Shapefile ZIP" />
+      </ToolField>
+      <ToolField label="输出要素" required action="folder">
+        <input value={params.outputName} onChange={(event) => onChange('outputName', event.target.value)} />
+      </ToolField>
+      <ToolField label="距离" required>
+        <input value={params.distance} type="number" min="0.000001" step="any" onChange={(event) => onChange('distance', event.target.value)} />
+      </ToolField>
+      <ToolField label="圆弧段数">
+        <input value={params.quadrantSegments} type="number" min="1" step="1" onChange={(event) => onChange('quadrantSegments', event.target.value)} />
+      </ToolField>
+      <ToolField label="端点样式">
+        <select value={params.capStyle} onChange={(event) => onChange('capStyle', event.target.value)}>
+          <option value="round">圆形</option>
+          <option value="flat">平直</option>
+          <option value="square">方形</option>
+        </select>
+      </ToolField>
+      <ToolField label="连接样式">
+        <select value={params.joinStyle} onChange={(event) => onChange('joinStyle', event.target.value)}>
+          <option value="round">圆形</option>
+          <option value="bevel">斜角</option>
+          <option value="mitre">尖角</option>
+        </select>
+      </ToolField>
+      <ToolField label="融合结果">
+        <input checked={params.dissolve} type="checkbox" onChange={(event) => onChange('dissolve', event.target.checked)} />
+      </ToolField>
+    </form>
+  );
+}
+
+function AnalysisEnvironment() {
+  return (
+    <form className="tool-form">
+      <ToolField label="输出坐标系">
+        <select defaultValue="map">
+          <option value="map">与当前地图相同</option>
+          <option value="layer">与输入图层相同</option>
+        </select>
+      </ToolField>
+      <ToolField label="处理范围">
+        <select defaultValue="default">
+          <option value="default">默认</option>
+          <option value="display">当前显示范围</option>
+        </select>
+      </ToolField>
+      <ToolField label="像元大小">
+        <input placeholder="使用参数设置" />
+      </ToolField>
+      <ToolField label="捕捉栅格" action="folder">
+        <input />
+      </ToolField>
+      <ToolField label="并行处理因子">
+        <input defaultValue="50%" />
+      </ToolField>
+    </form>
+  );
+}
+
+function ToolField({
+  label,
+  required = false,
+  action,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  action?: 'folder' | 'settings';
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="tool-field">
+      <span>
+        {required && <strong>*</strong>}
+        {label}
+      </span>
+      <div className="tool-field-control">
+        {children}
+        {action === 'folder' && (
+          <button type="button" title="浏览" aria-label={`浏览${label}`}>
+            <FolderOpen size={17} />
+          </button>
+        )}
+        {action === 'settings' && (
+          <button type="button" title="设置" aria-label={`设置${label}`}>
+            <Settings size={17} />
+          </button>
+        )}
+      </div>
+    </label>
   );
 }
 
@@ -355,6 +974,19 @@ function PythonPanel() {
 
 function PlaceholderPanel({ params }: IDockviewPanelProps<{ title: string }>) {
   return <div className="placeholder-panel">{params.title}</div>;
+}
+
+function StatusFooter() {
+  const { layer } = useGis();
+
+  return (
+    <footer className="status-bar">
+      <span>1:166,420</span>
+      <span>924,714.81  3,460,074.03 m</span>
+      <span>点要素：{layer?.points.features.length ?? 0}</span>
+      <button type="button" title="运行任务" aria-label="运行任务"><Play size={14} /></button>
+    </footer>
+  );
 }
 
 export default function App() {
@@ -436,28 +1068,25 @@ export default function App() {
   }, []);
 
   return (
-    <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
-      <QuickAccessBar
-        isRibbonCollapsed={isRibbonCollapsed}
-        onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
-      />
-      <Ribbon
-        collapsed={isRibbonCollapsed}
-      />
-      <main className="workspace">
-        <DockviewReact
-          className="dockview-theme-light cte-dockview"
-          components={components}
-          onReady={onReady}
-          disableFloatingGroups
+    <GisProvider>
+      <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
+        <QuickAccessBar
+          isRibbonCollapsed={isRibbonCollapsed}
+          onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
         />
-      </main>
-      <footer className="status-bar">
-        <span>1:166,420</span>
-        <span>924,714.81  3,460,074.03 m</span>
-        <span>所选要素：0</span>
-        <button type="button" title="运行任务" aria-label="运行任务"><Play size={14} /></button>
-      </footer>
-    </div>
+        <Ribbon
+          collapsed={isRibbonCollapsed}
+        />
+        <main className="workspace">
+          <DockviewReact
+            className="dockview-theme-light cte-dockview"
+            components={components}
+            onReady={onReady}
+            disableFloatingGroups
+          />
+        </main>
+        <StatusFooter />
+      </div>
+    </GisProvider>
   );
 }

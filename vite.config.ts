@@ -30,5 +30,11 @@ export default defineConfig({
         navigateFallback: '/index.html'
       }
     })
-  ]
+  ],
+  optimizeDeps: {
+    exclude: ['geolibre-wasm', 'geolibre-wasm/tools']
+  },
+  build: {
+    chunkSizeWarningLimit: 1800
+  }
 });
