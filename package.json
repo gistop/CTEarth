@@ -9,7 +9,10 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.15.15",
+    "@assistant-ui/react-ai-sdk": "^1.4.6",
     "@vitejs/plugin-react": "^5.0.0",
+    "ai": "^7.0.66",
     "dockview-react": "^7.0.4",
     "geolibre-wasm": "^1.5.1",
     "jszip": "^3.10.1",

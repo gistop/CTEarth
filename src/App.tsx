@@ -42,6 +42,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
+import { ContentsPanel as EmbeddedContentsPanel } from './components/contents/ContentsPanel';
 import {
   GisProvider,
   type BufferParameters as BufferRunParameters,
@@ -353,9 +354,9 @@ function InspectorPanel() {
   return (
     <aside className="panel-shell inspector-panel">
       <div className="inspector-content">
-        {activeTab === 'statistics' && <StatisticsTab />}
-        {activeTab === 'mask' && <MaskTab />}
-        {activeTab === 'annotation' && <AnnotationTab />}
+        {activeTab === 'statistics' && <section className="inspector-scroll-area"><StatisticsTab /></section>}
+        {activeTab === 'mask' && <div className="inspector-scroll-area"><MaskTab /></div>}
+        {activeTab === 'annotation' && <div className="inspector-scroll-area"><AnnotationTab /></div>}
         {activeTab === 'tools' && <ToolsTab />}
       </div>
       <div className="inspector-tabs" role="tablist" aria-label="右侧面板">
@@ -994,7 +995,7 @@ export default function App() {
 
   const components = useMemo(
     () => ({
-      contents: ContentsPanel,
+      contents: EmbeddedContentsPanel,
       map: MapPanel,
       inspector: InspectorPanel,
       python: PythonPanel,
