@@ -1,12 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
-import { Layers, LocateFixed, Minus, Plus, RotateCcw } from 'lucide-react';
 import { getPointBounds, useGis } from '../gisStore';
+import { type BasemapId, useMapCommands } from './map/MapCommandContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
 const CHINA_ZOOM = 3.6;
+const DEFAULT_BASEMAP: BasemapId = 'osm';
+const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 
-function createOnlineMapStyle(): maplibregl.StyleSpecification {
+const basemapLayers: Record<BasemapId, string[]> = {
+  osm: ['basemap-osm'],
+  tianditu: ['basemap-tianditu-vec', 'basemap-tianditu-cva'],
+  esri: ['basemap-esri'],
+};
+
+function createTiandituTiles(layer: 'vec' | 'cva') {
+  return Array.from(
+    { length: 8 },
+    (_, index) => (
+      `https://t${index}.tianditu.gov.cn/${layer}_w/wmts?` +
+      `SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}` +
+      `&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}` +
+      `&tk=${TIANDITU_TOKEN}`
+    ),
+  );
+}
+
+function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): maplibregl.StyleSpecification {
   return {
     version: 8,
     sources: {
@@ -16,22 +36,80 @@ function createOnlineMapStyle(): maplibregl.StyleSpecification {
         tileSize: 256,
         attribution: 'OpenStreetMap contributors',
       },
+      tiandituVec: {
+        type: 'raster',
+        tiles: createTiandituTiles('vec'),
+        tileSize: 256,
+        attribution: '天地图',
+      },
+      tiandituCva: {
+        type: 'raster',
+        tiles: createTiandituTiles('cva'),
+        tileSize: 256,
+        attribution: '天地图',
+      },
+      esriImagery: {
+        type: 'raster',
+        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+        tileSize: 256,
+        attribution: 'Tiles © Esri',
+      },
     },
     layers: [
       {
-        id: 'osm',
+        id: 'basemap-osm',
         type: 'raster',
         source: 'osm',
+        layout: {
+          visibility: activeBasemap === 'osm' ? 'visible' : 'none',
+        },
+      },
+      {
+        id: 'basemap-tianditu-vec',
+        type: 'raster',
+        source: 'tiandituVec',
+        layout: {
+          visibility: activeBasemap === 'tianditu' ? 'visible' : 'none',
+        },
+      },
+      {
+        id: 'basemap-tianditu-cva',
+        type: 'raster',
+        source: 'tiandituCva',
+        layout: {
+          visibility: activeBasemap === 'tianditu' ? 'visible' : 'none',
+        },
+      },
+      {
+        id: 'basemap-esri',
+        type: 'raster',
+        source: 'esriImagery',
+        layout: {
+          visibility: activeBasemap === 'esri' ? 'visible' : 'none',
+        },
       },
     ],
   };
+}
+
+function setBasemapVisibility(map: maplibregl.Map, basemap: BasemapId) {
+  Object.entries(basemapLayers).forEach(([id, layerIds]) => {
+    const isVisible = id === basemap;
+
+    layerIds.forEach((layerId) => {
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', isVisible ? 'visible' : 'none');
+      }
+    });
+  });
 }
 
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const lastLayerNameRef = useRef('');
-  const { layer, message, raster, vectorOverlay } = useGis();
+  const { registerMapCommands, updateMapCommandState } = useMapCommands();
+  const { layer, raster, vectorOverlay } = useGis();
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('正在初始化在线地图');
   const [mapReady, setMapReady] = useState(false);
@@ -63,10 +141,10 @@ export function MapPanel() {
         minZoom: 2,
         maxZoom: 18,
         attributionControl: false,
-        style: createOnlineMapStyle(),
+        style: createOnlineMapStyle(DEFAULT_BASEMAP),
       });
+      updateMapCommandState({ basemap: DEFAULT_BASEMAP, dragRotateEnabled: map.dragRotate.isEnabled() });
 
-      map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
       map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
       map.on('error', (event) => {
         setStatus(event.error?.message ?? '在线地图加载错误');
@@ -256,8 +334,7 @@ export function MapPanel() {
     }
   }, [mapReady, vectorOverlay]);
 
-  const zoomIn = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
+  const zoomIn = useCallback(() => {
     const map = mapRef.current;
 
     if (!map) {
@@ -265,10 +342,9 @@ export function MapPanel() {
     }
 
     map.zoomIn({ duration: 250 });
-  };
+  }, []);
 
-  const zoomOut = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
+  const zoomOut = useCallback(() => {
     const map = mapRef.current;
 
     if (!map) {
@@ -276,15 +352,40 @@ export function MapPanel() {
     }
 
     map.zoomOut({ duration: 250 });
-  };
+  }, []);
 
-  const resetNorth = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
+  const resetNorth = useCallback(() => {
     mapRef.current?.resetNorthPitch();
-  };
+  }, []);
 
-  const locate = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
+  const setBasemap = useCallback((basemap: BasemapId) => {
+    const map = mapRef.current;
+
+    if (!map) {
+      return;
+    }
+
+    setBasemapVisibility(map, basemap);
+    updateMapCommandState({ basemap });
+  }, [updateMapCommandState]);
+
+  const toggleDragRotate = useCallback(() => {
+    const map = mapRef.current;
+
+    if (!map) {
+      return;
+    }
+
+    if (map.dragRotate.isEnabled()) {
+      map.dragRotate.disable();
+    } else {
+      map.dragRotate.enable();
+    }
+
+    updateMapCommandState({ dragRotateEnabled: map.dragRotate.isEnabled() });
+  }, [updateMapCommandState]);
+
+  const locate = useCallback(() => {
     mapRef.current?.easeTo({
       center: CHINA_CENTER,
       zoom: CHINA_ZOOM,
@@ -293,19 +394,26 @@ export function MapPanel() {
       duration: 450,
       essential: true,
     });
-  };
+  }, []);
+
+  const mapCommands = useMemo(
+    () => ({
+      zoomIn,
+      zoomOut,
+      resetNorth,
+      setBasemap,
+      toggleDragRotate,
+      locate,
+    }),
+    [locate, resetNorth, setBasemap, toggleDragRotate, zoomIn, zoomOut],
+  );
+
+  useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
 
   return (
     <section className="map-panel">
       <div className="map-canvas" ref={containerRef} />
-      {status || message ? <div className="map-status">{status || message}</div> : null}
-      <div className="map-toolbar" aria-label="地图工具" onPointerDown={(event) => event.stopPropagation()}>
-        <button type="button" title="放大" aria-label="放大" onClick={zoomIn}><Plus size={17} /></button>
-        <button type="button" title="缩小" aria-label="缩小" onClick={zoomOut}><Minus size={17} /></button>
-        <button type="button" title="复位方向" aria-label="复位方向" onClick={resetNorth}><RotateCcw size={17} /></button>
-        <button type="button" title="定位示例区域" aria-label="定位示例区域" onClick={locate}><LocateFixed size={17} /></button>
-        <button type="button" title="图层" aria-label="图层"><Layers size={17} /></button>
-      </div>
+      {status ? <div className="map-status">{status}</div> : null}
       <div className="map-readout">{coords}</div>
     </section>
   );

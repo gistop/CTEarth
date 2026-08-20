@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -13,6 +13,7 @@ import {
   CircleStop,
   Globe2,
   KeyRound,
+  RotateCcw,
   SendHorizontal,
   Server,
   Sparkles,
@@ -33,7 +34,22 @@ const systemPrompt = [
   'When the user asks for choices, use A. B. C. D. option format.',
 ].join('\n');
 
-export function AiAssistantSection() {
+export function AiAssistantPanel() {
+  const [sessionId, setSessionId] = useState(0);
+
+  return (
+    <AssistantSession
+      key={sessionId}
+      onReset={() => setSessionId((current) => current + 1)}
+    />
+  );
+}
+
+function AssistantSession({
+  onReset,
+}: {
+  onReset: () => void;
+}) {
   const [mode, setMode] = useState<ChatMode>('proxy');
   const [apiKey, setApiKey] = useState('');
   const [rememberKey, setRememberKey] = useState(false);
@@ -91,8 +107,8 @@ export function AiAssistantSection() {
   };
 
   return (
-    <section className="contents-ai-section" aria-label="AI assistant">
-      <AssistantRuntimeProvider runtime={runtime}>
+    <AssistantRuntimeProvider runtime={runtime}>
+      <section className="ai-assistant-panel" aria-label="AI assistant">
         <ChatThread
           apiKey={apiKey}
           mode={mode}
@@ -101,10 +117,11 @@ export function AiAssistantSection() {
           onModeChange={setMode}
           onModelChange={setModel}
           onRememberKeyChange={updateRememberKey}
+          onReset={onReset}
           rememberKey={rememberKey}
         />
-      </AssistantRuntimeProvider>
-    </section>
+      </section>
+    </AssistantRuntimeProvider>
   );
 }
 
@@ -116,6 +133,7 @@ function ChatThread({
   onModeChange,
   onModelChange,
   onRememberKeyChange,
+  onReset,
   rememberKey,
 }: {
   apiKey: string;
@@ -125,6 +143,7 @@ function ChatThread({
   onModeChange: (value: ChatMode) => void;
   onModelChange: (value: string) => void;
   onRememberKeyChange: (value: boolean) => void;
+  onReset: () => void;
   rememberKey: boolean;
 }) {
   return (
@@ -134,53 +153,23 @@ function ChatThread({
           <Sparkles size={15} />
           <span>AI 助手</span>
         </div>
-        <div className="ai-mode-toggle" aria-label="AI 调用方式">
-          <button
-            className={mode === 'proxy' ? 'is-selected' : ''}
-            type="button"
-            title="后端代理"
-            aria-label="后端代理"
-            onClick={() => onModeChange('proxy')}
-          >
-            <Server size={14} />
-          </button>
-          <button
-            className={mode === 'direct' ? 'is-selected' : ''}
-            type="button"
-            title="浏览器直连"
-            aria-label="浏览器直连"
-            onClick={() => onModeChange('direct')}
-          >
-            <Globe2 size={14} />
+        <div className="ai-thread-controls">
+          <AiInlineSettings
+            apiKey={apiKey}
+            compact
+            mode={mode}
+            model={model}
+            onApiKeyChange={onApiKeyChange}
+            onModeChange={onModeChange}
+            onModelChange={onModelChange}
+            onRememberKeyChange={onRememberKeyChange}
+            rememberKey={rememberKey}
+          />
+          <button className="ai-icon-button" type="button" title="重置" aria-label="重置" onClick={onReset}>
+            <RotateCcw size={15} />
           </button>
         </div>
       </header>
-
-      {mode === 'direct' ? (
-        <div className="ai-direct-settings">
-          <input
-            autoComplete="off"
-            aria-label="DeepSeek API Key"
-            placeholder="DeepSeek API Key"
-            type="password"
-            value={apiKey}
-            onChange={(event) => onApiKeyChange(event.target.value)}
-          />
-          <select aria-label="AI model" value={model} onChange={(event) => onModelChange(event.target.value)}>
-            <option value="deepseek-chat">deepseek-chat</option>
-            <option value="deepseek-reasoner">deepseek-reasoner</option>
-          </select>
-          <label className="ai-key-check">
-            <input
-              checked={rememberKey}
-              type="checkbox"
-              onChange={(event) => onRememberKeyChange(event.target.checked)}
-            />
-            <KeyRound size={13} />
-            <span>本机保存</span>
-          </label>
-        </div>
-      ) : null}
 
       <ThreadPrimitive.Viewport className="ai-thread-viewport">
         <ThreadPrimitive.Empty>
@@ -243,7 +232,7 @@ function AssistantMessage() {
       <div className="ai-bubble ai-assistant-bubble">
         <MessagePrimitive.Content components={{ Text: TextPart }} />
         <MessagePrimitive.Error>
-          <div className="ai-message-error">请求失败。请检查代理地址或 Direct 模式的 API Key。</div>
+          <div className="ai-message-error">请求失败，请检查代理地址或 Direct 模式的 API Key。</div>
         </MessagePrimitive.Error>
       </div>
     </MessagePrimitive.Root>
@@ -267,9 +256,7 @@ function TextPart() {
 
 function Composer() {
   const { layer } = useGis();
-  const placeholder = layer
-    ? `询问 ${layer.fileName}`
-    : '询问 GIS/遥感问题...';
+  const placeholder = layer ? `询问 ${layer.fileName}` : '询问地图、图层或分析问题...';
 
   return (
     <ComposerPrimitive.Root className="ai-composer-root">
@@ -288,6 +275,108 @@ function Composer() {
         </ComposerPrimitive.Send>
       </div>
     </ComposerPrimitive.Root>
+  );
+}
+
+function AiInlineSettings({
+  apiKey,
+  compact = false,
+  mode,
+  model,
+  onApiKeyChange,
+  onModeChange,
+  onModelChange,
+  onRememberKeyChange,
+  rememberKey,
+}: {
+  apiKey: string;
+  compact?: boolean;
+  mode: ChatMode;
+  model: string;
+  onApiKeyChange: (value: string) => void;
+  onModeChange: (value: ChatMode) => void;
+  onModelChange: (value: string) => void;
+  onRememberKeyChange: (value: boolean) => void;
+  rememberKey: boolean;
+}) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const preventSettingSubmit = (event: KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+    }
+  };
+  const CurrentModeIcon = mode === 'proxy' ? Server : Globe2;
+
+  return (
+    <div className={`ai-inline-settings ${compact ? 'is-compact' : ''}`}>
+      <button
+        className={`ai-settings-trigger ${settingsOpen ? 'is-selected' : ''}`}
+        type="button"
+        title={mode === 'proxy' ? '后端代理' : '浏览器直连'}
+        aria-label="AI 连接设置"
+        aria-expanded={settingsOpen}
+        onClick={() => setSettingsOpen((open) => !open)}
+      >
+        <CurrentModeIcon size={18} />
+      </button>
+      {settingsOpen ? (
+        <div className="ai-settings-popover" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="ai-mode-toggle" aria-label="AI 调用方式">
+            <button
+              className={mode === 'proxy' ? 'is-selected' : ''}
+              type="button"
+              title="后端代理"
+              aria-label="后端代理"
+              onClick={() => onModeChange('proxy')}
+            >
+              <Server size={14} />
+            </button>
+            <button
+              className={mode === 'direct' ? 'is-selected' : ''}
+              type="button"
+              title="浏览器直连"
+              aria-label="浏览器直连"
+              onClick={() => onModeChange('direct')}
+            >
+              <Globe2 size={14} />
+            </button>
+          </div>
+          {mode === 'direct' ? (
+            <>
+              <input
+                autoComplete="off"
+                aria-label="DeepSeek API Key"
+                className="ai-inline-key-input"
+                placeholder="DeepSeek API Key"
+                type="password"
+                value={apiKey}
+                onChange={(event) => onApiKeyChange(event.target.value)}
+                onKeyDown={preventSettingSubmit}
+              />
+              <select
+                aria-label="AI model"
+                className="ai-inline-model-select"
+                value={model}
+                onChange={(event) => onModelChange(event.target.value)}
+                onKeyDown={preventSettingSubmit}
+              >
+                <option value="deepseek-chat">deepseek-chat</option>
+                <option value="deepseek-reasoner">deepseek-reasoner</option>
+              </select>
+              <button
+                className={`ai-remember-button ${rememberKey ? 'is-selected' : ''}`}
+                type="button"
+                title="本机保存 Key"
+                aria-label="本机保存 Key"
+                onClick={() => onRememberKeyChange(!rememberKey)}
+              >
+                <KeyRound size={14} />
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

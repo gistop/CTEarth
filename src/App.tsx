@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockviewReact,
+  type DockviewApi,
+  type IDockviewHeaderActionsProps,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
+  type IDockviewPanel,
 } from 'dockview-react';
 import {
   ArrowLeft,
@@ -18,7 +21,9 @@ import {
   HelpCircle,
   History,
   Layers,
+  LocateFixed,
   Map,
+  Minus,
   MousePointer2,
   PanelLeft,
   Pause,
@@ -26,6 +31,8 @@ import {
   Play,
   Plus,
   Redo2,
+  Rotate3d,
+  RotateCcw,
   Ruler,
   Save,
   Search,
@@ -43,6 +50,13 @@ import {
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
 import { ContentsPanel as EmbeddedContentsPanel } from './components/contents/ContentsPanel';
+import {
+  MapCommandProvider,
+  type BasemapId,
+  type MapCommand,
+  type MapCommandState,
+  useMapCommands,
+} from './components/map/MapCommandContext';
 import {
   GisProvider,
   type BufferParameters as BufferRunParameters,
@@ -78,6 +92,12 @@ const dockColumnRatio = {
   map: 0.64,
   inspector: 0.18,
 };
+
+const aiAssistantPanelId = 'ai-assistant-panel';
+
+const AiAssistantPanel = lazy(() => (
+  import('./components/ai/AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel }))
+));
 
 const ribbonGroups: { title: string; tools: RibbonTool[] }[] = [
   {
@@ -158,9 +178,13 @@ function ToolButton({
 
 function QuickAccessBar({
   isRibbonCollapsed,
+  isAiAssistantPanelVisible,
+  onToggleAiAssistantPanel,
   onToggleRibbon,
 }: {
   isRibbonCollapsed: boolean;
+  isAiAssistantPanelVisible: boolean;
+  onToggleAiAssistantPanel: () => void;
   onToggleRibbon: () => void;
 }) {
   return (
@@ -175,6 +199,16 @@ function QuickAccessBar({
       <button className="project-switcher" type="button">
         <span>MyProject35</span>
         <ChevronDown size={15} />
+      </button>
+      <button
+        className="icon-button panel-visibility-button"
+        type="button"
+        title={isAiAssistantPanelVisible ? '隐藏 AI 面板' : '显示 AI 面板'}
+        aria-label={isAiAssistantPanelVisible ? '隐藏 AI 面板' : '显示 AI 面板'}
+        aria-pressed={isAiAssistantPanelVisible}
+        onClick={onToggleAiAssistantPanel}
+      >
+        <span>AI</span>
       </button>
       <div className="global-search">
         <Search size={16} />
@@ -977,6 +1011,123 @@ function PlaceholderPanel({ params }: IDockviewPanelProps<{ title: string }>) {
   return <div className="placeholder-panel">{params.title}</div>;
 }
 
+function AiAssistantDockPanel() {
+  return (
+    <Suspense fallback={<div className="placeholder-panel">AI 助手</div>}>
+      <AiAssistantPanel />
+    </Suspense>
+  );
+}
+
+function MapHeaderPrefixActions({ activePanel }: IDockviewHeaderActionsProps) {
+  const { toolsReady } = useGis();
+
+  if (activePanel?.id !== 'map') {
+    return null;
+  }
+
+  return (
+    <div
+      className="map-header-prefix"
+      title={toolsReady ? 'GeoLibre WASM 已就绪' : 'GeoLibre WASM 未就绪'}
+      aria-label={toolsReady ? 'GeoLibre WASM 已就绪' : 'GeoLibre WASM 未就绪'}
+    >
+      <span className={`map-ready-light${toolsReady ? ' is-ready' : ' is-not-ready'}`} aria-hidden="true" />
+    </div>
+  );
+}
+
+const mapHeaderTools: {
+  command: MapCommand;
+  title: string;
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+  active?: (state: MapCommandState) => boolean;
+}[] = [
+  { command: 'zoomIn', title: '放大', icon: Plus },
+  { command: 'zoomOut', title: '缩小', icon: Minus },
+  { command: 'resetNorth', title: '复位方向', icon: RotateCcw },
+  { command: 'toggleDragRotate', title: '拖拽旋转', icon: Rotate3d, active: (state) => state.dragRotateEnabled },
+  { command: 'locate', title: '定位示例区域', icon: LocateFixed },
+];
+
+const basemapOptions: { id: BasemapId; label: string }[] = [
+  { id: 'osm', label: 'OpenStreetMap' },
+  { id: 'tianditu', label: '天地图 WMTS' },
+  { id: 'esri', label: 'Esri World Imagery' },
+];
+
+function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
+  const { hasMapCommands, mapCommandState, runMapCommand, setBasemap } = useMapCommands();
+  const [isBasemapMenuOpen, setIsBasemapMenuOpen] = useState(false);
+
+  if (activePanel?.id !== 'map') {
+    return null;
+  }
+
+  return (
+    <div className="map-header-actions" aria-label="地图工具">
+      {mapHeaderTools.map((tool) => {
+        const Icon = tool.icon;
+        const isActive = tool.active?.(mapCommandState) ?? false;
+
+        return (
+          <button
+            key={tool.command}
+            className={isActive ? 'is-active' : undefined}
+            type="button"
+            title={tool.title}
+            aria-label={tool.title}
+            aria-pressed={tool.active ? isActive : undefined}
+            disabled={!hasMapCommands}
+            onClick={(event) => {
+              event.stopPropagation();
+              runMapCommand(tool.command);
+            }}
+          >
+            <Icon size={15} strokeWidth={1.8} />
+          </button>
+        );
+      })}
+      <div className="map-layer-menu-wrapper">
+        <button
+          className={isBasemapMenuOpen ? 'is-active' : undefined}
+          type="button"
+          title="图层"
+          aria-label="图层"
+          aria-expanded={isBasemapMenuOpen}
+          disabled={!hasMapCommands}
+          onClick={(event) => {
+            event.stopPropagation();
+            setIsBasemapMenuOpen((isOpen) => !isOpen);
+          }}
+        >
+          <Layers size={15} strokeWidth={1.8} />
+        </button>
+        {isBasemapMenuOpen ? (
+          <div className="map-layer-menu" role="menu" aria-label="底图">
+            {basemapOptions.map((option) => (
+              <button
+                key={option.id}
+                className={option.id === mapCommandState.basemap ? 'is-selected' : undefined}
+                type="button"
+                role="menuitemradio"
+                aria-checked={option.id === mapCommandState.basemap}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setBasemap(option.id);
+                  setIsBasemapMenuOpen(false);
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function StatusFooter() {
   const { layer } = useGis();
 
@@ -992,9 +1143,13 @@ function StatusFooter() {
 
 export default function App() {
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState(false);
+  const [isAiAssistantPanelVisible, setIsAiAssistantPanelVisible] = useState(false);
+  const dockviewApiRef = useRef<DockviewApi | null>(null);
+  const aiAssistantPanelRef = useRef<IDockviewPanel | null>(null);
 
   const components = useMemo(
     () => ({
+      aiAssistant: AiAssistantDockPanel,
       contents: EmbeddedContentsPanel,
       map: MapPanel,
       inspector: InspectorPanel,
@@ -1004,7 +1159,63 @@ export default function App() {
     [],
   );
 
+  const addAiAssistantPanel = useCallback((api: DockviewApi) => {
+    const existingPanel = api.getPanel(aiAssistantPanelId);
+
+    if (existingPanel) {
+      aiAssistantPanelRef.current = existingPanel;
+      existingPanel.api.setActive();
+      setIsAiAssistantPanelVisible(true);
+      return existingPanel;
+    }
+
+    const panel = api.addPanel({
+      id: aiAssistantPanelId,
+      component: 'aiAssistant',
+      title: 'AI 助手',
+      floating: {
+        x: 74,
+        y: 74,
+        width: 460,
+        height: 520,
+      },
+      minimumWidth: 340,
+      minimumHeight: 320,
+    });
+    aiAssistantPanelRef.current = panel;
+    setIsAiAssistantPanelVisible(true);
+    return panel;
+  }, []);
+
+  const toggleAiAssistantPanel = useCallback(() => {
+    const api = dockviewApiRef.current;
+
+    if (!api) {
+      setIsAiAssistantPanelVisible((visible) => !visible);
+      return;
+    }
+
+    const panel = api.getPanel(aiAssistantPanelId);
+
+    if (panel) {
+      panel.api.close();
+      aiAssistantPanelRef.current = null;
+      setIsAiAssistantPanelVisible(false);
+      return;
+    }
+
+    addAiAssistantPanel(api);
+  }, [addAiAssistantPanel]);
+
   const onReady = useCallback((event: DockviewReadyEvent) => {
+    dockviewApiRef.current = event.api;
+    event.api.onDidRemovePanel((panel) => {
+      if (panel.id === aiAssistantPanelId) {
+        aiAssistantPanelRef.current = null;
+        setIsAiAssistantPanelVisible(false);
+      }
+    });
+
     const contents = event.api.addPanel({
       id: 'contents',
       component: 'contents',
@@ -1066,28 +1277,34 @@ export default function App() {
       applyDefaultColumnRatio();
       requestAnimationFrame(applyDefaultColumnRatio);
     });
+
   }, []);
 
   return (
     <GisProvider>
-      <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
-        <QuickAccessBar
-          isRibbonCollapsed={isRibbonCollapsed}
-          onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
-        />
-        <Ribbon
-          collapsed={isRibbonCollapsed}
-        />
-        <main className="workspace">
-          <DockviewReact
-            className="dockview-theme-light cte-dockview"
-            components={components}
-            onReady={onReady}
-            disableFloatingGroups
+      <MapCommandProvider>
+        <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
+          <QuickAccessBar
+            isAiAssistantPanelVisible={isAiAssistantPanelVisible}
+            isRibbonCollapsed={isRibbonCollapsed}
+            onToggleAiAssistantPanel={toggleAiAssistantPanel}
+            onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
           />
-        </main>
-        <StatusFooter />
-      </div>
+          <Ribbon
+            collapsed={isRibbonCollapsed}
+          />
+          <main className="workspace">
+            <DockviewReact
+              className="dockview-theme-light cte-dockview"
+              components={components}
+              onReady={onReady}
+              prefixHeaderActionsComponent={MapHeaderPrefixActions}
+              rightHeaderActionsComponent={MapHeaderActions}
+            />
+          </main>
+          <StatusFooter />
+        </div>
+      </MapCommandProvider>
     </GisProvider>
   );
 }

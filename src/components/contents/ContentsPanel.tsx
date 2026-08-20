@@ -1,18 +1,11 @@
-import { lazy, Suspense, useRef, type ChangeEvent } from 'react';
+import { useRef, type ChangeEvent } from 'react';
 import { Database, Grid2X2, Layers, Map, PenTool, Search, Upload } from 'lucide-react';
 import { useGis } from '../../gisStore';
-
-const AiAssistantSection = lazy(() => (
-  import('./AiAssistantSection').then((module) => ({ default: module.AiAssistantSection }))
-));
 
 export function ContentsPanel() {
   return (
     <aside className="panel-shell contents-panel">
       <LayerSection />
-      <Suspense fallback={<div className="contents-ai-loading">AI 助手加载中...</div>}>
-        <AiAssistantSection />
-      </Suspense>
     </aside>
   );
 }
