@@ -607,7 +607,6 @@ function ToolTreeNode({
         label={node.label}
         leaf={!hasChildren}
         open={isExpanded}
-        selected={Boolean(node.tool)}
         matched={isMatched}
         onOpen={handleOpen}
         onToggle={hasChildren ? () => onToggle(node.id) : undefined}
@@ -633,7 +632,6 @@ function TreeRow({
   label,
   open = false,
   leaf = false,
-  selected = false,
   matched = false,
   onOpen,
   onToggle,
@@ -642,7 +640,6 @@ function TreeRow({
   label: string;
   open?: boolean;
   leaf?: boolean;
-  selected?: boolean;
   matched?: boolean;
   onOpen?: () => void;
   onToggle?: () => void;
@@ -676,7 +673,7 @@ function TreeRow({
 
   return (
     <button
-      className={`tool-tree-row${selected ? ' selected' : ''}${matched ? ' matched' : ''}`}
+      className={`tool-tree-row${matched ? ' matched' : ''}`}
       style={{ '--tree-depth': depth } as React.CSSProperties}
       type="button"
       onDoubleClick={onOpen}
@@ -1297,6 +1294,7 @@ export default function App() {
             <DockviewReact
               className="dockview-theme-light cte-dockview"
               components={components}
+              floatingGroupBounds="boundedWithinViewport"
               onReady={onReady}
               prefixHeaderActionsComponent={MapHeaderPrefixActions}
               rightHeaderActionsComponent={MapHeaderActions}

@@ -13,6 +13,8 @@ const basemapLayers: Record<BasemapId, string[]> = {
   tianditu: ['basemap-tianditu-vec', 'basemap-tianditu-cva'],
   esri: ['basemap-esri'],
 };
+const rasterLayerIds = ['idw-interpolation'];
+const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
 
 function createTiandituTiles(layer: 'vec' | 'cva') {
   return Array.from(
@@ -92,9 +94,9 @@ function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): mapli
   };
 }
 
-function setBasemapVisibility(map: maplibregl.Map, basemap: BasemapId) {
+function setBasemapVisibility(map: maplibregl.Map, basemap: BasemapId, visible = true) {
   Object.entries(basemapLayers).forEach(([id, layerIds]) => {
-    const isVisible = id === basemap;
+    const isVisible = visible && id === basemap;
 
     layerIds.forEach((layerId) => {
       if (map.getLayer(layerId)) {
@@ -104,12 +106,20 @@ function setBasemapVisibility(map: maplibregl.Map, basemap: BasemapId) {
   });
 }
 
+function setLayersVisibility(map: maplibregl.Map, layerIds: string[], visible: boolean) {
+  layerIds.forEach((layerId) => {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+    }
+  });
+}
+
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const lastLayerNameRef = useRef('');
-  const { registerMapCommands, updateMapCommandState } = useMapCommands();
-  const { layer, raster, vectorOverlay } = useGis();
+  const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
+  const { layer, layers, layerOrder, layerVisibility, uploadedLayerVisibility, raster, vectorOverlay } = useGis();
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('正在初始化在线地图');
   const [mapReady, setMapReady] = useState(false);
@@ -152,8 +162,7 @@ export function MapPanel() {
       map.once('load', () => {
         map.resize();
         map.jumpTo({ center: CHINA_CENTER, zoom: CHINA_ZOOM, pitch: 0, bearing: 0 });
-        ensureOperationalLayers(map);
-        setMapReady(true);
+    setMapReady(true);
         setStatus('');
       });
       map.on('mousemove', (event) => {
@@ -188,42 +197,36 @@ export function MapPanel() {
       return;
     }
 
-    ensureOperationalLayers(map);
+    setBasemapVisibility(map, mapCommandState.basemap, layerVisibility.basemap);
+    setLayersVisibility(map, rasterLayerIds, layerVisibility.raster);
+    setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
+  }, [layerVisibility, mapCommandState.basemap, mapReady]);
 
-    const source = map.getSource('uploaded-vector') as maplibregl.GeoJSONSource | undefined;
+  useEffect(() => {
+    const map = mapRef.current;
 
-    if (!source) {
+    if (!mapReady || !map) {
       return;
     }
 
-    if (!layer) {
-      source.setData(emptyFeatureCollection());
+    if (layers.length === 0) {
+      removeStaleUploadedLayers(map, new Set());
       lastLayerNameRef.current = '';
       return;
     }
 
-    source.setData({
-      type: 'FeatureCollection',
-      features: layer.geojson.features.map((feature) => {
-        if (!isRecord(feature)) {
-          return feature;
-        }
+    const expectedLayerIds = new Set(layers.map((item) => item.id));
+    removeStaleUploadedLayers(map, expectedLayerIds);
 
-        const properties = isRecord(feature.properties) ? feature.properties : {};
+    layers.forEach((item) => {
+      ensureUploadedLayer(map, item.id);
+      setUploadedLayerData(map, item);
+      setLayersVisibility(map, uploadedLayerIds(item.id), uploadedLayerVisibility[item.id] ?? true);
+    });
 
-        return {
-          ...feature,
-          properties: {
-            ...properties,
-            _value: layer.selectedField && isPointLikeFeature(feature)
-              ? formatNumber(Number(properties[layer.selectedField]))
-              : '',
-          },
-        };
-      }),
-    } as GeoJSON.FeatureCollection);
+    applyLayerOrder(map, layerOrder, layers, Boolean(raster), Boolean(vectorOverlay));
 
-    if (lastLayerNameRef.current !== layer.fileName) {
+    if (layer && lastLayerNameRef.current !== layer.id) {
       const bounds = layer.points.features.length > 0
         ? getPointBounds(layer.points.features)
         : getGeoJsonBounds(layer.geojson);
@@ -232,9 +235,9 @@ export function MapPanel() {
         map.fitBounds(padBounds(bounds, 0.14), { padding: 80, duration: 700 });
       }
 
-      lastLayerNameRef.current = layer.fileName;
+      lastLayerNameRef.current = layer.id;
     }
-  }, [layer, mapReady]);
+  }, [layer, layerOrder, layers, mapReady, raster, uploadedLayerVisibility, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -270,10 +273,11 @@ export function MapPanel() {
           'raster-fade-duration': 0,
         },
       },
-      map.getLayer('uploaded-vector-circle') ? 'uploaded-vector-circle' : undefined,
     );
+    setLayersVisibility(map, rasterLayerIds, layerVisibility.raster);
+    applyLayerOrder(map, layerOrder, layers, true, Boolean(vectorOverlay));
     map.fitBounds(boundsFromCoordinates(raster.coordinates), { padding: 80, duration: 700 });
-  }, [mapReady, raster]);
+  }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -312,7 +316,6 @@ export function MapPanel() {
           'fill-opacity': 0.28,
         },
       },
-      map.getLayer('uploaded-vector-circle') ? 'uploaded-vector-circle' : undefined,
     );
     map.addLayer(
       {
@@ -324,15 +327,26 @@ export function MapPanel() {
           'line-width': 2,
         },
       },
-      map.getLayer('uploaded-vector-circle') ? 'uploaded-vector-circle' : undefined,
     );
+    setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
+    applyLayerOrder(map, layerOrder, layers, Boolean(raster), true);
 
     const bounds = getGeoJsonBounds(vectorOverlay.geojson);
 
     if (bounds) {
       map.fitBounds(padBounds(bounds, 0.12), { padding: 80, duration: 700 });
     }
-  }, [mapReady, vectorOverlay]);
+  }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!mapReady || !map) {
+      return;
+    }
+
+    applyLayerOrder(map, layerOrder, layers, Boolean(raster), Boolean(vectorOverlay));
+  }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
   const zoomIn = useCallback(() => {
     const map = mapRef.current;
@@ -365,9 +379,9 @@ export function MapPanel() {
       return;
     }
 
-    setBasemapVisibility(map, basemap);
+    setBasemapVisibility(map, basemap, layerVisibility.basemap);
     updateMapCommandState({ basemap });
-  }, [updateMapCommandState]);
+  }, [layerVisibility.basemap, updateMapCommandState]);
 
   const toggleDragRotate = useCallback(() => {
     const map = mapRef.current;
@@ -419,19 +433,38 @@ export function MapPanel() {
   );
 }
 
-function ensureOperationalLayers(map: maplibregl.Map) {
-  if (!map.getSource('uploaded-vector')) {
-    map.addSource('uploaded-vector', {
+function uploadedSourceId(layerId: string) {
+  return `uploaded-source-${layerId}`;
+}
+
+function uploadedLayerIds(layerId: string) {
+  return [
+    `uploaded-layer-${layerId}-fill`,
+    `uploaded-layer-${layerId}-line`,
+    `uploaded-layer-${layerId}-circle`,
+    `uploaded-layer-${layerId}-label`,
+  ];
+}
+
+function ensureUploadedLayer(map: maplibregl.Map, layerId: string) {
+  const sourceId = uploadedSourceId(layerId);
+  const [fillId, lineId, circleId, labelId] = uploadedLayerIds(layerId);
+
+  if (!map.getSource(sourceId)) {
+    map.addSource(sourceId, {
       type: 'geojson',
-      data: emptyFeatureCollection(),
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
     });
   }
 
-  if (!map.getLayer('uploaded-vector-fill')) {
+  if (!map.getLayer(fillId)) {
     map.addLayer({
-      id: 'uploaded-vector-fill',
+      id: fillId,
       type: 'fill',
-      source: 'uploaded-vector',
+      source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
       paint: {
         'fill-color': '#6b9bd2',
@@ -440,11 +473,11 @@ function ensureOperationalLayers(map: maplibregl.Map) {
     });
   }
 
-  if (!map.getLayer('uploaded-vector-line')) {
+  if (!map.getLayer(lineId)) {
     map.addLayer({
-      id: 'uploaded-vector-line',
+      id: lineId,
       type: 'line',
-      source: 'uploaded-vector',
+      source: sourceId,
       filter: [
         'any',
         ['==', ['geometry-type'], 'LineString'],
@@ -459,11 +492,11 @@ function ensureOperationalLayers(map: maplibregl.Map) {
     });
   }
 
-  if (!map.getLayer('uploaded-vector-circle')) {
+  if (!map.getLayer(circleId)) {
     map.addLayer({
-      id: 'uploaded-vector-circle',
+      id: circleId,
       type: 'circle',
-      source: 'uploaded-vector',
+      source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
       paint: {
         'circle-radius': 6,
@@ -474,11 +507,11 @@ function ensureOperationalLayers(map: maplibregl.Map) {
     });
   }
 
-  if (!map.getLayer('uploaded-vector-label')) {
+  if (!map.getLayer(labelId)) {
     map.addLayer({
-      id: 'uploaded-vector-label',
+      id: labelId,
       type: 'symbol',
-      source: 'uploaded-vector',
+      source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
       layout: {
         'text-field': ['to-string', ['get', '_value']],
@@ -495,11 +528,104 @@ function ensureOperationalLayers(map: maplibregl.Map) {
   }
 }
 
-function emptyFeatureCollection() {
-  return {
-    type: 'FeatureCollection' as const,
-    features: [],
-  };
+function setUploadedLayerData(map: maplibregl.Map, layer: { id: string; geojson: { features: unknown[] }; selectedField: string }) {
+  const source = map.getSource(uploadedSourceId(layer.id)) as maplibregl.GeoJSONSource | undefined;
+
+  source?.setData({
+    type: 'FeatureCollection',
+    features: layer.geojson.features.map((feature) => enrichFeature(feature, layer)),
+  } as GeoJSON.FeatureCollection);
+}
+
+function removeStaleUploadedLayers(map: maplibregl.Map, expectedLayerIds: Set<string>) {
+  const style = map.getStyle();
+  const staleLayerIds = style.layers
+    .map((item) => item.id)
+    .filter((id) => {
+      if (!id.startsWith('uploaded-layer-')) {
+        return false;
+      }
+
+      const uploadedId = uploadedIdFromLayerId(id);
+      return uploadedId ? !expectedLayerIds.has(uploadedId) : false;
+    });
+
+  staleLayerIds.forEach((id) => {
+    if (map.getLayer(id)) {
+      map.removeLayer(id);
+    }
+  });
+
+  Object.keys(style.sources)
+    .filter((id) => id.startsWith('uploaded-source-') && !expectedLayerIds.has(id.slice('uploaded-source-'.length)))
+    .forEach((id) => {
+      if (map.getSource(id)) {
+        map.removeSource(id);
+      }
+    });
+}
+
+function uploadedIdFromLayerId(layerId: string) {
+  const match = /^uploaded-layer-(.+)-(fill|line|circle|label)$/.exec(layerId);
+  return match?.[1] ?? null;
+}
+
+function applyLayerOrder(
+  map: maplibregl.Map,
+  layerOrder: string[],
+  uploadedLayers: { id: string }[],
+  hasRaster: boolean,
+  hasVectorOverlay: boolean,
+) {
+  const uploadedIds = new Set(uploadedLayers.map((item) => item.id));
+  const normalizedOrder = [
+    ...layerOrder,
+    ...uploadedLayers.map((item) => `uploaded:${item.id}`),
+    'basemap',
+    ...(hasRaster ? ['raster'] : []),
+    ...(hasVectorOverlay ? ['vectorOverlay'] : []),
+  ];
+  const seen = new Set<string>();
+  const layerGroups = normalizedOrder
+    .filter((id) => {
+      if (seen.has(id)) {
+        return false;
+      }
+
+      seen.add(id);
+      return true;
+    })
+    .map((id) => layerGroupIds(id, uploadedIds, hasRaster, hasVectorOverlay))
+    .filter((ids) => ids.length > 0);
+
+  [...layerGroups].reverse().forEach((groupIds) => {
+    groupIds.forEach((id) => {
+      if (map.getLayer(id)) {
+        map.moveLayer(id);
+      }
+    });
+  });
+}
+
+function layerGroupIds(id: string, uploadedIds: Set<string>, hasRaster: boolean, hasVectorOverlay: boolean) {
+  if (id === 'basemap') {
+    return Object.values(basemapLayers).flat();
+  }
+
+  if (id === 'raster') {
+    return hasRaster ? rasterLayerIds : [];
+  }
+
+  if (id === 'vectorOverlay') {
+    return hasVectorOverlay ? vectorOverlayLayerIds : [];
+  }
+
+  if (id.startsWith('uploaded:')) {
+    const layerId = id.slice('uploaded:'.length);
+    return uploadedIds.has(layerId) ? uploadedLayerIds(layerId) : [];
+  }
+
+  return [];
 }
 
 function padBounds(bounds: [number, number, number, number], ratio: number): [[number, number], [number, number]] {
@@ -538,6 +664,25 @@ function formatNumber(value: number) {
   }
 
   return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(3);
+}
+
+function enrichFeature(feature: unknown, layer: { id: string; selectedField: string }) {
+  if (!isRecord(feature)) {
+    return feature;
+  }
+
+  const properties = isRecord(feature.properties) ? feature.properties : {};
+
+  return {
+    ...feature,
+    properties: {
+      ...properties,
+      _layerId: layer.id,
+      _value: layer.selectedField && isPointLikeFeature(feature)
+        ? formatNumber(Number(properties[layer.selectedField]))
+        : '',
+    },
+  };
 }
 
 function getGeoJsonBounds(geojson: { features: unknown[] }): [number, number, number, number] | null {

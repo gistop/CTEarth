@@ -537,18 +537,39 @@ button {
 
 .tree-row {
   display: grid;
-  grid-template-columns: 20px 20px minmax(0, 1fr);
+  grid-template-columns: 16px 20px 20px minmax(0, 1fr);
   align-items: center;
   min-height: 30px;
   gap: 5px;
   padding: 2px 5px;
   border: 1px solid transparent;
+  cursor: pointer;
 }
 
 .tree-row span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tree-row input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.tree-row:hover {
+  border-color: #b6d8ec;
+  background: #eaf3fb;
+}
+
+.tree-row.is-dragging {
+  opacity: 0.48;
+}
+
+.tree-row.is-drop-target {
+  border-top-color: #1677b8;
+  box-shadow: inset 0 2px 0 #1677b8;
 }
 
 .tree-row.selected {
@@ -558,6 +579,21 @@ button {
 
 .tree-row.root {
   font-weight: 600;
+}
+
+.tree-drag-handle,
+.tree-drag-spacer {
+  width: 15px;
+  height: 15px;
+}
+
+.tree-drag-handle {
+  color: #7a8794;
+  cursor: grab;
+}
+
+.tree-row:active .tree-drag-handle {
+  cursor: grabbing;
 }
 
 .layer-swatch {
@@ -578,6 +614,21 @@ button {
   border-radius: 50%;
   background: #f6c445;
   box-shadow: inset 0 0 0 3px #17202a;
+}
+
+.layer-swatch.basemap {
+  background:
+    linear-gradient(135deg, rgb(22 119 184 / 0%) 45%, rgb(22 119 184 / 45%) 45% 55%, rgb(22 119 184 / 0%) 55%),
+    linear-gradient(#dbe9d4 0 44%, #c9dfec 44% 100%);
+}
+
+.layer-swatch.raster {
+  background: linear-gradient(#d64c36, #f8e058, #22a884, #2962a8);
+}
+
+.layer-swatch.buffer {
+  background: rgb(49 163 84 / 28%);
+  box-shadow: inset 0 0 0 2px #16753b;
 }
 
 .layer-note {
