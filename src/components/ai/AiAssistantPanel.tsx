@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
@@ -19,20 +19,152 @@ import {
   Sparkles,
   User,
 } from 'lucide-react';
-import { useGis } from '../../gisStore';
+import { useGis, type BufferParameters, type IdwParameters } from '../../gisStore';
 
 const DIRECT_API_URL = 'https://api.deepseek.com/chat/completions';
 const STORAGE_KEY = 'ctearth-ai-deepseek-key';
 const configuredProxyApi = import.meta.env.VITE_AI_CHAT_API || '/api/chat';
 
 type ChatMode = 'proxy' | 'direct';
+type GisRuntime = ReturnType<typeof useGis>;
+type AgentToolStatus = 'success' | 'blocked' | 'failed';
+type AgentToolResult = {
+  ok: boolean;
+  status: AgentToolStatus;
+  tool: string;
+  message: string;
+  qa: {
+    passed: boolean;
+    checks: string[];
+  };
+  output?: Record<string, unknown>;
+};
+
+type DeepSeekChatMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content?: string;
+  tool_call_id?: string;
+  tool_calls?: DeepSeekToolCall[];
+};
+
+type DeepSeekToolCall = {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
+type DeepSeekTool = {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
 
 const systemPrompt = [
   'You are CTEarth AI, a concise GIS and remote sensing assistant.',
   'Reply in the user language.',
-  'Help users reason about layers, fields, interpolation, buffers, map display, and analysis workflow.',
+  'When the user asks to operate the current map, use the available GIS tools instead of only explaining.',
+  'The GIS runtime is entirely in the browser with WASM. Tool distances and cell sizes use the current input data coordinate units.',
+  'If required parameters or layers are missing, ask one short follow-up question.',
   'When the user asks for choices, use A. B. C. D. option format.',
 ].join('\n');
+
+const gisTools: DeepSeekTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'list_layers',
+      description: 'Inspect the current CTEarth map state, uploaded layers, active layer, numeric fields, and existing analysis outputs.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'buffer_vector',
+      description: 'Run the browser WASM vector buffer tool on the active uploaded layer and add the output as a vector overlay.',
+      parameters: {
+        type: 'object',
+        properties: {
+          distance: {
+            type: 'number',
+            description: 'Positive buffer distance in the input layer coordinate units.',
+          },
+          outputName: {
+            type: 'string',
+            description: 'Optional output GeoJSON file name.',
+          },
+          quadrantSegments: {
+            type: 'integer',
+            description: 'Optional number of segments used to approximate round joins. Default is 8.',
+          },
+          capStyle: {
+            type: 'string',
+            enum: ['round', 'flat', 'square'],
+            description: 'Optional buffer cap style.',
+          },
+          joinStyle: {
+            type: 'string',
+            enum: ['round', 'bevel', 'mitre'],
+            description: 'Optional buffer join style.',
+          },
+          dissolve: {
+            type: 'boolean',
+            description: 'Whether to dissolve buffer results into one feature.',
+          },
+        },
+        required: ['distance'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'idw_interpolation',
+      description: 'Run the browser WASM IDW interpolation tool on the active point layer and add the output as a raster overlay.',
+      parameters: {
+        type: 'object',
+        properties: {
+          field: {
+            type: 'string',
+            description: 'Numeric field to interpolate. If omitted, CTEarth uses the active layer selected field.',
+          },
+          outputName: {
+            type: 'string',
+            description: 'Optional output GeoTIFF file name.',
+          },
+          cellSize: {
+            type: 'number',
+            description: 'Positive output pixel size in the input layer coordinate units.',
+          },
+          weight: {
+            type: 'number',
+            description: 'Positive IDW power parameter. Default is 2.',
+          },
+          radius: {
+            type: 'number',
+            description: 'Non-negative search radius. 0 means automatic/no fixed radius.',
+          },
+          minPoints: {
+            type: 'integer',
+            description: 'Non-negative minimum point count. Default is 0.',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+];
 
 export function AiAssistantPanel() {
   const [sessionId, setSessionId] = useState(0);
@@ -50,12 +182,18 @@ function AssistantSession({
 }: {
   onReset: () => void;
 }) {
-  const [mode, setMode] = useState<ChatMode>('proxy');
+  const gis = useGis();
+  const [mode, setMode] = useState<ChatMode>('direct');
   const [apiKey, setApiKey] = useState('');
   const [rememberKey, setRememberKey] = useState(false);
   const [model, setModel] = useState('deepseek-chat');
+  const gisRef = useRef(gis);
   const apiKeyRef = useRef(apiKey);
   const modelRef = useRef(model);
+
+  useEffect(() => {
+    gisRef.current = gis;
+  }, [gis]);
 
   useEffect(() => {
     const savedKey = localStorage.getItem(STORAGE_KEY) ?? '';
@@ -74,17 +212,23 @@ function AssistantSession({
     modelRef.current = model;
   }, [model]);
 
+  const executeGisTool = useCallback((name: string, input: Record<string, unknown>) => (
+    executeBrowserGisTool(name, input, gisRef)
+  ), []);
+
   const transport = useMemo<ChatTransport<UIMessage>>(() => {
     if (mode === 'proxy') {
       return new AssistantChatTransport({ api: configuredProxyApi });
     }
 
     return new DeepSeekBrowserTransport({
+      executeGisTool,
+      getGisContext: () => summarizeGisContext(gisRef.current),
       getApiKey: () => apiKeyRef.current,
       getModel: () => modelRef.current,
       system: systemPrompt,
     });
-  }, [mode]);
+  }, [executeGisTool, mode]);
 
   const runtime = useChatRuntime({ transport });
 
@@ -381,19 +525,27 @@ function AiInlineSettings({
 }
 
 class DeepSeekBrowserTransport implements ChatTransport<UIMessage> {
+  private executeGisTool: (name: string, input: Record<string, unknown>) => Promise<AgentToolResult>;
+  private getGisContext: () => Record<string, unknown>;
   private getApiKey: () => string;
   private getModel: () => string;
   private system: string;
 
   constructor({
+    executeGisTool,
+    getGisContext,
     getApiKey,
     getModel,
     system,
   }: {
+    executeGisTool: (name: string, input: Record<string, unknown>) => Promise<AgentToolResult>;
+    getGisContext: () => Record<string, unknown>;
     getApiKey: () => string;
     getModel: () => string;
     system: string;
   }) {
+    this.executeGisTool = executeGisTool;
+    this.getGisContext = getGisContext;
     this.getApiKey = getApiKey;
     this.getModel = getModel;
     this.system = system;
@@ -408,10 +560,68 @@ class DeepSeekBrowserTransport implements ChatTransport<UIMessage> {
   }) {
     const apiKey = this.getApiKey().trim();
 
+    return this.sendAgentMessages(apiKey, messages, abortSignal);
+  }
+
+  async reconnectToStream() {
+    return null;
+  }
+
+  private async sendAgentMessages(
+    apiKey: string,
+    messages: UIMessage[],
+    abortSignal: AbortSignal | undefined,
+  ) {
     if (!apiKey) {
-      throw new Error('请先输入 DeepSeek API Key。');
+      throw new Error('Please enter a DeepSeek API Key first.');
     }
 
+    const conversation: DeepSeekChatMessage[] = [
+      {
+        role: 'system',
+        content: `${this.system}\n\nCurrent CTEarth GIS context:\n${JSON.stringify(this.getGisContext(), null, 2)}`,
+      },
+      ...toDeepSeekMessages(messages),
+    ];
+    let finalText = '';
+
+    for (let turn = 0; turn < 4; turn += 1) {
+      const message = await this.complete(apiKey, conversation, abortSignal);
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+      if (toolCalls.length === 0) {
+        finalText = typeof message.content === 'string' ? message.content.trim() : '';
+        break;
+      }
+
+      conversation.push({
+        role: 'assistant',
+        content: message.content ?? '',
+        tool_calls: toolCalls,
+      });
+
+      for (const toolCall of toolCalls) {
+        const result = await this.executeGisTool(
+          toolCall.function.name,
+          parseToolArguments(toolCall.function.arguments),
+        );
+
+        conversation.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(result),
+        });
+      }
+    }
+
+    return textToUIMessageStream(finalText || '工具流程已结束，但模型没有返回最终说明。请查看地图状态确认结果。');
+  }
+
+  private async complete(
+    apiKey: string,
+    messages: DeepSeekChatMessage[],
+    abortSignal: AbortSignal | undefined,
+  ): Promise<DeepSeekChatMessage> {
     const response = await fetch(DIRECT_API_URL, {
       method: 'POST',
       headers: {
@@ -420,11 +630,10 @@ class DeepSeekBrowserTransport implements ChatTransport<UIMessage> {
       },
       body: JSON.stringify({
         model: this.getModel(),
-        messages: [
-          { role: 'system', content: this.system },
-          ...toDeepSeekMessages(messages),
-        ],
-        stream: true,
+        messages,
+        tools: gisTools,
+        tool_choice: 'auto',
+        stream: false,
       }),
       signal: abortSignal,
     });
@@ -434,16 +643,343 @@ class DeepSeekBrowserTransport implements ChatTransport<UIMessage> {
       throw new Error(`DeepSeek HTTP ${response.status}: ${errorText || response.statusText}`);
     }
 
-    if (!response.body) {
-      throw new Error('当前浏览器不支持流式读取响应。');
+    const payload = await response.json() as {
+      choices?: Array<{ message?: DeepSeekChatMessage }>;
+    };
+    const message = payload.choices?.[0]?.message;
+
+    if (!message) {
+      throw new Error('DeepSeek response did not include a message.');
     }
 
-    return deepSeekSseToUIMessageStream(response.body);
+    return message;
+  }
+}
+
+function summarizeGisContext(gis: GisRuntime) {
+  return {
+    toolsReady: gis.toolsReady,
+    isRunning: gis.isRunning,
+    message: gis.message,
+    activeLayerId: gis.layer?.id ?? null,
+    activeLayerName: gis.layer?.fileName ?? null,
+    layers: gis.layers.map((layer) => ({
+      id: layer.id,
+      fileName: layer.fileName,
+      featureCount: layer.geojson.features.length,
+      pointCount: layer.points.features.length,
+      numericFields: layer.numericFields,
+      selectedField: layer.selectedField,
+      visible: gis.uploadedLayerVisibility[layer.id] ?? true,
+    })),
+    outputs: {
+      raster: gis.raster ? {
+        width: gis.raster.width,
+        height: gis.raster.height,
+        min: gis.raster.min,
+        max: gis.raster.max,
+        epsg: gis.raster.epsg ?? null,
+        visible: gis.layerVisibility.raster,
+      } : null,
+      vectorOverlay: gis.vectorOverlay ? {
+        name: gis.vectorOverlay.name,
+        featureCount: gis.vectorOverlay.geojson.features.length,
+        visible: gis.layerVisibility.vectorOverlay,
+      } : null,
+    },
+  };
+}
+
+async function executeBrowserGisTool(
+  name: string,
+  input: Record<string, unknown>,
+  gisRef: { current: GisRuntime },
+): Promise<AgentToolResult> {
+  const gis = gisRef.current;
+
+  if (name === 'list_layers') {
+    return successToolResult(name, 'Read current CTEarth GIS state.', [
+      'GIS state was read from the browser runtime',
+    ], summarizeGisContext(gis));
   }
 
-  async reconnectToStream() {
-    return null;
+  if (name === 'buffer_vector') {
+    return runAgentBuffer(input, gisRef);
   }
+
+  if (name === 'idw_interpolation') {
+    return runAgentIdw(input, gisRef);
+  }
+
+  return failedToolResult(name, `Unknown GIS tool: ${name}`, [
+    'Tool name is registered: no',
+  ]);
+}
+
+async function runAgentBuffer(
+  input: Record<string, unknown>,
+  gisRef: { current: GisRuntime },
+): Promise<AgentToolResult> {
+  const gis = gisRef.current;
+  const distance = numberArg(input.distance);
+
+  if (!gis.toolsReady) {
+    return blockedToolResult('buffer_vector', 'WASM tools are still loading.', [
+      'WASM tool runtime is ready: no',
+    ]);
+  }
+
+  if (!gis.layer) {
+    return blockedToolResult('buffer_vector', 'No active vector layer is available. Please upload or select a layer first.', [
+      'Active input layer exists: no',
+    ]);
+  }
+
+  if (!Number.isFinite(distance) || distance <= 0) {
+    return blockedToolResult('buffer_vector', 'A positive buffer distance is required.', [
+      'Positive distance parameter is present: no',
+    ]);
+  }
+
+  const beforeOverlay = gis.vectorOverlay;
+  const params: BufferParameters = {
+    outputName: stringArg(input.outputName, 'agent-buffer.geojson'),
+    distance: String(distance),
+    quadrantSegments: String(integerArg(input.quadrantSegments, 8)),
+    capStyle: enumArg(input.capStyle, ['round', 'flat', 'square'], 'round'),
+    joinStyle: enumArg(input.joinStyle, ['round', 'bevel', 'mitre'], 'round'),
+    dissolve: booleanArg(input.dissolve, false),
+  };
+
+  await gis.runBufferAnalysis(params);
+  await waitForUiState();
+
+  const nextGis = gisRef.current;
+  const overlay = nextGis.vectorOverlay;
+  const changed = Boolean(overlay && overlay !== beforeOverlay);
+  const featureCount = overlay?.geojson.features.length ?? 0;
+
+  if (!changed || featureCount < 1) {
+    return failedToolResult('buffer_vector', nextGis.message || 'Buffer finished without a visible output overlay.', [
+      'Tool execution promise resolved',
+      `Vector overlay changed: ${changed ? 'yes' : 'no'}`,
+      `Output feature count > 0: ${featureCount > 0 ? 'yes' : 'no'}`,
+    ]);
+  }
+
+  return successToolResult('buffer_vector', `Buffer completed: ${featureCount} feature(s).`, [
+    'Tool execution promise resolved',
+    'Vector overlay changed: yes',
+    'Output feature count > 0: yes',
+    `Vector overlay visibility enabled: ${nextGis.layerVisibility.vectorOverlay ? 'yes' : 'no'}`,
+  ], {
+    outputName: overlay?.name ?? params.outputName,
+    featureCount,
+    sourceLayerId: gis.layer.id,
+    sourceLayerName: gis.layer.fileName,
+    parameters: params,
+  });
+}
+
+async function runAgentIdw(
+  input: Record<string, unknown>,
+  gisRef: { current: GisRuntime },
+): Promise<AgentToolResult> {
+  const gis = gisRef.current;
+
+  if (!gis.toolsReady) {
+    return blockedToolResult('idw_interpolation', 'WASM tools are still loading.', [
+      'WASM tool runtime is ready: no',
+    ]);
+  }
+
+  if (!gis.layer) {
+    return blockedToolResult('idw_interpolation', 'No active point layer is available. Please upload or select a point layer first.', [
+      'Active input layer exists: no',
+    ]);
+  }
+
+  if (gis.layer.points.features.length < 1) {
+    return blockedToolResult('idw_interpolation', 'The active layer has no point features for IDW.', [
+      'Active layer contains point features: no',
+    ]);
+  }
+
+  if (gis.layer.numericFields.length < 1) {
+    return blockedToolResult('idw_interpolation', 'The active layer has no numeric field for IDW.', [
+      'Active layer has numeric fields: no',
+    ]);
+  }
+
+  const field = stringArg(input.field, gis.layer.selectedField || gis.layer.numericFields[0]);
+
+  if (!gis.layer.numericFields.includes(field)) {
+    return blockedToolResult('idw_interpolation', `Field "${field}" is not a numeric field on the active layer.`, [
+      'Requested field exists in numeric fields: no',
+    ], {
+      numericFields: gis.layer.numericFields,
+    });
+  }
+
+  const cellSize = numberArg(input.cellSize);
+  const params: IdwParameters = {
+    field,
+    outputName: stringArg(input.outputName, 'agent-idw.tif'),
+    cellSize: Number.isFinite(cellSize) && cellSize > 0 ? String(cellSize) : '0.001',
+    weight: String(positiveNumberArg(input.weight, 2)),
+    radius: String(nonNegativeNumberArg(input.radius, 0)),
+    minPoints: String(Math.max(0, integerArg(input.minPoints, 0))),
+  };
+  const beforeRaster = gis.raster;
+
+  await gis.runIdwInterpolation(params);
+  await waitForUiState();
+
+  const nextGis = gisRef.current;
+  const raster = nextGis.raster;
+  const changed = Boolean(raster && raster !== beforeRaster);
+
+  if (!changed || !raster) {
+    return failedToolResult('idw_interpolation', nextGis.message || 'IDW finished without a visible raster output.', [
+      'Tool execution promise resolved',
+      `Raster overlay changed: ${changed ? 'yes' : 'no'}`,
+      'Raster output exists: no',
+    ]);
+  }
+
+  return successToolResult('idw_interpolation', `IDW completed: ${raster.width} x ${raster.height}.`, [
+    'Tool execution promise resolved',
+    'Raster overlay changed: yes',
+    `Raster layer visibility enabled: ${nextGis.layerVisibility.raster ? 'yes' : 'no'}`,
+    'Raster dimensions are valid: yes',
+  ], {
+    width: raster.width,
+    height: raster.height,
+    min: raster.min,
+    max: raster.max,
+    epsg: raster.epsg ?? null,
+    sourceLayerId: gis.layer.id,
+    sourceLayerName: gis.layer.fileName,
+    parameters: params,
+  });
+}
+
+function successToolResult(
+  tool: string,
+  message: string,
+  checks: string[],
+  output?: Record<string, unknown>,
+): AgentToolResult {
+  return {
+    ok: true,
+    status: 'success',
+    tool,
+    message,
+    qa: {
+      passed: true,
+      checks,
+    },
+    output,
+  };
+}
+
+function blockedToolResult(
+  tool: string,
+  message: string,
+  checks: string[],
+  output?: Record<string, unknown>,
+): AgentToolResult {
+  return {
+    ok: false,
+    status: 'blocked',
+    tool,
+    message,
+    qa: {
+      passed: false,
+      checks,
+    },
+    output,
+  };
+}
+
+function failedToolResult(tool: string, message: string, checks: string[]): AgentToolResult {
+  return {
+    ok: false,
+    status: 'failed',
+    tool,
+    message,
+    qa: {
+      passed: false,
+      checks,
+    },
+  };
+}
+
+function parseToolArguments(value: string) {
+  try {
+    const parsed = JSON.parse(value || '{}') as unknown;
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringArg(value: unknown, fallback: string) {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function numberArg(value: unknown) {
+  return typeof value === 'number' ? value : Number(value);
+}
+
+function positiveNumberArg(value: unknown, fallback: number) {
+  const number = numberArg(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function nonNegativeNumberArg(value: unknown, fallback: number) {
+  const number = numberArg(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function integerArg(value: unknown, fallback: number) {
+  const number = numberArg(value);
+  return Number.isInteger(number) ? number : fallback;
+}
+
+function booleanArg(value: unknown, fallback: boolean) {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function enumArg<T extends string>(value: unknown, options: T[], fallback: T) {
+  return options.includes(value as T) ? value as T : fallback;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function waitForUiState() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function textToUIMessageStream(text: string) {
+  return new ReadableStream<UIMessageChunk>({
+    start(controller) {
+      controller.enqueue({ type: 'start' } as UIMessageChunk);
+      controller.enqueue({ type: 'start-step' } as UIMessageChunk);
+      controller.enqueue({ type: 'text-start', id: 'text-1' } as UIMessageChunk);
+      controller.enqueue({ type: 'text-delta', id: 'text-1', delta: text } as UIMessageChunk);
+      controller.enqueue({ type: 'text-end', id: 'text-1' } as UIMessageChunk);
+      controller.enqueue({ type: 'finish-step' } as UIMessageChunk);
+      controller.enqueue({ type: 'finish', finishReason: 'stop' } as UIMessageChunk);
+      controller.close();
+    },
+  });
 }
 
 function toDeepSeekMessages(messages: UIMessage[]) {

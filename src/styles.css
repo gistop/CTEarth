@@ -537,7 +537,7 @@ button {
 
 .tree-row {
   display: grid;
-  grid-template-columns: 16px 20px 20px minmax(0, 1fr);
+  grid-template-columns: 16px 20px 20px minmax(0, 1fr) 26px;
   align-items: center;
   min-height: 30px;
   gap: 5px;
@@ -547,6 +547,12 @@ button {
 }
 
 .tree-row span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-row > span:last-of-type {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -594,6 +600,173 @@ button {
 
 .tree-row:active .tree-drag-handle {
   cursor: grabbing;
+}
+
+.layer-item-block {
+  min-width: 0;
+}
+
+.layer-style-toggle {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #667584;
+  cursor: pointer;
+}
+
+.layer-style-toggle:hover,
+.layer-style-toggle.is-open {
+  border-color: #b6d8ec;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.layer-style-panel {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  margin: 2px 0 8px;
+  padding: 9px;
+  border: 1px solid #cbd5df;
+  border-radius: 5px;
+  background: #f3f7fa;
+}
+
+.layer-style-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #d9e1e8;
+}
+
+.layer-style-header h4 {
+  margin: 0;
+  overflow: hidden;
+  color: #2c3e50;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.layer-style-header button,
+.layer-style-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #b9c4ce;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #33475b;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.layer-style-header button {
+  width: 24px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.layer-style-header button:hover,
+.layer-style-actions button:hover {
+  border-color: #9fc8e3;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.layer-style-form {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.layer-style-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: #34495e;
+  font-size: 12px;
+}
+
+.layer-style-field > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-color-control {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.layer-color-control input[type="color"] {
+  width: 38px;
+  height: 26px;
+  padding: 2px;
+  border: 1px solid #b9c4ce;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.layer-color-control input[readonly] {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid #b9c4ce;
+  background: #ffffff;
+  padding: 0 7px;
+  color: #263849;
+  font-size: 12px;
+}
+
+.layer-range-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.layer-range-control input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: #2f7ee6;
+}
+
+.layer-range-control output {
+  overflow: hidden;
+  color: #34495e;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-style-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  min-width: 0;
+  padding-top: 2px;
 }
 
 .layer-swatch {
@@ -876,6 +1049,28 @@ button {
   margin: 0;
   color: var(--text-muted);
   line-height: 1.5;
+}
+
+.inspector-stat-grid {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 7px 8px;
+  margin: 0;
+  color: #34495e;
+  font-size: 12px;
+}
+
+.inspector-stat-grid dt,
+.inspector-stat-grid dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-stat-grid dt {
+  color: var(--text-muted);
 }
 
 .tools-panel {

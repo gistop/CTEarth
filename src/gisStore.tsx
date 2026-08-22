@@ -58,6 +58,18 @@ export type BufferParameters = {
   dissolve: boolean;
 };
 
+export type GisToolExecutionResult = {
+  ok: boolean;
+  status: 'success' | 'blocked' | 'failed';
+  tool: 'idw_interpolation' | 'buffer_vector';
+  message: string;
+  qa: {
+    passed: boolean;
+    checks: string[];
+  };
+  output?: Record<string, unknown>;
+};
+
 export type LayerVisibilityId = 'basemap' | 'raster' | 'vectorOverlay';
 
 export type LayerVisibility = Record<LayerVisibilityId, boolean>;
@@ -82,12 +94,44 @@ export type UploadedLayer = {
   selectedField: string;
 };
 
+export type UploadedLayerStyle = {
+  pointColor: string;
+  pointRadius: number;
+  pointOpacity: number;
+  pointStrokeColor: string;
+  pointStrokeWidth: number;
+  lineColor: string;
+  lineWidth: number;
+  lineOpacity: number;
+  fillColor: string;
+  fillOpacity: number;
+};
+
+export type RasterLayerStyle = {
+  opacity: number;
+};
+
+export type VectorOverlayStyle = {
+  fillColor: string;
+  fillOpacity: number;
+  lineColor: string;
+  lineWidth: number;
+};
+
+export type BasemapLayerStyle = {
+  opacity: number;
+};
+
 type GisContextValue = {
   layer: UploadedLayer | null;
   layers: UploadedLayer[];
   activeLayerId: string | null;
   raster: RasterOverlay | null;
   vectorOverlay: VectorOverlay | null;
+  basemapStyle: BasemapLayerStyle;
+  rasterStyle: RasterLayerStyle;
+  vectorOverlayStyle: VectorOverlayStyle;
+  uploadedLayerStyles: Record<string, UploadedLayerStyle>;
   layerVisibility: LayerVisibility;
   uploadedLayerVisibility: Record<string, boolean>;
   layerOrder: LayerOrderId[];
@@ -99,6 +143,10 @@ type GisContextValue = {
   setLayerVisibility: (id: LayerVisibilityId, visible: boolean) => void;
   setUploadedLayerVisibility: (id: string, visible: boolean) => void;
   setAllLayerVisibility: (visible: boolean) => void;
+  setBasemapStyle: (patch: Partial<BasemapLayerStyle>) => void;
+  setRasterStyle: (patch: Partial<RasterLayerStyle>) => void;
+  setVectorOverlayStyle: (patch: Partial<VectorOverlayStyle>) => void;
+  setUploadedLayerStyle: (id: string, patch: Partial<UploadedLayerStyle>) => void;
   moveLayerOrder: (draggedId: LayerOrderId, targetId: LayerOrderId) => void;
   setActiveLayer: (id: string) => void;
   setSelectedField: (field: string) => void;
@@ -113,12 +161,40 @@ const defaultLayerVisibility: LayerVisibility = {
   vectorOverlay: true,
 };
 const defaultLayerOrder: LayerOrderId[] = ['basemap'];
+export const defaultUploadedLayerStyle: UploadedLayerStyle = {
+  pointColor: '#f6c445',
+  pointRadius: 6,
+  pointOpacity: 1,
+  pointStrokeColor: '#17202a',
+  pointStrokeWidth: 1.5,
+  lineColor: '#2f6da5',
+  lineWidth: 2,
+  lineOpacity: 1,
+  fillColor: '#6b9bd2',
+  fillOpacity: 0.22,
+};
+export const defaultRasterStyle: RasterLayerStyle = {
+  opacity: 0.82,
+};
+export const defaultVectorOverlayStyle: VectorOverlayStyle = {
+  fillColor: '#31a354',
+  fillOpacity: 0.28,
+  lineColor: '#16753b',
+  lineWidth: 2,
+};
+export const defaultBasemapStyle: BasemapLayerStyle = {
+  opacity: 1,
+};
 
 export function GisProvider({ children }: { children: React.ReactNode }) {
   const [layers, setLayers] = useState<UploadedLayer[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [raster, setRaster] = useState<RasterOverlay | null>(null);
   const [vectorOverlay, setVectorOverlay] = useState<VectorOverlay | null>(null);
+  const [basemapStyle, setBasemapStyleState] = useState<BasemapLayerStyle>(defaultBasemapStyle);
+  const [rasterStyle, setRasterStyleState] = useState<RasterLayerStyle>(defaultRasterStyle);
+  const [vectorOverlayStyle, setVectorOverlayStyleState] = useState<VectorOverlayStyle>(defaultVectorOverlayStyle);
+  const [uploadedLayerStyles, setUploadedLayerStyles] = useState<Record<string, UploadedLayerStyle>>({});
   const [layerVisibility, setLayerVisibilityState] = useState<LayerVisibility>(defaultLayerVisibility);
   const [uploadedLayerVisibility, setUploadedLayerVisibilityState] = useState<Record<string, boolean>>({});
   const [layerOrder, setLayerOrder] = useState<LayerOrderId[]>(defaultLayerOrder);
@@ -148,6 +224,28 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setUploadedLayerVisibilityState((current) => (
       Object.fromEntries(Object.keys(current).map((id) => [id, visible]))
     ));
+  }, []);
+
+  const setBasemapStyle = useCallback((patch: Partial<BasemapLayerStyle>) => {
+    setBasemapStyleState((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const setRasterStyle = useCallback((patch: Partial<RasterLayerStyle>) => {
+    setRasterStyleState((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const setVectorOverlayStyle = useCallback((patch: Partial<VectorOverlayStyle>) => {
+    setVectorOverlayStyleState((current) => ({ ...current, ...patch }));
+  }, []);
+
+  const setUploadedLayerStyle = useCallback((id: string, patch: Partial<UploadedLayerStyle>) => {
+    setUploadedLayerStyles((current) => ({
+      ...current,
+      [id]: {
+        ...(current[id] ?? defaultUploadedLayerStyle),
+        ...patch,
+      },
+    }));
   }, []);
 
   const moveLayerOrder = useCallback((draggedId: LayerOrderId, targetId: LayerOrderId) => {
@@ -230,6 +328,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         vectorOverlay: true,
       }));
       setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
+      setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
       setLayers((current) => [...current, nextLayer]);
       setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
       setActiveLayerId(nextLayer.id);
@@ -274,6 +373,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         vectorOverlay: true,
       }));
       setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
+      setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
       setLayers((current) => [...current, nextLayer]);
       setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
       setActiveLayerId(nextLayer.id);
@@ -431,6 +531,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     activeLayerId,
     raster,
     vectorOverlay,
+    basemapStyle,
+    rasterStyle,
+    vectorOverlayStyle,
+    uploadedLayerStyles,
     layerVisibility,
     uploadedLayerVisibility,
     layerOrder,
@@ -442,12 +546,16 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setLayerVisibility,
     setUploadedLayerVisibility,
     setAllLayerVisibility,
+    setBasemapStyle,
+    setRasterStyle,
+    setVectorOverlayStyle,
+    setUploadedLayerStyle,
     moveLayerOrder,
     setActiveLayer,
     setSelectedField,
     runIdwInterpolation,
     runBufferAnalysis,
-  }), [activeLayerId, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, runBufferAnalysis, runIdwInterpolation, setActiveLayer, setAllLayerVisibility, setLayerVisibility, setSelectedField, setUploadedLayerVisibility, toolsReady, uploadGeoJson, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay]);
+  }), [activeLayerId, basemapStyle, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, uploadGeoJson, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }

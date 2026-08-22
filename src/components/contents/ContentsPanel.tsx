@@ -1,6 +1,30 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { Database, FolderPlus, GripVertical, Grid2X2, Layers, Map as MapIcon, PenTool, Search } from 'lucide-react';
-import { useGis, type LayerOrderId, type UploadedLayer } from '../../gisStore';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
+import {
+  Database,
+  FolderPlus,
+  GripVertical,
+  Grid2X2,
+  Layers,
+  Map as MapIcon,
+  PenTool,
+  RotateCcw,
+  Search,
+  Settings,
+  X,
+} from 'lucide-react';
+import {
+  defaultBasemapStyle,
+  defaultRasterStyle,
+  defaultUploadedLayerStyle,
+  defaultVectorOverlayStyle,
+  useGis,
+  type BasemapLayerStyle,
+  type LayerOrderId,
+  type RasterLayerStyle,
+  type UploadedLayer,
+  type UploadedLayerStyle,
+  type VectorOverlayStyle,
+} from '../../gisStore';
 
 type LayerListItem =
   | { id: 'basemap'; kind: 'basemap'; label: string; checked: boolean }
@@ -21,21 +45,29 @@ function LayerSection() {
   const rootCheckboxRef = useRef<HTMLInputElement | null>(null);
   const [draggingId, setDraggingId] = useState<LayerOrderId | null>(null);
   const [dropTargetId, setDropTargetId] = useState<LayerOrderId | null>(null);
+  const [expandedStyleId, setExpandedStyleId] = useState<LayerOrderId | null>(null);
   const {
     layer,
     layers,
     activeLayerId,
     raster,
     vectorOverlay,
+    basemapStyle,
+    rasterStyle,
+    vectorOverlayStyle,
+    uploadedLayerStyles,
     layerVisibility,
     uploadedLayerVisibility,
     layerOrder,
-    message,
     uploadGeoJson,
     uploadShapefileZip,
     setLayerVisibility,
     setUploadedLayerVisibility,
     setAllLayerVisibility,
+    setBasemapStyle,
+    setRasterStyle,
+    setVectorOverlayStyle,
+    setUploadedLayerStyle,
     moveLayerOrder,
     setActiveLayer,
   } = useGis();
@@ -131,48 +163,83 @@ function LayerSection() {
           <span>地图</span>
         </label>
 
-        {layerItems.map((item) => (
-          <LayerRow
-            key={item.id}
-            checked={item.checked}
-            dragState={item.id === draggingId ? 'dragging' : item.id === dropTargetId ? 'target' : undefined}
-            isSelected={item.kind === 'uploaded' && item.layer.id === (activeLayerId ?? layer?.id)}
-            label={item.label}
-            orderId={item.id}
-            swatchClass={swatchClassForItem(item)}
-            onChange={(checked) => {
-              if (item.kind === 'uploaded') {
-                setUploadedLayerVisibility(item.layer.id, checked);
-              } else {
-                setLayerVisibility(item.kind, checked);
-              }
-            }}
-            onDragEnd={() => {
-              setDraggingId(null);
-              setDropTargetId(null);
-            }}
-            onDragEnter={() => {
-              if (draggingId && draggingId !== item.id) {
-                setDropTargetId(item.id);
-              }
-            }}
-            onDragStart={() => setDraggingId(item.id)}
-            onDrop={() => handleDrop(item.id)}
-            onSelect={item.kind === 'uploaded' ? () => setActiveLayer(item.layer.id) : undefined}
-          />
-        ))}
+        {layerItems.map((item) => {
+          const isStyleOpen = item.id === expandedStyleId;
+
+          return (
+            <div className="layer-item-block" key={item.id}>
+              <LayerRow
+                checked={item.checked}
+                dragState={item.id === draggingId ? 'dragging' : item.id === dropTargetId ? 'target' : undefined}
+                isSelected={item.kind === 'uploaded' && item.layer.id === (activeLayerId ?? layer?.id)}
+                isStyleOpen={isStyleOpen}
+                label={item.label}
+                orderId={item.id}
+                swatchClass={swatchClassForItem(item)}
+                swatchStyle={swatchStyleForItem(item, {
+                  basemapStyle,
+                  rasterStyle,
+                  uploadedLayerStyles,
+                  vectorOverlayStyle,
+                })}
+                onChange={(checked) => {
+                  if (item.kind === 'uploaded') {
+                    setUploadedLayerVisibility(item.layer.id, checked);
+                  } else {
+                    setLayerVisibility(item.kind, checked);
+                  }
+                }}
+                onDragEnd={() => {
+                  setDraggingId(null);
+                  setDropTargetId(null);
+                }}
+                onDragEnter={() => {
+                  if (draggingId && draggingId !== item.id) {
+                    setDropTargetId(item.id);
+                  }
+                }}
+                onDragStart={() => setDraggingId(item.id)}
+                onDrop={() => handleDrop(item.id)}
+                onSelect={item.kind === 'uploaded' ? () => setActiveLayer(item.layer.id) : undefined}
+                onToggleStyle={() => {
+                  setExpandedStyleId((current) => (current === item.id ? null : item.id));
+                  if (item.kind === 'uploaded') {
+                    setActiveLayer(item.layer.id);
+                  }
+                }}
+              />
+              {isStyleOpen ? (
+                <LayerStylePanel
+                  item={item}
+                  basemapStyle={basemapStyle}
+                  rasterStyle={rasterStyle}
+                  uploadedLayerStyles={uploadedLayerStyles}
+                  vectorOverlayStyle={vectorOverlayStyle}
+                  onClose={() => setExpandedStyleId(null)}
+                  onReset={() => {
+                    if (item.kind === 'uploaded') {
+                      setUploadedLayerStyle(item.layer.id, defaultUploadedLayerStyle);
+                    } else if (item.kind === 'raster') {
+                      setRasterStyle(defaultRasterStyle);
+                    } else if (item.kind === 'vectorOverlay') {
+                      setVectorOverlayStyle(defaultVectorOverlayStyle);
+                    } else {
+                      setBasemapStyle(defaultBasemapStyle);
+                    }
+                  }}
+                  onUpdateBasemap={setBasemapStyle}
+                  onUpdateRaster={setRasterStyle}
+                  onUpdateUploaded={setUploadedLayerStyle}
+                  onUpdateVectorOverlay={setVectorOverlayStyle}
+                />
+              ) : null}
+            </div>
+          );
+        })}
 
         {layers.length === 0 ? (
           <div className="layer-note">点击上方添加数据按钮，选择 Shapefile ZIP 或 GeoJSON。</div>
         ) : null}
-
-        {layer ? (
-          <div className="layer-note active-layer-note">
-            当前图层：{layer.fileName}
-          </div>
-        ) : null}
-
-        <div className="layer-note status">{message}</div>
       </section>
     </section>
   );
@@ -182,28 +249,34 @@ function LayerRow({
   checked,
   dragState,
   isSelected,
+  isStyleOpen,
   label,
   orderId,
   swatchClass,
+  swatchStyle,
   onChange,
   onDragEnd,
   onDragEnter,
   onDragStart,
   onDrop,
   onSelect,
+  onToggleStyle,
 }: {
   checked: boolean;
   dragState?: 'dragging' | 'target';
   isSelected?: boolean;
+  isStyleOpen?: boolean;
   label: string;
   orderId: LayerOrderId;
   swatchClass: string;
+  swatchStyle?: CSSProperties;
   onChange: (checked: boolean) => void;
   onDragEnd: () => void;
   onDragEnter: () => void;
   onDragStart: () => void;
   onDrop: () => void;
   onSelect?: () => void;
+  onToggleStyle: () => void;
 }) {
   const className = [
     'tree-row',
@@ -249,9 +322,207 @@ function LayerRow({
         onClick={(event) => event.stopPropagation()}
         onChange={(event) => onChange(event.target.checked)}
       />
-      <span className={`layer-swatch ${swatchClass}`} />
+      <span className={`layer-swatch ${swatchClass}`} style={swatchStyle} />
       <span>{label}</span>
+      <button
+        className={isStyleOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
+        type="button"
+        title="编辑样式"
+        aria-label={`编辑 ${label} 样式`}
+        aria-expanded={isStyleOpen}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleStyle();
+        }}
+      >
+        <Settings size={15} strokeWidth={1.8} />
+      </button>
     </div>
+  );
+}
+
+function LayerStylePanel({
+  item,
+  basemapStyle,
+  rasterStyle,
+  uploadedLayerStyles,
+  vectorOverlayStyle,
+  onClose,
+  onReset,
+  onUpdateBasemap,
+  onUpdateRaster,
+  onUpdateUploaded,
+  onUpdateVectorOverlay,
+}: {
+  item: LayerListItem;
+  basemapStyle: BasemapLayerStyle;
+  rasterStyle: RasterLayerStyle;
+  uploadedLayerStyles: Record<string, UploadedLayerStyle>;
+  vectorOverlayStyle: VectorOverlayStyle;
+  onClose: () => void;
+  onReset: () => void;
+  onUpdateBasemap: (patch: Partial<BasemapLayerStyle>) => void;
+  onUpdateRaster: (patch: Partial<RasterLayerStyle>) => void;
+  onUpdateUploaded: (id: string, patch: Partial<UploadedLayerStyle>) => void;
+  onUpdateVectorOverlay: (patch: Partial<VectorOverlayStyle>) => void;
+}) {
+  return (
+    <section className="layer-style-panel" aria-label={`${item.label} 样式设置`} onClick={(event) => event.stopPropagation()}>
+      <div className="layer-style-header">
+        <h4>编辑样式</h4>
+        <button type="button" title="关闭" aria-label="关闭样式设置" onClick={onClose}>
+          <X size={15} />
+        </button>
+      </div>
+
+      {item.kind === 'uploaded' ? (
+        <UploadedStyleEditor
+          style={uploadedLayerStyles[item.layer.id] ?? defaultUploadedLayerStyle}
+          onChange={(patch) => onUpdateUploaded(item.layer.id, patch)}
+        />
+      ) : null}
+
+      {item.kind === 'raster' ? (
+        <RasterStyleEditor style={rasterStyle} onChange={onUpdateRaster} />
+      ) : null}
+
+      {item.kind === 'vectorOverlay' ? (
+        <VectorOverlayStyleEditor style={vectorOverlayStyle} onChange={onUpdateVectorOverlay} />
+      ) : null}
+
+      {item.kind === 'basemap' ? (
+        <BasemapStyleEditor style={basemapStyle} onChange={onUpdateBasemap} />
+      ) : null}
+
+      <div className="layer-style-actions">
+        <button type="button" onClick={onReset}>
+          <RotateCcw size={14} />
+          <span>重置样式</span>
+        </button>
+        <button type="button" onClick={onClose}>关闭</button>
+      </div>
+    </section>
+  );
+}
+
+function UploadedStyleEditor({
+  style,
+  onChange,
+}: {
+  style: UploadedLayerStyle;
+  onChange: (patch: Partial<UploadedLayerStyle>) => void;
+}) {
+  return (
+    <div className="layer-style-form">
+      <ColorControl label="点颜色" value={style.pointColor} onChange={(value) => onChange({ pointColor: value })} />
+      <RangeControl label="点大小" value={style.pointRadius} min={1} max={24} step={0.5} onChange={(value) => onChange({ pointRadius: value })} />
+      <RangeControl label="点透明度" value={style.pointOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ pointOpacity: value })} />
+      <ColorControl label="描边颜色" value={style.pointStrokeColor} onChange={(value) => onChange({ pointStrokeColor: value })} />
+      <RangeControl label="描边宽度" value={style.pointStrokeWidth} min={0} max={8} step={0.5} onChange={(value) => onChange({ pointStrokeWidth: value })} />
+      <ColorControl label="线颜色" value={style.lineColor} onChange={(value) => onChange({ lineColor: value })} />
+      <RangeControl label="线宽" value={style.lineWidth} min={0.5} max={12} step={0.5} onChange={(value) => onChange({ lineWidth: value })} />
+      <RangeControl label="线透明度" value={style.lineOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ lineOpacity: value })} />
+      <ColorControl label="面颜色" value={style.fillColor} onChange={(value) => onChange({ fillColor: value })} />
+      <RangeControl label="面透明度" value={style.fillOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ fillOpacity: value })} />
+    </div>
+  );
+}
+
+function RasterStyleEditor({
+  style,
+  onChange,
+}: {
+  style: RasterLayerStyle;
+  onChange: (patch: Partial<RasterLayerStyle>) => void;
+}) {
+  return (
+    <div className="layer-style-form">
+      <RangeControl label="透明度" value={style.opacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ opacity: value })} />
+    </div>
+  );
+}
+
+function VectorOverlayStyleEditor({
+  style,
+  onChange,
+}: {
+  style: VectorOverlayStyle;
+  onChange: (patch: Partial<VectorOverlayStyle>) => void;
+}) {
+  return (
+    <div className="layer-style-form">
+      <ColorControl label="填充颜色" value={style.fillColor} onChange={(value) => onChange({ fillColor: value })} />
+      <RangeControl label="填充透明度" value={style.fillOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ fillOpacity: value })} />
+      <ColorControl label="边线颜色" value={style.lineColor} onChange={(value) => onChange({ lineColor: value })} />
+      <RangeControl label="边线宽度" value={style.lineWidth} min={0.5} max={12} step={0.5} onChange={(value) => onChange({ lineWidth: value })} />
+    </div>
+  );
+}
+
+function BasemapStyleEditor({
+  style,
+  onChange,
+}: {
+  style: BasemapLayerStyle;
+  onChange: (patch: Partial<BasemapLayerStyle>) => void;
+}) {
+  return (
+    <div className="layer-style-form">
+      <RangeControl label="透明度" value={style.opacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ opacity: value })} />
+    </div>
+  );
+}
+
+function ColorControl({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="layer-style-field">
+      <span>{label}</span>
+      <div className="layer-color-control">
+        <input type="color" value={value} onChange={(event) => onChange(event.target.value)} />
+        <input value={value} readOnly aria-label={`${label} 色值`} />
+      </div>
+    </label>
+  );
+}
+
+function RangeControl({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="layer-style-field">
+      <span>{label}</span>
+      <div className="layer-range-control">
+        <input
+          type="range"
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          onChange={(event) => onChange(clampNumber(Number(event.target.value), min, max))}
+        />
+        <output>{formatStyleNumber(value)}</output>
+      </div>
+    </label>
   );
 }
 
@@ -344,4 +615,63 @@ function swatchClassForItem(item: LayerListItem) {
   }
 
   return 'point';
+}
+
+function swatchStyleForItem(
+  item: LayerListItem,
+  styles: {
+    basemapStyle: BasemapLayerStyle;
+    rasterStyle: RasterLayerStyle;
+    uploadedLayerStyles: Record<string, UploadedLayerStyle>;
+    vectorOverlayStyle: VectorOverlayStyle;
+  },
+): CSSProperties {
+  if (item.kind === 'uploaded') {
+    const style = styles.uploadedLayerStyles[item.layer.id] ?? defaultUploadedLayerStyle;
+
+    return {
+      background: style.pointColor,
+      borderColor: style.pointStrokeColor,
+      boxShadow: `inset 0 0 0 ${Math.min(style.pointStrokeWidth, 4)}px ${style.pointStrokeColor}`,
+      opacity: style.pointOpacity,
+    };
+  }
+
+  if (item.kind === 'vectorOverlay') {
+    return {
+      background: hexToRgba(styles.vectorOverlayStyle.fillColor, styles.vectorOverlayStyle.fillOpacity),
+      borderColor: styles.vectorOverlayStyle.lineColor,
+      boxShadow: `inset 0 0 0 ${Math.min(styles.vectorOverlayStyle.lineWidth, 4)}px ${styles.vectorOverlayStyle.lineColor}`,
+    };
+  }
+
+  if (item.kind === 'raster') {
+    return { opacity: styles.rasterStyle.opacity };
+  }
+
+  return { opacity: styles.basemapStyle.opacity };
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatStyleNumber(value: number) {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2);
+}
+
+function hexToRgba(hex: string, opacity: number) {
+  const normalized = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+
+  if (!normalized) {
+    return hex;
+  }
+
+  const [, red, green, blue] = normalized;
+
+  return `rgb(${parseInt(red, 16)} ${parseInt(green, 16)} ${parseInt(blue, 16)} / ${opacity})`;
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
-import { getPointBounds, useGis } from '../gisStore';
+import { defaultUploadedLayerStyle, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
 import { type BasemapId, useMapCommands } from './map/MapCommandContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
@@ -114,12 +114,32 @@ function setLayersVisibility(map: maplibregl.Map, layerIds: string[], visible: b
   });
 }
 
+function setBasemapOpacity(map: maplibregl.Map, opacity: number) {
+  Object.values(basemapLayers).flat().forEach((layerId) => {
+    if (map.getLayer(layerId)) {
+      map.setPaintProperty(layerId, 'raster-opacity', opacity);
+    }
+  });
+}
+
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const lastLayerNameRef = useRef('');
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
-  const { layer, layers, layerOrder, layerVisibility, uploadedLayerVisibility, raster, vectorOverlay } = useGis();
+  const {
+    layer,
+    layers,
+    layerOrder,
+    layerVisibility,
+    uploadedLayerVisibility,
+    basemapStyle,
+    raster,
+    rasterStyle,
+    vectorOverlay,
+    vectorOverlayStyle,
+    uploadedLayerStyles,
+  } = useGis();
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('正在初始化在线地图');
   const [mapReady, setMapReady] = useState(false);
@@ -198,9 +218,10 @@ export function MapPanel() {
     }
 
     setBasemapVisibility(map, mapCommandState.basemap, layerVisibility.basemap);
+    setBasemapOpacity(map, basemapStyle.opacity);
     setLayersVisibility(map, rasterLayerIds, layerVisibility.raster);
     setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
-  }, [layerVisibility, mapCommandState.basemap, mapReady]);
+  }, [basemapStyle, layerVisibility, mapCommandState.basemap, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -219,8 +240,11 @@ export function MapPanel() {
     removeStaleUploadedLayers(map, expectedLayerIds);
 
     layers.forEach((item) => {
-      ensureUploadedLayer(map, item.id);
+      const style = uploadedLayerStyles[item.id] ?? defaultUploadedLayerStyle;
+
+      ensureUploadedLayer(map, item.id, style);
       setUploadedLayerData(map, item);
+      setUploadedLayerPaint(map, item.id, style);
       setLayersVisibility(map, uploadedLayerIds(item.id), uploadedLayerVisibility[item.id] ?? true);
     });
 
@@ -237,7 +261,7 @@ export function MapPanel() {
 
       lastLayerNameRef.current = layer.id;
     }
-  }, [layer, layerOrder, layers, mapReady, raster, uploadedLayerVisibility, vectorOverlay]);
+  }, [layer, layerOrder, layers, mapReady, raster, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -269,7 +293,7 @@ export function MapPanel() {
         type: 'raster',
         source: 'idw-interpolation',
         paint: {
-          'raster-opacity': 0.82,
+          'raster-opacity': rasterStyle.opacity,
           'raster-fade-duration': 0,
         },
       },
@@ -278,6 +302,16 @@ export function MapPanel() {
     applyLayerOrder(map, layerOrder, layers, true, Boolean(vectorOverlay));
     map.fitBounds(boundsFromCoordinates(raster.coordinates), { padding: 80, duration: 700 });
   }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!mapReady || !map || !map.getLayer('idw-interpolation')) {
+      return;
+    }
+
+    map.setPaintProperty('idw-interpolation', 'raster-opacity', rasterStyle.opacity);
+  }, [mapReady, rasterStyle]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -312,8 +346,8 @@ export function MapPanel() {
         type: 'fill',
         source: 'buffer-result',
         paint: {
-          'fill-color': '#31a354',
-          'fill-opacity': 0.28,
+          'fill-color': vectorOverlayStyle.fillColor,
+          'fill-opacity': vectorOverlayStyle.fillOpacity,
         },
       },
     );
@@ -323,8 +357,8 @@ export function MapPanel() {
         type: 'line',
         source: 'buffer-result',
         paint: {
-          'line-color': '#16753b',
-          'line-width': 2,
+          'line-color': vectorOverlayStyle.lineColor,
+          'line-width': vectorOverlayStyle.lineWidth,
         },
       },
     );
@@ -337,6 +371,16 @@ export function MapPanel() {
       map.fitBounds(padBounds(bounds, 0.12), { padding: 80, duration: 700 });
     }
   }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!mapReady || !map) {
+      return;
+    }
+
+    setVectorOverlayPaint(map, vectorOverlayStyle);
+  }, [mapReady, vectorOverlayStyle]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -446,7 +490,7 @@ function uploadedLayerIds(layerId: string) {
   ];
 }
 
-function ensureUploadedLayer(map: maplibregl.Map, layerId: string) {
+function ensureUploadedLayer(map: maplibregl.Map, layerId: string, style: UploadedLayerStyle) {
   const sourceId = uploadedSourceId(layerId);
   const [fillId, lineId, circleId, labelId] = uploadedLayerIds(layerId);
 
@@ -467,8 +511,8 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string) {
       source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
       paint: {
-        'fill-color': '#6b9bd2',
-        'fill-opacity': 0.22,
+        'fill-color': style.fillColor,
+        'fill-opacity': style.fillOpacity,
       },
     });
   }
@@ -486,8 +530,9 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string) {
         ['==', ['geometry-type'], 'MultiPolygon'],
       ],
       paint: {
-        'line-color': '#2f6da5',
-        'line-width': 2,
+        'line-color': style.lineColor,
+        'line-width': style.lineWidth,
+        'line-opacity': style.lineOpacity,
       },
     });
   }
@@ -499,10 +544,11 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string) {
       source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
       paint: {
-        'circle-radius': 6,
-        'circle-color': '#f6c445',
-        'circle-stroke-color': '#17202a',
-        'circle-stroke-width': 1.5,
+        'circle-radius': style.pointRadius,
+        'circle-color': style.pointColor,
+        'circle-opacity': style.pointOpacity,
+        'circle-stroke-color': style.pointStrokeColor,
+        'circle-stroke-width': style.pointStrokeWidth,
       },
     });
   }
@@ -525,6 +571,44 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string) {
         'text-halo-width': 1.2,
       },
     });
+  }
+}
+
+function setUploadedLayerPaint(map: maplibregl.Map, layerId: string, style: UploadedLayerStyle) {
+  const [fillId, lineId, circleId] = uploadedLayerIds(layerId);
+
+  if (map.getLayer(fillId)) {
+    map.setPaintProperty(fillId, 'fill-color', style.fillColor);
+    map.setPaintProperty(fillId, 'fill-opacity', style.fillOpacity);
+  }
+
+  if (map.getLayer(lineId)) {
+    map.setPaintProperty(lineId, 'line-color', style.lineColor);
+    map.setPaintProperty(lineId, 'line-width', style.lineWidth);
+    map.setPaintProperty(lineId, 'line-opacity', style.lineOpacity);
+  }
+
+  if (map.getLayer(circleId)) {
+    map.setPaintProperty(circleId, 'circle-radius', style.pointRadius);
+    map.setPaintProperty(circleId, 'circle-color', style.pointColor);
+    map.setPaintProperty(circleId, 'circle-opacity', style.pointOpacity);
+    map.setPaintProperty(circleId, 'circle-stroke-color', style.pointStrokeColor);
+    map.setPaintProperty(circleId, 'circle-stroke-width', style.pointStrokeWidth);
+  }
+}
+
+function setVectorOverlayPaint(
+  map: maplibregl.Map,
+  style: { fillColor: string; fillOpacity: number; lineColor: string; lineWidth: number },
+) {
+  if (map.getLayer('buffer-fill')) {
+    map.setPaintProperty('buffer-fill', 'fill-color', style.fillColor);
+    map.setPaintProperty('buffer-fill', 'fill-opacity', style.fillOpacity);
+  }
+
+  if (map.getLayer('buffer-outline')) {
+    map.setPaintProperty('buffer-outline', 'line-color', style.lineColor);
+    map.setPaintProperty('buffer-outline', 'line-width', style.lineWidth);
   }
 }
 

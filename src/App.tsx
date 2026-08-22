@@ -417,66 +417,36 @@ function InspectorPanel() {
 }
 
 function StatisticsTab() {
+  const { isRunning, layer, layers, raster, toolsReady, vectorOverlay } = useGis();
+
   return (
     <>
       <div className="inspector-toolbar">
-        <button className="is-selected" type="button" title="符号系统" aria-label="符号系统"><PenTool size={20} /></button>
+        <button className="is-selected" type="button" title="统计数据" aria-label="统计数据"><Database size={20} /></button>
         <button type="button" title="属性" aria-label="属性"><PanelLeft size={20} /></button>
         <button type="button" title="更多" aria-label="更多"><Settings size={20} /></button>
       </div>
-      <h3>主符号系统</h3>
-      <label>
-        渲染方式
-        <select defaultValue="stretch">
-          <option value="stretch">拉伸</option>
-          <option value="classified">分类</option>
-          <option value="rgb">RGB 合成</option>
-        </select>
-      </label>
-      <label>
-        波段
-        <select defaultValue="band1">
-          <option value="band1">Band_1</option>
-        </select>
-      </label>
-      <label>
-        配色方案
-        <div className="ramp-control">
-          <span />
-          <ChevronDown size={16} />
-        </div>
-      </label>
-      <label className="inline-check">
-        <input type="checkbox" />
-        反向
-      </label>
-      <div className="form-grid">
-        <span>值</span>
-        <input defaultValue="0" />
-        <input defaultValue="254" />
-        <span>标注</span>
-        <input defaultValue="0" />
-        <input defaultValue="254" />
-      </div>
-      <label>
-        拉伸类型
-        <select defaultValue="std">
-          <option value="std">标准差</option>
-          <option value="minmax">最小值-最大值</option>
-        </select>
-      </label>
-      <label>
-        标准差数量
-        <input defaultValue="8" />
-      </label>
-      <label>
-        Gamma
-        <input defaultValue="2.0" />
-      </label>
-      <label>
-        锐化
-        <input defaultValue="0" />
-      </label>
+      <h3>统计数据</h3>
+      <dl className="inspector-stat-grid">
+        <dt>图层数</dt>
+        <dd>{layers.length}</dd>
+        <dt>当前图层</dt>
+        <dd>{layer?.fileName ?? '无'}</dd>
+        <dt>要素数</dt>
+        <dd>{layer?.geojson.features.length ?? 0}</dd>
+        <dt>点要素</dt>
+        <dd>{layer?.points.features.length ?? 0}</dd>
+        <dt>数值字段</dt>
+        <dd>{layer?.numericFields.length ?? 0}</dd>
+        <dt>栅格结果</dt>
+        <dd>{raster ? `${raster.width} x ${raster.height}` : '无'}</dd>
+        <dt>矢量结果</dt>
+        <dd>{vectorOverlay ? vectorOverlay.name : '无'}</dd>
+        <dt>WASM</dt>
+        <dd>{toolsReady ? '已就绪' : '加载中'}</dd>
+        <dt>任务状态</dt>
+        <dd>{isRunning ? '运行中' : '空闲'}</dd>
+      </dl>
     </>
   );
 }
@@ -1235,7 +1205,7 @@ export default function App() {
     const inspector = event.api.addPanel({
       id: 'inspector',
       component: 'inspector',
-      title: '符号系统 - hill.tif',
+      title: '统计数据',
       position: { direction: 'right', referencePanel: map },
       initialWidth: dockColumnWidths.inspector,
       minimumWidth: 180,
