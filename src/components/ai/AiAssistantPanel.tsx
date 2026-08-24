@@ -19,7 +19,19 @@ import {
   Sparkles,
   User,
 } from 'lucide-react';
-import { useGis, type BufferParameters, type IdwParameters } from '../../gisStore';
+import {
+  useGis,
+  type BufferParameters,
+  type IdwParameters,
+  type SelectByLocationParameters,
+  type SelectByLocationRelation,
+  type SelectByValueOperator,
+  type SelectByValueParameters,
+  type SelectionMode,
+  type SlopeUnits,
+  type TerrainParameters,
+  type TerrainToolId,
+} from '../../gisStore';
 
 const DIRECT_API_URL = 'https://api.deepseek.com/chat/completions';
 const STORAGE_KEY = 'ctearth-ai-deepseek-key';
@@ -123,6 +135,146 @@ const gisTools: DeepSeekTool[] = [
           },
         },
         required: ['distance'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'select_by_value',
+      description: 'Select features on the active uploaded layer by comparing one attribute field to a value.',
+      parameters: {
+        type: 'object',
+        properties: {
+          field: {
+            type: 'string',
+            description: 'Attribute field name on the active layer.',
+          },
+          operator: {
+            type: 'string',
+            enum: ['equals', 'notEquals', 'contains', 'startsWith', 'endsWith', 'greaterThan', 'greaterOrEqual', 'lessThan', 'lessOrEqual', 'isEmpty', 'isNotEmpty'],
+            description: 'Attribute comparison operator.',
+          },
+          value: {
+            type: 'string',
+            description: 'Comparison value. Omit or leave empty for isEmpty/isNotEmpty.',
+          },
+          caseSensitive: {
+            type: 'boolean',
+            description: 'Whether string comparison should be case-sensitive. Default is false.',
+          },
+          selectionMode: {
+            type: 'string',
+            enum: ['new', 'add', 'remove', 'subset'],
+            description: 'How to apply matches to the current selection set. Default is new.',
+          },
+        },
+        required: ['field', 'operator'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'select_by_location',
+      description: 'Select features on the active uploaded layer by testing a spatial relation against another uploaded layer or the current vector overlay.',
+      parameters: {
+        type: 'object',
+        properties: {
+          referenceLayerId: {
+            type: 'string',
+            description: 'Reference layer id. Use vectorOverlay for the current vector overlay result, or an uploaded layer id from list_layers.',
+          },
+          relation: {
+            type: 'string',
+            enum: ['intersects', 'within', 'contains', 'disjoint'],
+            description: 'Spatial relation from target features to the reference layer. Default is intersects.',
+          },
+          selectionMode: {
+            type: 'string',
+            enum: ['new', 'add', 'remove', 'subset'],
+            description: 'How to apply matches to the current selection set. Default is new.',
+          },
+        },
+        required: ['referenceLayerId'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'hillshade',
+      description: 'Run GeoLibre Hillshade on the current DEM GeoTIFF raster and display the output raster.',
+      parameters: {
+        type: 'object',
+        properties: {
+          outputName: {
+            type: 'string',
+            description: 'Optional output GeoTIFF file name.',
+          },
+          zFactor: {
+            type: 'number',
+            description: 'Optional vertical exaggeration / Z conversion factor. Default is 1.',
+          },
+          altitude: {
+            type: 'number',
+            description: 'Optional illumination altitude in degrees from 0 to 90. Default is 45.',
+          },
+          azimuth: {
+            type: 'number',
+            description: 'Optional illumination azimuth in degrees clockwise from north. Default is 315.',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'slope',
+      description: 'Run GeoLibre Slope on the current DEM GeoTIFF raster and display the output raster.',
+      parameters: {
+        type: 'object',
+        properties: {
+          outputName: {
+            type: 'string',
+            description: 'Optional output GeoTIFF file name.',
+          },
+          zFactor: {
+            type: 'number',
+            description: 'Optional Z conversion factor. Default is 1.',
+          },
+          units: {
+            type: 'string',
+            enum: ['degrees', 'radians', 'percent'],
+            description: 'Slope output units. Default is degrees.',
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'aspect',
+      description: 'Run GeoLibre Aspect on the current DEM GeoTIFF raster and display the output raster.',
+      parameters: {
+        type: 'object',
+        properties: {
+          outputName: {
+            type: 'string',
+            description: 'Optional output GeoTIFF file name.',
+          },
+          zFactor: {
+            type: 'number',
+            description: 'Optional Z conversion factor. Default is 1.',
+          },
+        },
         additionalProperties: false,
       },
     },
@@ -668,12 +820,15 @@ function summarizeGisContext(gis: GisRuntime) {
       fileName: layer.fileName,
       featureCount: layer.geojson.features.length,
       pointCount: layer.points.features.length,
+      fields: layer.fields,
       numericFields: layer.numericFields,
       selectedField: layer.selectedField,
+      selectedFeatureCount: layer.selectedFeatureIndexes.length,
       visible: gis.uploadedLayerVisibility[layer.id] ?? true,
     })),
     outputs: {
       raster: gis.raster ? {
+        name: gis.raster.name,
         width: gis.raster.width,
         height: gis.raster.height,
         min: gis.raster.min,
@@ -682,6 +837,7 @@ function summarizeGisContext(gis: GisRuntime) {
         visible: gis.layerVisibility.raster,
       } : null,
       vectorOverlay: gis.vectorOverlay ? {
+        id: 'vectorOverlay',
         name: gis.vectorOverlay.name,
         featureCount: gis.vectorOverlay.geojson.features.length,
         visible: gis.layerVisibility.vectorOverlay,
@@ -707,6 +863,18 @@ async function executeBrowserGisTool(
     return runAgentBuffer(input, gisRef);
   }
 
+  if (name === 'select_by_value') {
+    return runAgentSelectByValue(input, gisRef);
+  }
+
+  if (name === 'select_by_location') {
+    return runAgentSelectByLocation(input, gisRef);
+  }
+
+  if (name === 'hillshade' || name === 'slope' || name === 'aspect') {
+    return runAgentTerrain(name, input, gisRef);
+  }
+
   if (name === 'idw_interpolation') {
     return runAgentIdw(input, gisRef);
   }
@@ -714,6 +882,172 @@ async function executeBrowserGisTool(
   return failedToolResult(name, `Unknown GIS tool: ${name}`, [
     'Tool name is registered: no',
   ]);
+}
+
+async function runAgentSelectByValue(
+  input: Record<string, unknown>,
+  gisRef: { current: GisRuntime },
+): Promise<AgentToolResult> {
+  const gis = gisRef.current;
+
+  if (!gis.layer) {
+    return blockedToolResult('select_by_value', 'No active vector layer is available. Please upload or select a layer first.', [
+      'Active input layer exists: no',
+    ]);
+  }
+
+  const field = stringArg(input.field, '');
+
+  if (!field || !gis.layer.fields.includes(field)) {
+    return blockedToolResult('select_by_value', `Field "${field}" is not available on the active layer.`, [
+      'Requested field exists on active layer: no',
+    ], {
+      fields: gis.layer.fields,
+    });
+  }
+
+  const params: SelectByValueParameters = {
+    field,
+    operator: enumArg<SelectByValueOperator>(
+      input.operator,
+      ['equals', 'notEquals', 'contains', 'startsWith', 'endsWith', 'greaterThan', 'greaterOrEqual', 'lessThan', 'lessOrEqual', 'isEmpty', 'isNotEmpty'],
+      'equals',
+    ),
+    value: stringArg(input.value, ''),
+    caseSensitive: booleanArg(input.caseSensitive, false),
+    selectionMode: enumArg<SelectionMode>(input.selectionMode, ['new', 'add', 'remove', 'subset'], 'new'),
+  };
+  const result = await gis.selectByValue(params);
+  await waitForUiState();
+
+  if (!result) {
+    return failedToolResult('select_by_value', gisRef.current.message || 'Select by value did not complete.', [
+      'Selection function returned a result: no',
+    ]);
+  }
+
+  return successToolResult('select_by_value', `Selected ${result.selectedCount} of ${result.totalCount} feature(s).`, [
+    'Selection function returned a result: yes',
+    `Matched feature count: ${result.matchedCount}`,
+    `Current selection count: ${result.selectedCount}`,
+  ], {
+    ...result,
+    parameters: params,
+  });
+}
+
+async function runAgentSelectByLocation(
+  input: Record<string, unknown>,
+  gisRef: { current: GisRuntime },
+): Promise<AgentToolResult> {
+  const gis = gisRef.current;
+
+  if (!gis.layer) {
+    return blockedToolResult('select_by_location', 'No active target layer is available. Please upload or select a layer first.', [
+      'Active target layer exists: no',
+    ]);
+  }
+
+  const referenceLayerId = stringArg(input.referenceLayerId, '');
+
+  if (!referenceLayerId) {
+    return blockedToolResult('select_by_location', 'A referenceLayerId is required. Use list_layers to inspect available layer ids.', [
+      'Reference layer id is present: no',
+    ]);
+  }
+
+  const referenceExists = referenceLayerId === 'vectorOverlay'
+    ? Boolean(gis.vectorOverlay)
+    : gis.layers.some((layer) => layer.id === referenceLayerId);
+
+  if (!referenceExists) {
+    return blockedToolResult('select_by_location', `Reference layer "${referenceLayerId}" is not available.`, [
+      'Reference layer exists: no',
+    ], summarizeGisContext(gis));
+  }
+
+  const params: SelectByLocationParameters = {
+    referenceLayerId,
+    relation: enumArg<SelectByLocationRelation>(input.relation, ['intersects', 'within', 'contains', 'disjoint'], 'intersects'),
+    selectionMode: enumArg<SelectionMode>(input.selectionMode, ['new', 'add', 'remove', 'subset'], 'new'),
+  };
+  const result = await gis.selectByLocation(params);
+  await waitForUiState();
+
+  if (!result) {
+    return failedToolResult('select_by_location', gisRef.current.message || 'Select by location did not complete.', [
+      'Selection function returned a result: no',
+    ]);
+  }
+
+  return successToolResult('select_by_location', `Selected ${result.selectedCount} of ${result.totalCount} feature(s).`, [
+    'Selection function returned a result: yes',
+    `Matched feature count: ${result.matchedCount}`,
+    `Current selection count: ${result.selectedCount}`,
+  ], {
+    ...result,
+    parameters: params,
+  });
+}
+
+async function runAgentTerrain(
+  tool: TerrainToolId,
+  input: Record<string, unknown>,
+  gisRef: { current: GisRuntime },
+): Promise<AgentToolResult> {
+  const gis = gisRef.current;
+
+  if (!gis.toolsReady) {
+    return blockedToolResult(tool, 'WASM tools are still loading.', [
+      'WASM tool runtime is ready: no',
+    ]);
+  }
+
+  if (!gis.raster) {
+    return blockedToolResult(tool, 'No DEM raster is available. Please add a GeoTIFF first.', [
+      'Current raster exists: no',
+    ]);
+  }
+
+  const beforeRaster = gis.raster;
+  const params: TerrainParameters = {
+    outputName: stringArg(input.outputName, `${tool}.tif`),
+    zFactor: String(positiveNumberArg(input.zFactor, 1)),
+    altitude: String(boundedNumberArg(input.altitude, 45, 0, 90)),
+    azimuth: String(boundedNumberArg(input.azimuth, 315, 0, 360)),
+    units: enumArg<SlopeUnits>(input.units, ['degrees', 'radians', 'percent'], 'degrees'),
+  };
+
+  await gis.runTerrainAnalysis(tool, params);
+  await waitForUiState();
+
+  const nextGis = gisRef.current;
+  const raster = nextGis.raster;
+  const changed = Boolean(raster && raster !== beforeRaster);
+
+  if (!changed || !raster) {
+    return failedToolResult(tool, nextGis.message || `${tool} finished without a visible raster output.`, [
+      'Tool execution promise resolved',
+      `Raster overlay changed: ${changed ? 'yes' : 'no'}`,
+      'Raster output exists: no',
+    ]);
+  }
+
+  return successToolResult(tool, `${tool} completed: ${raster.width} x ${raster.height}.`, [
+    'Tool execution promise resolved',
+    'Raster overlay changed: yes',
+    `Raster layer visibility enabled: ${nextGis.layerVisibility.raster ? 'yes' : 'no'}`,
+    'Raster dimensions are valid: yes',
+  ], {
+    outputName: raster.name,
+    width: raster.width,
+    height: raster.height,
+    min: raster.min,
+    max: raster.max,
+    epsg: raster.epsg ?? null,
+    sourceRasterName: beforeRaster.name,
+    parameters: params,
+  });
 }
 
 async function runAgentBuffer(
@@ -940,6 +1274,11 @@ function positiveNumberArg(value: unknown, fallback: number) {
 function nonNegativeNumberArg(value: unknown, fallback: number) {
   const number = numberArg(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function boundedNumberArg(value: unknown, fallback: number, min: number, max: number) {
+  const number = numberArg(value);
+  return Number.isFinite(number) && number >= min && number <= max ? number : fallback;
 }
 
 function integerArg(value: unknown, fallback: number) {

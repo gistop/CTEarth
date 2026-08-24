@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import maplibregl from 'maplibre-gl';
+import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
 import { defaultUploadedLayerStyle, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
-import { type BasemapId, useMapCommands } from './map/MapCommandContext';
+import { type BasemapId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
 const CHINA_ZOOM = 3.6;
 const DEFAULT_BASEMAP: BasemapId = 'osm';
 const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
+const CESIUM_BASE_URL = '/cesium/';
 
 const basemapLayers: Record<BasemapId, string[]> = {
   osm: ['basemap-osm'],
@@ -15,6 +16,48 @@ const basemapLayers: Record<BasemapId, string[]> = {
 };
 const rasterLayerIds = ['idw-interpolation'];
 const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
+
+type CesiumViewer = {
+  camera: {
+    positionCartographic: { height: number };
+    zoomIn: (amount?: number) => void;
+    zoomOut: (amount?: number) => void;
+    flyTo: (options: { destination: unknown; duration?: number }) => void;
+  };
+  scene: {
+    backgroundColor: unknown;
+    globe: {
+      baseColor: unknown;
+      enableLighting: boolean;
+      show: boolean;
+    };
+  };
+  destroy: () => void;
+  isDestroyed: () => boolean;
+  resize?: () => void;
+};
+
+type CesiumNamespace = {
+  Viewer: new (container: HTMLElement, options: Record<string, unknown>) => CesiumViewer;
+  ImageryLayer: new (provider: unknown) => unknown;
+  OpenStreetMapImageryProvider: new (options: { url: string }) => unknown;
+  Cartesian3: {
+    fromDegrees: (longitude: number, latitude: number, height: number) => unknown;
+  };
+  Color: {
+    LIGHTGREY: unknown;
+    SKYBLUE: unknown;
+  };
+};
+
+declare global {
+  interface Window {
+    CESIUM_BASE_URL?: string;
+    Cesium?: CesiumNamespace;
+  }
+}
+
+let cesiumLoadPromise: Promise<CesiumNamespace> | null = null;
 
 function createTiandituTiles(layer: 'vec' | 'cva') {
   return Array.from(
@@ -26,6 +69,99 @@ function createTiandituTiles(layer: 'vec' | 'cva') {
       `&tk=${TIANDITU_TOKEN}`
     ),
   );
+}
+
+function loadCesium() {
+  if (window.Cesium) {
+    return Promise.resolve(window.Cesium);
+  }
+
+  if (cesiumLoadPromise) {
+    return cesiumLoadPromise;
+  }
+
+  window.CESIUM_BASE_URL = CESIUM_BASE_URL;
+
+  cesiumLoadPromise = new Promise<CesiumNamespace>((resolve, reject) => {
+    const existingStyle = document.getElementById('cesium-widgets-css');
+
+    if (!existingStyle) {
+      const link = document.createElement('link');
+      link.id = 'cesium-widgets-css';
+      link.rel = 'stylesheet';
+      link.href = `${CESIUM_BASE_URL}Widgets/widgets.css`;
+      document.head.appendChild(link);
+    }
+
+    const existingScript = document.getElementById('cesium-runtime') as HTMLScriptElement | null;
+
+    if (existingScript) {
+      existingScript.addEventListener('load', () => {
+        if (window.Cesium) {
+          resolve(window.Cesium);
+        } else {
+          reject(new Error('Cesium runtime loaded without window.Cesium'));
+        }
+      }, { once: true });
+      existingScript.addEventListener('error', () => reject(new Error('Cesium runtime failed to load')), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = 'cesium-runtime';
+    script.src = `${CESIUM_BASE_URL}Cesium.js`;
+    script.async = true;
+    script.onload = () => {
+      if (window.Cesium) {
+        resolve(window.Cesium);
+      } else {
+        reject(new Error('Cesium runtime loaded without window.Cesium'));
+      }
+    };
+    script.onerror = () => reject(new Error('Cesium runtime failed to load'));
+    document.body.appendChild(script);
+  });
+
+  return cesiumLoadPromise;
+}
+
+function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
+  const viewer = new Cesium.Viewer(container, {
+    animation: false,
+    baseLayer: new Cesium.ImageryLayer(
+      new Cesium.OpenStreetMapImageryProvider({
+        url: 'https://tile.openstreetmap.org/',
+      }),
+    ),
+    baseLayerPicker: false,
+    fullscreenButton: false,
+    geocoder: false,
+    homeButton: false,
+    infoBox: false,
+    navigationHelpButton: false,
+    sceneModePicker: false,
+    selectionIndicator: false,
+    timeline: false,
+  });
+
+  viewer.scene.globe.enableLighting = true;
+  viewer.scene.globe.show = true;
+  viewer.scene.backgroundColor = Cesium.Color.SKYBLUE;
+  viewer.scene.globe.baseColor = Cesium.Color.LIGHTGREY;
+  flyCesiumToChina(viewer, Cesium, 1.6);
+
+  return viewer;
+}
+
+function flyCesiumToChina(viewer: CesiumViewer, Cesium: CesiumNamespace, duration = 0.6) {
+  viewer.camera.flyTo({
+    destination: Cesium.Cartesian3.fromDegrees(CHINA_CENTER[0], CHINA_CENTER[1], 8_500_000),
+    duration,
+  });
+}
+
+function getCesiumZoomStep(viewer: CesiumViewer) {
+  return Math.max(viewer.camera.positionCartographic.height * 0.22, 1_000);
 }
 
 function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): maplibregl.StyleSpecification {
@@ -124,8 +260,11 @@ function setBasemapOpacity(map: maplibregl.Map, opacity: number) {
 
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const cesiumRef = useRef<{ Cesium: CesiumNamespace; viewer: CesiumViewer } | null>(null);
   const lastLayerNameRef = useRef('');
+  const mapModeRef = useRef<MapViewMode>('planar');
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
   const {
     layer,
@@ -143,6 +282,10 @@ export function MapPanel() {
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('正在初始化在线地图');
   const [mapReady, setMapReady] = useState(false);
+
+  useEffect(() => {
+    mapModeRef.current = mapCommandState.mapMode;
+  }, [mapCommandState.mapMode]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -206,9 +349,89 @@ export function MapPanel() {
       resizeObserver.disconnect();
       mapRef.current?.remove();
       mapRef.current = null;
+      if (cesiumRef.current && !cesiumRef.current.viewer.isDestroyed()) {
+        cesiumRef.current.viewer.destroy();
+      }
+      cesiumRef.current = null;
       setMapReady(false);
     };
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!mapReady || !map) {
+      return;
+    }
+
+    if (mapCommandState.mapMode === 'globe') {
+      setStatus('');
+      return;
+    }
+
+    if (mapCommandState.mapMode === 'terrain') {
+      map.easeTo({
+        pitch: 0,
+        bearing: 0,
+        duration: 300,
+        essential: true,
+      });
+      setStatus('地形模式占位：等待接入 DEM 高程瓦片服务');
+      return;
+    }
+
+    map.easeTo({
+      pitch: 0,
+      bearing: 0,
+      duration: 300,
+      essential: true,
+    });
+    setStatus('');
+  }, [mapCommandState.mapMode, mapReady]);
+
+  useEffect(() => {
+    if (mapCommandState.mapMode !== 'globe') {
+      return;
+    }
+
+    let isCancelled = false;
+    const container = cesiumContainerRef.current;
+
+    if (!container) {
+      return;
+    }
+
+    const initializeCesium = async () => {
+      try {
+        setStatus('正在加载 Cesium 三维视图');
+        const Cesium = await loadCesium();
+
+        if (isCancelled) {
+          return;
+        }
+
+        if (!cesiumRef.current || cesiumRef.current.viewer.isDestroyed()) {
+          cesiumRef.current = {
+            Cesium,
+            viewer: createCesiumViewer(container, Cesium),
+          };
+        }
+
+        cesiumRef.current.viewer.resize?.();
+        setStatus('');
+      } catch (error) {
+        if (!isCancelled) {
+          setStatus(error instanceof Error ? error.message : 'Cesium 三维视图加载失败');
+        }
+      }
+    };
+
+    void initializeCesium();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [mapCommandState.mapMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -393,6 +616,16 @@ export function MapPanel() {
   }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
   const zoomIn = useCallback(() => {
+    if (mapModeRef.current === 'globe') {
+      const viewer = cesiumRef.current?.viewer;
+
+      if (viewer) {
+        viewer.camera.zoomIn(getCesiumZoomStep(viewer));
+      }
+
+      return;
+    }
+
     const map = mapRef.current;
 
     if (!map) {
@@ -403,6 +636,16 @@ export function MapPanel() {
   }, []);
 
   const zoomOut = useCallback(() => {
+    if (mapModeRef.current === 'globe') {
+      const viewer = cesiumRef.current?.viewer;
+
+      if (viewer) {
+        viewer.camera.zoomOut(getCesiumZoomStep(viewer));
+      }
+
+      return;
+    }
+
     const map = mapRef.current;
 
     if (!map) {
@@ -413,6 +656,16 @@ export function MapPanel() {
   }, []);
 
   const resetNorth = useCallback(() => {
+    if (mapModeRef.current === 'globe') {
+      const cesium = cesiumRef.current;
+
+      if (cesium) {
+        flyCesiumToChina(cesium.viewer, cesium.Cesium);
+      }
+
+      return;
+    }
+
     mapRef.current?.resetNorthPitch();
   }, []);
 
@@ -443,7 +696,21 @@ export function MapPanel() {
     updateMapCommandState({ dragRotateEnabled: map.dragRotate.isEnabled() });
   }, [updateMapCommandState]);
 
+  const setMapMode = useCallback((mapMode: MapViewMode) => {
+    updateMapCommandState({ mapMode });
+  }, [updateMapCommandState]);
+
   const locate = useCallback(() => {
+    if (mapModeRef.current === 'globe') {
+      const cesium = cesiumRef.current;
+
+      if (cesium) {
+        flyCesiumToChina(cesium.viewer, cesium.Cesium);
+      }
+
+      return;
+    }
+
     mapRef.current?.easeTo({
       center: CHINA_CENTER,
       zoom: CHINA_ZOOM,
@@ -460,17 +727,19 @@ export function MapPanel() {
       zoomOut,
       resetNorth,
       setBasemap,
+      setMapMode,
       toggleDragRotate,
       locate,
     }),
-    [locate, resetNorth, setBasemap, toggleDragRotate, zoomIn, zoomOut],
+    [locate, resetNorth, setBasemap, setMapMode, toggleDragRotate, zoomIn, zoomOut],
   );
 
   useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
 
   return (
     <section className="map-panel">
-      <div className="map-canvas" ref={containerRef} />
+      <div className={`map-canvas${mapCommandState.mapMode === 'globe' ? ' is-hidden' : ''}`} ref={containerRef} />
+      <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
       {status ? <div className="map-status">{status}</div> : null}
       <div className="map-readout">{coords}</div>
     </section>
@@ -511,8 +780,8 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string, style: Upload
       source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
       paint: {
-        'fill-color': style.fillColor,
-        'fill-opacity': style.fillOpacity,
+        'fill-color': selectedColorExpression('#f97316', style.fillColor),
+        'fill-opacity': selectedNumberExpression(Math.max(style.fillOpacity, 0.42), style.fillOpacity),
       },
     });
   }
@@ -530,8 +799,8 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string, style: Upload
         ['==', ['geometry-type'], 'MultiPolygon'],
       ],
       paint: {
-        'line-color': style.lineColor,
-        'line-width': style.lineWidth,
+        'line-color': selectedColorExpression('#f97316', style.lineColor),
+        'line-width': selectedNumberExpression(Math.max(style.lineWidth + 1.5, 3), style.lineWidth),
         'line-opacity': style.lineOpacity,
       },
     });
@@ -544,11 +813,11 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string, style: Upload
       source: sourceId,
       filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
       paint: {
-        'circle-radius': style.pointRadius,
-        'circle-color': style.pointColor,
+        'circle-radius': selectedNumberExpression(style.pointRadius + 3, style.pointRadius),
+        'circle-color': selectedColorExpression('#f97316', style.pointColor),
         'circle-opacity': style.pointOpacity,
-        'circle-stroke-color': style.pointStrokeColor,
-        'circle-stroke-width': style.pointStrokeWidth,
+        'circle-stroke-color': selectedColorExpression('#ffffff', style.pointStrokeColor),
+        'circle-stroke-width': selectedNumberExpression(Math.max(style.pointStrokeWidth + 1, 2.5), style.pointStrokeWidth),
       },
     });
   }
@@ -578,23 +847,31 @@ function setUploadedLayerPaint(map: maplibregl.Map, layerId: string, style: Uplo
   const [fillId, lineId, circleId] = uploadedLayerIds(layerId);
 
   if (map.getLayer(fillId)) {
-    map.setPaintProperty(fillId, 'fill-color', style.fillColor);
-    map.setPaintProperty(fillId, 'fill-opacity', style.fillOpacity);
+    map.setPaintProperty(fillId, 'fill-color', selectedColorExpression('#f97316', style.fillColor));
+    map.setPaintProperty(fillId, 'fill-opacity', selectedNumberExpression(Math.max(style.fillOpacity, 0.42), style.fillOpacity));
   }
 
   if (map.getLayer(lineId)) {
-    map.setPaintProperty(lineId, 'line-color', style.lineColor);
-    map.setPaintProperty(lineId, 'line-width', style.lineWidth);
+    map.setPaintProperty(lineId, 'line-color', selectedColorExpression('#f97316', style.lineColor));
+    map.setPaintProperty(lineId, 'line-width', selectedNumberExpression(Math.max(style.lineWidth + 1.5, 3), style.lineWidth));
     map.setPaintProperty(lineId, 'line-opacity', style.lineOpacity);
   }
 
   if (map.getLayer(circleId)) {
-    map.setPaintProperty(circleId, 'circle-radius', style.pointRadius);
-    map.setPaintProperty(circleId, 'circle-color', style.pointColor);
+    map.setPaintProperty(circleId, 'circle-radius', selectedNumberExpression(style.pointRadius + 3, style.pointRadius));
+    map.setPaintProperty(circleId, 'circle-color', selectedColorExpression('#f97316', style.pointColor));
     map.setPaintProperty(circleId, 'circle-opacity', style.pointOpacity);
-    map.setPaintProperty(circleId, 'circle-stroke-color', style.pointStrokeColor);
-    map.setPaintProperty(circleId, 'circle-stroke-width', style.pointStrokeWidth);
+    map.setPaintProperty(circleId, 'circle-stroke-color', selectedColorExpression('#ffffff', style.pointStrokeColor));
+    map.setPaintProperty(circleId, 'circle-stroke-width', selectedNumberExpression(Math.max(style.pointStrokeWidth + 1, 2.5), style.pointStrokeWidth));
   }
+}
+
+function selectedColorExpression(selectedColor: string, normalColor: string): ExpressionSpecification {
+  return ['case', ['boolean', ['get', '_selected'], false], selectedColor, normalColor];
+}
+
+function selectedNumberExpression(selectedValue: number, normalValue: number): ExpressionSpecification {
+  return ['case', ['boolean', ['get', '_selected'], false], selectedValue, normalValue];
 }
 
 function setVectorOverlayPaint(
@@ -612,12 +889,13 @@ function setVectorOverlayPaint(
   }
 }
 
-function setUploadedLayerData(map: maplibregl.Map, layer: { id: string; geojson: { features: unknown[] }; selectedField: string }) {
+function setUploadedLayerData(map: maplibregl.Map, layer: { id: string; geojson: { features: unknown[] }; selectedField: string; selectedFeatureIndexes: number[] }) {
   const source = map.getSource(uploadedSourceId(layer.id)) as maplibregl.GeoJSONSource | undefined;
+  const selectedFeatureIndexes = new Set(layer.selectedFeatureIndexes);
 
   source?.setData({
     type: 'FeatureCollection',
-    features: layer.geojson.features.map((feature) => enrichFeature(feature, layer)),
+    features: layer.geojson.features.map((feature, index) => enrichFeature(feature, layer, index, selectedFeatureIndexes)),
   } as GeoJSON.FeatureCollection);
 }
 
@@ -750,7 +1028,7 @@ function formatNumber(value: number) {
   return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(3);
 }
 
-function enrichFeature(feature: unknown, layer: { id: string; selectedField: string }) {
+function enrichFeature(feature: unknown, layer: { id: string; selectedField: string }, index: number, selectedFeatureIndexes: Set<number>) {
   if (!isRecord(feature)) {
     return feature;
   }
@@ -761,7 +1039,9 @@ function enrichFeature(feature: unknown, layer: { id: string; selectedField: str
     ...feature,
     properties: {
       ...properties,
+      _featureIndex: index,
       _layerId: layer.id,
+      _selected: selectedFeatureIndexes.has(index),
       _value: layer.selectedField && isPointLikeFeature(feature)
         ? formatNumber(Number(properties[layer.selectedField]))
         : '',

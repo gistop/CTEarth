@@ -1,16 +1,19 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 
 export type BasemapId = 'osm' | 'tianditu' | 'esri';
+export type MapViewMode = 'planar' | 'terrain' | 'globe';
 
 export type MapCommand = 'zoomIn' | 'zoomOut' | 'resetNorth' | 'toggleDragRotate' | 'locate';
 
 export type MapCommands = Record<MapCommand, () => void> & {
   setBasemap: (basemap: BasemapId) => void;
+  setMapMode: (mode: MapViewMode) => void;
 };
 
 export type MapCommandState = {
   basemap: BasemapId;
   dragRotateEnabled: boolean;
+  mapMode: MapViewMode;
 };
 
 type MapCommandContextValue = {
@@ -19,6 +22,7 @@ type MapCommandContextValue = {
   registerMapCommands: (commands: MapCommands) => () => void;
   runMapCommand: (command: MapCommand) => void;
   setBasemap: (basemap: BasemapId) => void;
+  setMapMode: (mode: MapViewMode) => void;
   updateMapCommandState: (state: Partial<MapCommandState>) => void;
 };
 
@@ -26,6 +30,7 @@ const MapCommandContext = createContext<MapCommandContextValue | null>(null);
 const defaultMapCommandState: MapCommandState = {
   basemap: 'osm',
   dragRotateEnabled: false,
+  mapMode: 'planar',
 };
 
 export function MapCommandProvider({ children }: { children: ReactNode }) {
@@ -54,6 +59,10 @@ export function MapCommandProvider({ children }: { children: ReactNode }) {
     commandsRef.current?.setBasemap(basemap);
   }, []);
 
+  const setMapMode = useCallback((mode: MapViewMode) => {
+    commandsRef.current?.setMapMode(mode);
+  }, []);
+
   const updateMapCommandState = useCallback((state: Partial<MapCommandState>) => {
     setMapCommandState((current) => ({ ...current, ...state }));
   }, []);
@@ -65,9 +74,10 @@ export function MapCommandProvider({ children }: { children: ReactNode }) {
       registerMapCommands,
       runMapCommand,
       setBasemap,
+      setMapMode,
       updateMapCommandState,
     }),
-    [hasMapCommands, mapCommandState, registerMapCommands, runMapCommand, setBasemap, updateMapCommandState],
+    [hasMapCommands, mapCommandState, registerMapCommands, runMapCommand, setBasemap, setMapMode, updateMapCommandState],
   );
 
   return <MapCommandContext.Provider value={value}>{children}</MapCommandContext.Provider>;

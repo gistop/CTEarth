@@ -10,8 +10,10 @@ import {
   RotateCcw,
   Search,
   Settings,
+  TableProperties,
   X,
 } from 'lucide-react';
+import { useAttributeTable } from '../attributes/AttributeTableContext';
 import {
   defaultBasemapStyle,
   defaultRasterStyle,
@@ -60,6 +62,7 @@ function LayerSection() {
     uploadedLayerVisibility,
     layerOrder,
     uploadGeoJson,
+    uploadGeoTiff,
     uploadShapefileZip,
     setLayerVisibility,
     setUploadedLayerVisibility,
@@ -71,6 +74,7 @@ function LayerSection() {
     moveLayerOrder,
     setActiveLayer,
   } = useGis();
+  const { openAttributeTable } = useAttributeTable();
 
   const layerItems = useMemo(
     () => buildLayerItems({
@@ -79,7 +83,7 @@ function LayerSection() {
       layerVisibility,
       uploadedLayerVisibility,
       hasRaster: Boolean(raster),
-      rasterLabel: raster ? `IDW 插值 ${raster.width} x ${raster.height}` : '',
+      rasterLabel: raster ? `${raster.name} ${raster.width} x ${raster.height}` : '',
       vectorOverlayLabel: vectorOverlay?.name ?? '',
       hasVectorOverlay: Boolean(vectorOverlay),
     }),
@@ -102,7 +106,9 @@ function LayerSection() {
       return;
     }
 
-    if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
+    if (isGeoTiffFile(file.name)) {
+      await uploadGeoTiff(file);
+    } else if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
       await uploadGeoJson(file);
     } else {
       await uploadShapefileZip(file);
@@ -134,8 +140,21 @@ function LayerSection() {
         <Grid2X2 size={18} />
         <button
           type="button"
+          title="打开属性表"
+          aria-label="打开当前矢量图层属性表"
+          disabled={!layer}
+          onClick={() => {
+            if (layer) {
+              openAttributeTable(layer.id, layer.fileName);
+            }
+          }}
+        >
+          <TableProperties size={18} />
+        </button>
+        <button
+          type="button"
           title="添加数据"
-          aria-label="添加 Shapefile ZIP 或 GeoJSON 数据"
+          aria-label="添加 Shapefile ZIP、GeoJSON 或 GeoTIFF 数据"
           onClick={() => fileInputRef.current?.click()}
         >
           <FolderPlus size={18} />
@@ -144,7 +163,7 @@ function LayerSection() {
           ref={fileInputRef}
           className="hidden-file-input"
           type="file"
-          accept=".zip,.geojson,.json"
+          accept=".zip,.geojson,.json,.tif,.tiff,.geotiff"
           onChange={handleFileChange}
         />
       </div>
@@ -599,6 +618,10 @@ function buildLayerItems({
   }
 
   return items;
+}
+
+function isGeoTiffFile(fileName: string) {
+  return /\.(tif|tiff|geotiff)$/i.test(fileName);
 }
 
 function swatchClassForItem(item: LayerListItem) {

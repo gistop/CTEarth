@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockviewReact,
   type DockviewApi,
@@ -13,8 +13,10 @@ import {
   ChevronsDown,
   ChevronsUp,
   ChevronDown,
+  ChartColumn,
   Database,
   Download,
+  Earth,
   FolderCog,
   FolderOpen,
   Grid2X2,
@@ -25,6 +27,7 @@ import {
   Map,
   Minus,
   MousePointer2,
+  Mountain,
   PanelLeft,
   Pause,
   PenTool,
@@ -41,26 +44,39 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquareDashedMousePointer,
+  TableProperties,
   Tags,
   Wrench,
   Undo2,
   Upload,
+  X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
+import {
+  AttributeTableProvider,
+  defaultAttributeTableState,
+  useAttributeTable,
+  type AttributeTableState,
+} from './components/attributes/AttributeTableContext';
 import { ContentsPanel as EmbeddedContentsPanel } from './components/contents/ContentsPanel';
 import {
   MapCommandProvider,
   type BasemapId,
   type MapCommand,
   type MapCommandState,
+  type MapViewMode,
   useMapCommands,
 } from './components/map/MapCommandContext';
 import {
   GisProvider,
   type BufferParameters as BufferRunParameters,
   type IdwParameters as IdwRunParameters,
+  type SelectByLocationParameters as SelectByLocationRunParameters,
+  type SelectByValueParameters as SelectByValueRunParameters,
+  type TerrainParameters as TerrainRunParameters,
+  type TerrainToolId,
   useGis,
 } from './gisStore';
 
@@ -94,9 +110,45 @@ const dockColumnRatio = {
 };
 
 const aiAssistantPanelId = 'ai-assistant-panel';
+const attributeChartPanelIdPrefix = 'attribute-chart:';
+const attributeTablePanelIdPrefix = 'attribute-table:';
+
+function getAttributeTablePanelId(layerId: string) {
+  return `${attributeTablePanelIdPrefix}${encodeURIComponent(layerId)}`;
+}
+
+function getAttributeChartPanelId(layerId: string) {
+  return `${attributeChartPanelIdPrefix}${encodeURIComponent(layerId)}`;
+}
+
+function getLayerIdFromAttributeTablePanelId(panelId: string | undefined) {
+  if (!panelId?.startsWith(attributeTablePanelIdPrefix)) {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(panelId.slice(attributeTablePanelIdPrefix.length));
+  } catch {
+    return panelId.slice(attributeTablePanelIdPrefix.length);
+  }
+}
+
+function getAttributeTableTitle(layerName?: string) {
+  return layerName ? `属性表 - ${layerName}` : '属性表';
+}
+
+function getAttributeChartTitle(layerName?: string) {
+  return layerName ? `图表 - ${layerName}` : '图表';
+}
 
 const AiAssistantPanel = lazy(() => (
   import('./components/ai/AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel }))
+));
+const AttributeTablePanel = lazy(() => (
+  import('./components/attributes/AttributeTablePanel').then((module) => ({ default: module.AttributeTablePanel }))
+));
+const AttributeChartPanel = lazy(() => (
+  import('./components/attributes/AttributeChartPanel').then((module) => ({ default: module.AttributeChartPanel }))
 ));
 
 const ribbonGroups: { title: string; tools: RibbonTool[] }[] = [
@@ -272,7 +324,7 @@ function Ribbon({
 
 function ContentsPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { layer, message, uploadGeoJson, uploadShapefileZip } = useGis();
+  const { layer, message, uploadGeoJson, uploadGeoTiff, uploadShapefileZip } = useGis();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -281,7 +333,9 @@ function ContentsPanel() {
       return;
     }
 
-    if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
+    if (isGeoTiffFile(file.name)) {
+      await uploadGeoTiff(file);
+    } else if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
       await uploadGeoJson(file);
     } else {
       await uploadShapefileZip(file);
@@ -301,10 +355,10 @@ function ContentsPanel() {
         <Map size={18} />
         <PenTool size={18} />
         <Grid2X2 size={18} />
-        <button type="button" title="上传 Shapefile ZIP 或 GeoJSON" aria-label="上传 Shapefile ZIP 或 GeoJSON" onClick={() => fileInputRef.current?.click()}>
+        <button type="button" title="上传 Shapefile ZIP、GeoJSON 或 GeoTIFF" aria-label="上传 Shapefile ZIP、GeoJSON 或 GeoTIFF" onClick={() => fileInputRef.current?.click()}>
           <Upload size={18} />
         </button>
-        <input ref={fileInputRef} className="hidden-file-input" type="file" accept=".zip,.geojson,.json" onChange={handleFileChange} />
+        <input ref={fileInputRef} className="hidden-file-input" type="file" accept=".zip,.geojson,.json,.tif,.tiff,.geotiff" onChange={handleFileChange} />
       </div>
       <section className="layer-tree">
         <h3>绘制顺序</h3>
@@ -335,10 +389,14 @@ function ContentsPanel() {
   );
 }
 
+function isGeoTiffFile(fileName: string) {
+  return /\.(tif|tiff|geotiff)$/i.test(fileName);
+}
+
 type InspectorTabId = 'statistics' | 'mask' | 'annotation' | 'tools';
 type ToolView = 'tree' | 'detail';
 type ToolDetailTab = 'parameters' | 'environment';
-type AnalysisTool = 'idw' | 'buffer';
+type AnalysisTool = 'idw' | 'buffer' | 'selectByValue' | 'selectByLocation' | TerrainToolId;
 type ToolNode = {
   id: string;
   label: string;
@@ -371,6 +429,23 @@ const toolTree: ToolNode[] = [{
       label: '邻近',
       children: [{ id: 'general-proximity-buffer', label: '缓冲区', tool: 'buffer' }],
     },
+    {
+      id: 'general-selection',
+      label: '选择工具箱',
+      children: [
+        { id: 'general-selection-value', label: '按属性选择', tool: 'selectByValue' },
+        { id: 'general-selection-location', label: '按位置选择', tool: 'selectByLocation' },
+      ],
+    },
+    {
+      id: 'general-terrain',
+      label: '地形工具箱',
+      children: [
+        { id: 'general-terrain-hillshade', label: '山体阴影', tool: 'hillshade' },
+        { id: 'general-terrain-slope', label: '坡度', tool: 'slope' },
+        { id: 'general-terrain-aspect', label: '坡向', tool: 'aspect' },
+      ],
+    },
   ],
 }, {
   id: 'industry',
@@ -381,6 +456,23 @@ const toolTree: ToolNode[] = [{
     { id: 'industry-geology', label: '地质' },
   ],
 }];
+
+const toolTitles: Record<AnalysisTool, string> = {
+  idw: '反距离加权',
+  buffer: '缓冲区',
+  selectByValue: '按属性选择',
+  selectByLocation: '按位置选择',
+  hillshade: '山体阴影',
+  slope: '坡度',
+  aspect: '坡向',
+};
+
+const selectionModeOptions = [
+  { value: 'new', label: '新建选择集' },
+  { value: 'add', label: '添加到当前选择集' },
+  { value: 'remove', label: '从当前选择集移除' },
+  { value: 'subset', label: '从当前选择集筛选' },
+] as const;
 
 function InspectorPanel() {
   const [activeTab, setActiveTab] = useState<InspectorTabId>('statistics');
@@ -434,6 +526,8 @@ function StatisticsTab() {
         <dd>{layer?.fileName ?? '无'}</dd>
         <dt>要素数</dt>
         <dd>{layer?.geojson.features.length ?? 0}</dd>
+        <dt>已选择</dt>
+        <dd>{layer?.selectedFeatureIndexes.length ?? 0}</dd>
         <dt>点要素</dt>
         <dd>{layer?.points.features.length ?? 0}</dd>
         <dt>数值字段</dt>
@@ -474,7 +568,7 @@ function ToolsTab() {
   const [view, setView] = useState<ToolView>('tree');
   const [detailTab, setDetailTab] = useState<ToolDetailTab>('parameters');
   const [activeTool, setActiveTool] = useState<AnalysisTool>('idw');
-  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(() => new Set(['general', 'general-interpolation', 'general-proximity', 'industry']));
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(() => new Set(['general', 'general-interpolation', 'general-proximity', 'general-selection', 'general-terrain', 'industry']));
   const trimmedQuery = query.trim();
   const normalizedQuery = trimmedQuery.toLowerCase();
   const visibleNodes = useMemo(() => filterToolTree(toolTree, normalizedQuery), [normalizedQuery]);
@@ -696,7 +790,19 @@ function ToolDetailView({
   onBack: () => void;
   onChangeTab: (tab: ToolDetailTab) => void;
 }) {
-  const { isRunning, layer, runBufferAnalysis, runIdwInterpolation, toolsReady } = useGis();
+  const {
+    isRunning,
+    layer,
+    layers,
+    raster,
+    runBufferAnalysis,
+    runIdwInterpolation,
+    runTerrainAnalysis,
+    selectByLocation,
+    selectByValue,
+    toolsReady,
+    vectorOverlay,
+  } = useGis();
   const [idwParams, setIdwParams] = useState<IdwRunParameters>({
     field: layer?.selectedField ?? '',
     outputName: 'idw-interpolation.tif',
@@ -713,7 +819,47 @@ function ToolDetailView({
     joinStyle: 'round',
     dissolve: false,
   });
-  const title = tool === 'idw' ? '反距离加权' : '缓冲区';
+  const [selectValueParams, setSelectValueParams] = useState<SelectByValueRunParameters>({
+    field: layer?.fields[0] ?? '',
+    operator: 'equals',
+    value: '',
+    caseSensitive: false,
+    selectionMode: 'new',
+  });
+  const [selectLocationParams, setSelectLocationParams] = useState<SelectByLocationRunParameters>({
+    referenceLayerId: defaultReferenceLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+    relation: 'intersects',
+    selectionMode: 'new',
+  });
+  const [terrainParamsByTool, setTerrainParamsByTool] = useState<Record<TerrainToolId, TerrainRunParameters>>({
+    hillshade: {
+      outputName: 'hillshade.tif',
+      zFactor: '1',
+      altitude: '45',
+      azimuth: '315',
+      units: 'degrees',
+    },
+    slope: {
+      outputName: 'slope.tif',
+      zFactor: '1',
+      altitude: '45',
+      azimuth: '315',
+      units: 'degrees',
+    },
+    aspect: {
+      outputName: 'aspect.tif',
+      zFactor: '1',
+      altitude: '45',
+      azimuth: '315',
+      units: 'degrees',
+    },
+  });
+  const title = toolTitles[tool];
+  const terrainTool = isTerrainTool(tool) ? tool : null;
+  const terrainParams = terrainTool ? terrainParamsByTool[terrainTool] : terrainParamsByTool.hillshade;
+  const requiresWasm = tool === 'idw' || tool === 'buffer' || Boolean(terrainTool);
+  const requiresLayer = tool === 'idw' || tool === 'buffer' || tool === 'selectByValue' || tool === 'selectByLocation';
+  const requiresRaster = Boolean(terrainTool);
 
   useEffect(() => {
     if (!layer) {
@@ -724,7 +870,20 @@ function ToolDetailView({
       ...current,
       field: current.field || layer.selectedField,
     }));
+    setSelectValueParams((current) => ({
+      ...current,
+      field: current.field && layer.fields.includes(current.field) ? current.field : layer.fields[0] ?? '',
+    }));
   }, [layer]);
+
+  useEffect(() => {
+    const referenceLayerId = defaultReferenceLayerId(layers, layer?.id, Boolean(vectorOverlay));
+
+    setSelectLocationParams((current) => ({
+      ...current,
+      referenceLayerId: current.referenceLayerId || referenceLayerId,
+    }));
+  }, [layer?.id, layers, vectorOverlay]);
 
   const updateIdwParam = (name: keyof IdwRunParameters, value: string) => {
     setIdwParams((current) => ({ ...current, [name]: value }));
@@ -732,13 +891,47 @@ function ToolDetailView({
   const updateBufferParam = (name: keyof BufferRunParameters, value: string | boolean) => {
     setBufferParams((current) => ({ ...current, [name]: value }));
   };
+  const updateSelectValueParam = (name: keyof SelectByValueRunParameters, value: string | boolean) => {
+    setSelectValueParams((current) => ({ ...current, [name]: value }));
+  };
+  const updateSelectLocationParam = (name: keyof SelectByLocationRunParameters, value: string) => {
+    setSelectLocationParams((current) => ({ ...current, [name]: value }));
+  };
+  const updateTerrainParam = (name: keyof TerrainRunParameters, value: string) => {
+    if (!terrainTool) {
+      return;
+    }
+
+    setTerrainParamsByTool((current) => ({
+      ...current,
+      [terrainTool]: {
+        ...current[terrainTool],
+        [name]: value,
+      },
+    }));
+  };
   const runActiveTool = () => {
     if (tool === 'idw') {
       void runIdwInterpolation(idwParams);
       return;
     }
 
-    void runBufferAnalysis(bufferParams);
+    if (tool === 'buffer') {
+      void runBufferAnalysis(bufferParams);
+      return;
+    }
+
+    if (tool === 'selectByValue') {
+      void selectByValue(selectValueParams);
+      return;
+    }
+
+    if (terrainTool) {
+      void runTerrainAnalysis(terrainTool, terrainParams);
+      return;
+    }
+
+    void selectByLocation(selectLocationParams);
   };
 
   return (
@@ -781,6 +974,15 @@ function ToolDetailView({
         ) : (
           null
         )}
+        {activeTab === 'parameters' && tool === 'selectByValue' ? (
+          <SelectByValueParameters params={selectValueParams} onChange={updateSelectValueParam} />
+        ) : null}
+        {activeTab === 'parameters' && tool === 'selectByLocation' ? (
+          <SelectByLocationParameters params={selectLocationParams} onChange={updateSelectLocationParam} />
+        ) : null}
+        {activeTab === 'parameters' && terrainTool ? (
+          <TerrainParameters tool={terrainTool} params={terrainParams} onChange={updateTerrainParam} />
+        ) : null}
         {activeTab === 'environment' ? <AnalysisEnvironment /> : null}
       </div>
       <div className="tool-detail-actions">
@@ -788,7 +990,7 @@ function ToolDetailView({
         <button
           className="primary"
           type="button"
-          disabled={!toolsReady || !layer || isRunning}
+          disabled={(requiresWasm && !toolsReady) || (requiresLayer && !layer) || (requiresRaster && !raster) || isRunning}
           onClick={runActiveTool}
         >
           <Play size={15} />
@@ -899,6 +1101,174 @@ function BufferParameters({
   );
 }
 
+function SelectByValueParameters({
+  params,
+  onChange,
+}: {
+  params: SelectByValueRunParameters;
+  onChange: (name: keyof SelectByValueRunParameters, value: string | boolean) => void;
+}) {
+  const { layer } = useGis();
+  const fieldOptions = layer?.fields ?? [];
+  const inputName = layer?.fileName ?? '';
+  const valueDisabled = params.operator === 'isEmpty' || params.operator === 'isNotEmpty';
+
+  return (
+    <form className="tool-form">
+      <ToolField label="输入要素" required action="folder">
+        <input value={inputName} readOnly placeholder="请先在左侧上传 Shapefile ZIP 或 GeoJSON" />
+      </ToolField>
+      <ToolField label="属性字段" required>
+        <select value={params.field} onChange={(event) => onChange('field', event.target.value)}>
+          <option value="" disabled>选择字段</option>
+          {fieldOptions.map((field) => (
+            <option key={field} value={field}>{field}</option>
+          ))}
+        </select>
+      </ToolField>
+      <ToolField label="比较方式" required>
+        <select value={params.operator} onChange={(event) => onChange('operator', event.target.value)}>
+          <option value="equals">等于</option>
+          <option value="notEquals">不等于</option>
+          <option value="contains">包含</option>
+          <option value="startsWith">开头为</option>
+          <option value="endsWith">结尾为</option>
+          <option value="greaterThan">大于</option>
+          <option value="greaterOrEqual">大于等于</option>
+          <option value="lessThan">小于</option>
+          <option value="lessOrEqual">小于等于</option>
+          <option value="isEmpty">为空</option>
+          <option value="isNotEmpty">非空</option>
+        </select>
+      </ToolField>
+      <ToolField label="值">
+        <input
+          value={params.value}
+          disabled={valueDisabled}
+          placeholder={valueDisabled ? '无需输入' : '输入比较值'}
+          onChange={(event) => onChange('value', event.target.value)}
+        />
+      </ToolField>
+      <ToolField label="区分大小写">
+        <input
+          checked={params.caseSensitive}
+          type="checkbox"
+          onChange={(event) => onChange('caseSensitive', event.target.checked)}
+        />
+      </ToolField>
+      <ToolField label="选择方式">
+        <select value={params.selectionMode} onChange={(event) => onChange('selectionMode', event.target.value)}>
+          {selectionModeOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </ToolField>
+    </form>
+  );
+}
+
+function SelectByLocationParameters({
+  params,
+  onChange,
+}: {
+  params: SelectByLocationRunParameters;
+  onChange: (name: keyof SelectByLocationRunParameters, value: string) => void;
+}) {
+  const { layer, layers, vectorOverlay } = useGis();
+  const inputName = layer?.fileName ?? '';
+  const referenceOptions = [
+    ...layers
+      .filter((item) => item.id !== layer?.id)
+      .map((item) => ({ id: item.id, label: item.fileName })),
+    ...(vectorOverlay ? [{ id: 'vectorOverlay', label: vectorOverlay.name }] : []),
+  ];
+
+  return (
+    <form className="tool-form">
+      <ToolField label="目标要素" required action="folder">
+        <input value={inputName} readOnly placeholder="请先在左侧上传 Shapefile ZIP 或 GeoJSON" />
+      </ToolField>
+      <ToolField label="参考要素" required action="folder">
+        <select value={params.referenceLayerId} onChange={(event) => onChange('referenceLayerId', event.target.value)}>
+          <option value="" disabled>选择参考图层</option>
+          {referenceOptions.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
+      </ToolField>
+      <ToolField label="空间关系" required>
+        <select value={params.relation} onChange={(event) => onChange('relation', event.target.value)}>
+          <option value="intersects">相交</option>
+          <option value="within">位于内部</option>
+          <option value="contains">包含</option>
+          <option value="disjoint">不相交</option>
+        </select>
+      </ToolField>
+      <ToolField label="选择方式">
+        <select value={params.selectionMode} onChange={(event) => onChange('selectionMode', event.target.value)}>
+          {selectionModeOptions.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </ToolField>
+    </form>
+  );
+}
+
+function TerrainParameters({
+  tool,
+  params,
+  onChange,
+}: {
+  tool: TerrainToolId;
+  params: TerrainRunParameters;
+  onChange: (name: keyof TerrainRunParameters, value: string) => void;
+}) {
+  const { raster } = useGis();
+  const inputName = raster?.name ?? '';
+
+  return (
+    <form className="tool-form">
+      <ToolField label="输入 DEM" required action="folder">
+        <input value={inputName} readOnly placeholder="请先添加 DEM GeoTIFF" />
+      </ToolField>
+      <ToolField label="输出栅格" required action="folder">
+        <input value={params.outputName} onChange={(event) => onChange('outputName', event.target.value)} />
+      </ToolField>
+      <ToolField label="Z 因子">
+        <input value={params.zFactor} type="number" min="0.000001" step="any" onChange={(event) => onChange('zFactor', event.target.value)} />
+      </ToolField>
+      {tool === 'hillshade' ? (
+        <>
+          <ToolField label="太阳高度角">
+            <input value={params.altitude} type="number" min="0" max="90" step="any" onChange={(event) => onChange('altitude', event.target.value)} />
+          </ToolField>
+          <ToolField label="太阳方位角">
+            <input value={params.azimuth} type="number" min="0" max="360" step="any" onChange={(event) => onChange('azimuth', event.target.value)} />
+          </ToolField>
+        </>
+      ) : null}
+      {tool === 'slope' ? (
+        <ToolField label="输出单位">
+          <select value={params.units} onChange={(event) => onChange('units', event.target.value)}>
+            <option value="degrees">degrees</option>
+            <option value="radians">radians</option>
+            <option value="percent">percent</option>
+          </select>
+        </ToolField>
+      ) : null}
+    </form>
+  );
+}
+
+function defaultReferenceLayerId(layers: { id: string }[], activeLayerId: string | undefined, hasVectorOverlay: boolean) {
+  return layers.find((item) => item.id !== activeLayerId)?.id ?? (hasVectorOverlay ? 'vectorOverlay' : '');
+}
+
+function isTerrainTool(tool: AnalysisTool): tool is TerrainToolId {
+  return tool === 'hillshade' || tool === 'slope' || tool === 'aspect';
+}
+
 function AnalysisEnvironment() {
   return (
     <form className="tool-form">
@@ -986,6 +1356,22 @@ function AiAssistantDockPanel() {
   );
 }
 
+function AttributeTableDockPanel(props: IDockviewPanelProps<{ layerId?: string }>) {
+  return (
+    <Suspense fallback={<div className="placeholder-panel">属性表</div>}>
+      <AttributeTablePanel {...props} />
+    </Suspense>
+  );
+}
+
+function AttributeChartDockPanel(props: IDockviewPanelProps<{ layerId?: string; field?: string }>) {
+  return (
+    <Suspense fallback={<div className="placeholder-panel">图表</div>}>
+      <AttributeChartPanel {...props} />
+    </Suspense>
+  );
+}
+
 function MapHeaderPrefixActions({ activePanel }: IDockviewHeaderActionsProps) {
   const { toolsReady } = useGis();
 
@@ -1017,6 +1403,17 @@ const mapHeaderTools: {
   { command: 'locate', title: '定位示例区域', icon: LocateFixed },
 ];
 
+const mapModeOptions: {
+  id: MapViewMode;
+  label: string;
+  title: string;
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+}[] = [
+  { id: 'planar', label: '平面', title: '平面模式', icon: Map },
+  { id: 'terrain', label: '地形', title: '地形模式', icon: Mountain },
+  { id: 'globe', label: '三维', title: '三维模式', icon: Earth },
+];
+
 const basemapOptions: { id: BasemapId; label: string }[] = [
   { id: 'osm', label: 'OpenStreetMap' },
   { id: 'tianditu', label: '天地图 WMTS' },
@@ -1024,12 +1421,89 @@ const basemapOptions: { id: BasemapId; label: string }[] = [
 ];
 
 function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
-  const { hasMapCommands, mapCommandState, runMapCommand, setBasemap } = useMapCommands();
+  const { hasMapCommands, mapCommandState, runMapCommand, setBasemap, setMapMode } = useMapCommands();
+  const { layers, clearSelection } = useGis();
+  const { getTableState, openAttributeChart, updateTableState } = useAttributeTable();
   const [isBasemapMenuOpen, setIsBasemapMenuOpen] = useState(false);
+  const [isMapModeSwitcherOpen, setIsMapModeSwitcherOpen] = useState(false);
+  const attributeLayerId = getLayerIdFromAttributeTablePanelId(activePanel?.id);
+
+  if (attributeLayerId) {
+    const layer = layers.find((item) => item.id === attributeLayerId) ?? null;
+    const tableState = getTableState(attributeLayerId);
+
+    return (
+      <div
+        className="attribute-header-actions"
+        aria-label="属性表工具"
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <div className="attribute-header-title" title={layer?.fileName ?? activePanel?.title ?? '属性表'}>
+          <TableProperties size={15} />
+          <span>{layer?.fileName ?? '属性表'}</span>
+        </div>
+        <div className="attribute-header-search">
+          <Search size={14} />
+          <input
+            value={tableState.query}
+            placeholder="搜索属性"
+            aria-label="搜索属性"
+            onChange={(event) => updateTableState(attributeLayerId, { query: event.target.value })}
+          />
+        </div>
+        <button
+          className={tableState.showSelectedOnly ? 'is-selected' : undefined}
+          type="button"
+          aria-pressed={tableState.showSelectedOnly}
+          disabled={!layer}
+          onClick={() => {
+            updateTableState(attributeLayerId, {
+              showSelectedOnly: !tableState.showSelectedOnly,
+            });
+          }}
+        >
+          已选 {layer?.selectedFeatureIndexes.length ?? 0}
+        </button>
+        <button
+          type="button"
+          title="清除选择"
+          aria-label="清除选择"
+          disabled={!layer || layer.selectedFeatureIndexes.length === 0}
+          onClick={() => {
+            if (layer) {
+              clearSelection(layer.id);
+            }
+          }}
+        >
+          <X size={14} />
+          <span>清除</span>
+        </button>
+        <button
+          type="button"
+          title="生成统计图"
+          aria-label="生成当前属性表统计图"
+          disabled={!layer || layer.fields.length === 0}
+          onClick={() => {
+            if (layer) {
+              openAttributeChart(layer.id, layer.fileName, tableState.sort?.field ?? undefined);
+            }
+          }}
+        >
+          <ChartColumn size={14} />
+          <span>图表</span>
+        </button>
+      </div>
+    );
+  }
 
   if (activePanel?.id !== 'map') {
     return null;
   }
+
+  const currentMapMode = mapModeOptions.find((option) => option.id === mapCommandState.mapMode) ?? mapModeOptions[0];
+  const CurrentMapModeIcon = currentMapMode.icon;
 
   return (
     <div className="map-header-actions" aria-label="地图工具">
@@ -1038,21 +1512,75 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
         const isActive = tool.active?.(mapCommandState) ?? false;
 
         return (
-          <button
-            key={tool.command}
-            className={isActive ? 'is-active' : undefined}
-            type="button"
-            title={tool.title}
-            aria-label={tool.title}
-            aria-pressed={tool.active ? isActive : undefined}
-            disabled={!hasMapCommands}
-            onClick={(event) => {
-              event.stopPropagation();
-              runMapCommand(tool.command);
-            }}
-          >
-            <Icon size={15} strokeWidth={1.8} />
-          </button>
+          <Fragment key={tool.command}>
+            <button
+              className={isActive ? 'is-active' : undefined}
+              type="button"
+              title={tool.title}
+              aria-label={tool.title}
+              aria-pressed={tool.active ? isActive : undefined}
+              disabled={!hasMapCommands}
+              onClick={(event) => {
+                event.stopPropagation();
+                runMapCommand(tool.command);
+              }}
+            >
+              <Icon size={15} strokeWidth={1.8} />
+            </button>
+            {tool.command === 'toggleDragRotate' ? (
+              <div
+                className="map-mode-switcher"
+                onBlur={(event) => {
+                  if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
+                    setIsMapModeSwitcherOpen(false);
+                  }
+                }}
+              >
+                <button
+                  className={`map-tooltip-trigger${isMapModeSwitcherOpen ? ' is-active' : ''}`}
+                  type="button"
+                  aria-label={currentMapMode.title}
+                  aria-expanded={isMapModeSwitcherOpen}
+                  data-tooltip={currentMapMode.title}
+                  disabled={!hasMapCommands}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setIsBasemapMenuOpen(false);
+                    setIsMapModeSwitcherOpen((isOpen) => !isOpen);
+                  }}
+                >
+                  <CurrentMapModeIcon size={15} strokeWidth={1.8} />
+                </button>
+                {isMapModeSwitcherOpen ? (
+                  <div className="map-mode-popover" role="toolbar" aria-label="地图模式切换">
+                    {mapModeOptions.map((option) => {
+                      const ModeIcon = option.icon;
+                      const isSelected = option.id === mapCommandState.mapMode;
+
+                      return (
+                        <button
+                          key={option.id}
+                          className={`map-tooltip-trigger${isSelected ? ' is-selected' : ''}`}
+                          type="button"
+                          aria-label={option.title}
+                          aria-pressed={isSelected}
+                          data-tooltip={option.title}
+                          disabled={!hasMapCommands}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setMapMode(option.id);
+                            setIsMapModeSwitcherOpen(false);
+                          }}
+                        >
+                          <ModeIcon size={15} strokeWidth={1.8} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </Fragment>
         );
       })}
       <div className="map-layer-menu-wrapper">
@@ -1065,6 +1593,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
           disabled={!hasMapCommands}
           onClick={(event) => {
             event.stopPropagation();
+            setIsMapModeSwitcherOpen(false);
             setIsBasemapMenuOpen((isOpen) => !isOpen);
           }}
         >
@@ -1111,12 +1640,15 @@ function StatusFooter() {
 export default function App() {
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState(false);
   const [isAiAssistantPanelVisible, setIsAiAssistantPanelVisible] = useState(false);
+  const [attributeTableStateByLayerId, setAttributeTableStateByLayerId] = useState<Record<string, AttributeTableState>>({});
   const dockviewApiRef = useRef<DockviewApi | null>(null);
   const aiAssistantPanelRef = useRef<IDockviewPanel | null>(null);
 
   const components = useMemo(
     () => ({
       aiAssistant: AiAssistantDockPanel,
+      attributeChart: AttributeChartDockPanel,
+      attributeTable: AttributeTableDockPanel,
       contents: EmbeddedContentsPanel,
       map: MapPanel,
       inspector: InspectorPanel,
@@ -1173,6 +1705,94 @@ export default function App() {
 
     addAiAssistantPanel(api);
   }, [addAiAssistantPanel]);
+
+  const getTableState = useCallback((layerId: string | null | undefined) => {
+    if (!layerId) {
+      return defaultAttributeTableState;
+    }
+
+    return attributeTableStateByLayerId[layerId] ?? defaultAttributeTableState;
+  }, [attributeTableStateByLayerId]);
+
+  const updateTableState = useCallback((layerId: string, patch: Partial<AttributeTableState>) => {
+    setAttributeTableStateByLayerId((current) => ({
+      ...current,
+      [layerId]: {
+        ...(current[layerId] ?? defaultAttributeTableState),
+        ...patch,
+      },
+    }));
+  }, []);
+
+  const openAttributeChart = useCallback((layerId: string, layerName?: string, field?: string) => {
+    const api = dockviewApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    const title = getAttributeChartTitle(layerName);
+    const panelId = getAttributeChartPanelId(layerId);
+    const existingPanel = api.getPanel(panelId);
+    const params = { layerId, field };
+
+    if (existingPanel) {
+      existingPanel.api.updateParameters(params);
+      existingPanel.api.setTitle(title);
+      existingPanel.api.setActive();
+      return;
+    }
+
+    const attributeTablePanel = api.getPanel(getAttributeTablePanelId(layerId));
+    const pythonPanel = api.getPanel('python');
+    const referencePanel = attributeTablePanel ?? pythonPanel;
+
+    api.addPanel({
+      id: panelId,
+      component: 'attributeChart',
+      title,
+      params,
+      position: referencePanel ? {
+        direction: 'within',
+        referencePanel,
+        index: referencePanel.group.panels.length,
+      } : undefined,
+      minimumHeight: 96,
+    }).api.setActive();
+  }, []);
+
+  const openAttributeTable = useCallback((layerId: string, layerName?: string) => {
+    const api = dockviewApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    const title = getAttributeTableTitle(layerName);
+    const panelId = getAttributeTablePanelId(layerId);
+    const existingPanel = api.getPanel(panelId);
+
+    if (existingPanel) {
+      existingPanel.api.setTitle(title);
+      existingPanel.api.setActive();
+      return;
+    }
+
+    const pythonPanel = api.getPanel('python');
+
+    api.addPanel({
+      id: panelId,
+      component: 'attributeTable',
+      title,
+      params: { layerId },
+      position: pythonPanel ? {
+        direction: 'within',
+        referencePanel: pythonPanel,
+        index: pythonPanel.group.panels.length,
+      } : undefined,
+      minimumHeight: 96,
+    }).api.setActive();
+  }, []);
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     dockviewApiRef.current = event.api;
@@ -1250,7 +1870,8 @@ export default function App() {
   return (
     <GisProvider>
       <MapCommandProvider>
-        <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
+        <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
+          <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
           <QuickAccessBar
             isAiAssistantPanelVisible={isAiAssistantPanelVisible}
             isRibbonCollapsed={isRibbonCollapsed}
@@ -1264,6 +1885,7 @@ export default function App() {
             <DockviewReact
               className="dockview-theme-light cte-dockview"
               components={components}
+              disableTabsOverflowList={false}
               floatingGroupBounds="boundedWithinViewport"
               onReady={onReady}
               prefixHeaderActionsComponent={MapHeaderPrefixActions}
@@ -1271,7 +1893,8 @@ export default function App() {
             />
           </main>
           <StatusFooter />
-        </div>
+          </div>
+        </AttributeTableProvider>
       </MapCommandProvider>
     </GisProvider>
   );

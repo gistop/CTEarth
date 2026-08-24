@@ -11,9 +11,13 @@
   "dependencies": {
     "@assistant-ui/react": "^0.15.15",
     "@assistant-ui/react-ai-sdk": "^1.4.6",
+    "@tanstack/react-table": "^9.1.2",
+    "@tanstack/react-virtual": "^3.14.10",
     "@vitejs/plugin-react": "^5.0.0",
     "ai": "^7.0.66",
+    "cesium": "^1.115.0",
     "dockview-react": "^7.0.4",
+    "echarts": "^6.1.0",
     "geolibre-wasm": "^1.5.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.539.0",
@@ -22,7 +26,8 @@
     "react-dom": "^19.1.1",
     "shpjs": "^6.2.0",
     "vite": "^7.1.2",
-    "vite-plugin-pwa": "^1.0.2"
+    "vite-plugin-pwa": "^1.0.2",
+    "vite-plugin-static-copy": "^4.1.1"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",

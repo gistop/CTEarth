@@ -23,6 +23,8 @@ export type PointCollection = {
 };
 
 export type RasterOverlay = {
+  name: string;
+  toolInput: RasterToolInput;
   imageUrl: string;
   coordinates: [[number, number], [number, number], [number, number], [number, number]];
   width: number;
@@ -58,10 +60,63 @@ export type BufferParameters = {
   dissolve: boolean;
 };
 
+export type TerrainToolId = 'hillshade' | 'slope' | 'aspect';
+
+export type SlopeUnits = 'degrees' | 'radians' | 'percent';
+
+export type TerrainParameters = {
+  outputName: string;
+  zFactor: string;
+  altitude: string;
+  azimuth: string;
+  units: SlopeUnits;
+};
+
+export type SelectionMode = 'new' | 'add' | 'remove' | 'subset';
+
+export type SelectByValueOperator =
+  | 'equals'
+  | 'notEquals'
+  | 'contains'
+  | 'startsWith'
+  | 'endsWith'
+  | 'greaterThan'
+  | 'greaterOrEqual'
+  | 'lessThan'
+  | 'lessOrEqual'
+  | 'isEmpty'
+  | 'isNotEmpty';
+
+export type SelectByValueParameters = {
+  layerId?: string;
+  field: string;
+  operator: SelectByValueOperator;
+  value: string;
+  caseSensitive: boolean;
+  selectionMode: SelectionMode;
+};
+
+export type SelectByLocationRelation = 'intersects' | 'within' | 'contains' | 'disjoint';
+
+export type SelectByLocationParameters = {
+  targetLayerId?: string;
+  referenceLayerId: string;
+  relation: SelectByLocationRelation;
+  selectionMode: SelectionMode;
+};
+
+export type SelectionResult = {
+  layerId: string;
+  layerName: string;
+  matchedCount: number;
+  selectedCount: number;
+  totalCount: number;
+};
+
 export type GisToolExecutionResult = {
   ok: boolean;
   status: 'success' | 'blocked' | 'failed';
-  tool: 'idw_interpolation' | 'buffer_vector';
+  tool: 'idw_interpolation' | 'buffer_vector' | 'select_by_value' | 'select_by_location';
   message: string;
   qa: {
     passed: boolean;
@@ -81,6 +136,11 @@ export type ShapefileInput = {
   files: Record<string, Uint8Array>;
 };
 
+export type RasterToolInput = {
+  inputName: string;
+  files: Record<string, Uint8Array>;
+};
+
 export type UploadedLayer = {
   id: string;
   fileName: string;
@@ -90,8 +150,10 @@ export type UploadedLayer = {
     features: unknown[];
   };
   points: PointCollection;
+  fields: string[];
   numericFields: string[];
   selectedField: string;
+  selectedFeatureIndexes: number[];
 };
 
 export type UploadedLayerStyle = {
@@ -140,6 +202,7 @@ type GisContextValue = {
   message: string;
   uploadShapefileZip: (file: File) => Promise<void>;
   uploadGeoJson: (file: File) => Promise<void>;
+  uploadGeoTiff: (file: File) => Promise<void>;
   setLayerVisibility: (id: LayerVisibilityId, visible: boolean) => void;
   setUploadedLayerVisibility: (id: string, visible: boolean) => void;
   setAllLayerVisibility: (visible: boolean) => void;
@@ -150,8 +213,13 @@ type GisContextValue = {
   moveLayerOrder: (draggedId: LayerOrderId, targetId: LayerOrderId) => void;
   setActiveLayer: (id: string) => void;
   setSelectedField: (field: string) => void;
+  setLayerSelection: (layerId: string, indexes: number[]) => void;
+  clearSelection: (layerId?: string) => void;
+  selectByValue: (params: SelectByValueParameters) => Promise<SelectionResult | null>;
+  selectByLocation: (params: SelectByLocationParameters) => Promise<SelectionResult | null>;
   runIdwInterpolation: (params: IdwParameters) => Promise<void>;
   runBufferAnalysis: (params: BufferParameters) => Promise<void>;
+  runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<void>;
 };
 
 const GisContext = createContext<GisContextValue | null>(null);
@@ -308,6 +376,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const shapefileInput = await zipToToolInput(bytes);
       const geojson = normalizeGeoJson(await shp(bytes));
       const points = geojson.features.filter(isPointFeature);
+      const fields = getFields(geojson.features);
       const numericFields = getNumericFields(points);
       const nextLayer: UploadedLayer = {
         id: createLayerId(file.name),
@@ -318,8 +387,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
           type: 'FeatureCollection',
           features: points,
         },
+        fields,
         numericFields,
         selectedField: numericFields[0] ?? '',
+        selectedFeatureIndexes: [],
       };
 
       setLayerVisibilityState((current) => ({
@@ -348,6 +419,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const text = new TextDecoder().decode(bytes);
       const geojson = normalizeGeoJson(JSON.parse(text));
       const points = geojson.features.filter(isPointFeature);
+      const fields = getFields(geojson.features);
       const numericFields = getNumericFields(points);
 
       const inputName = ensureGeoJsonName(file.name || 'input.geojson');
@@ -363,8 +435,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
           type: 'FeatureCollection',
           features: points,
         },
+        fields,
         numericFields,
         selectedField: numericFields[0] ?? '',
+        selectedFeatureIndexes: [],
       };
 
       setLayerVisibilityState((current) => ({
@@ -383,6 +457,28 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const uploadGeoTiff = useCallback(async (file: File) => {
+    try {
+      setMessage('正在读取 GeoTIFF');
+      setVectorOverlay(null);
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const inputName = file.name || 'raster.tif';
+      const nextRaster = readRasterOverlay(bytes, inputName, inputName);
+
+      setRaster(nextRaster);
+      setLayerVisibilityState((current) => ({
+        ...current,
+        raster: true,
+        vectorOverlay: true,
+      }));
+      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setMessage(`已加载 GeoTIFF：${file.name}（${nextRaster.width} x ${nextRaster.height}）`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, []);
+
   const setSelectedField = useCallback((field: string) => {
     setLayers((current) => current.map((item) => {
       if (item.id !== activeLayerId || !item.numericFields.includes(field)) {
@@ -392,6 +488,108 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       return { ...item, selectedField: field };
     }));
   }, [activeLayerId]);
+
+  const setLayerSelection = useCallback((layerId: string, indexes: number[]) => {
+    const selectedFeatureIndexes = [...new Set(indexes)]
+      .filter((index) => Number.isInteger(index) && index >= 0)
+      .sort((left, right) => left - right);
+
+    setLayers((current) => current.map((item) => (
+      item.id === layerId ? { ...item, selectedFeatureIndexes } : item
+    )));
+    setActiveLayerId(layerId);
+  }, []);
+
+  const clearSelection = useCallback((layerId?: string) => {
+    const targetId = layerId ?? layer?.id;
+
+    if (!targetId) {
+      setMessage('没有可清除选择的活动图层。');
+      return;
+    }
+
+    setLayers((current) => current.map((item) => (
+      item.id === targetId ? { ...item, selectedFeatureIndexes: [] } : item
+    )));
+    setMessage('已清除选择集。');
+  }, [layer]);
+
+  const selectByValue = useCallback(async (params: SelectByValueParameters): Promise<SelectionResult | null> => {
+    const targetLayer = findLayer(layers, params.layerId) ?? layer;
+
+    if (!targetLayer) {
+      setMessage('请先上传或选择一个矢量图层。');
+      return null;
+    }
+
+    if (!params.field || !targetLayer.fields.includes(params.field)) {
+      setMessage('请选择当前图层中的属性字段。');
+      return null;
+    }
+
+    const matchedIndexes = targetLayer.geojson.features.flatMap((feature, index) => (
+      matchesValue(feature, params) ? [index] : []
+    ));
+    const selectedFeatureIndexes = applySelectionMode(
+      targetLayer.selectedFeatureIndexes,
+      matchedIndexes,
+      params.selectionMode,
+    );
+    const result: SelectionResult = {
+      layerId: targetLayer.id,
+      layerName: targetLayer.fileName,
+      matchedCount: matchedIndexes.length,
+      selectedCount: selectedFeatureIndexes.length,
+      totalCount: targetLayer.geojson.features.length,
+    };
+
+    setLayers((current) => current.map((item) => (
+      item.id === targetLayer.id ? { ...item, selectedFeatureIndexes } : item
+    )));
+    setActiveLayerId(targetLayer.id);
+    setMessage(`按属性选择完成：命中 ${result.matchedCount} 个，当前选择 ${result.selectedCount} 个。`);
+
+    return result;
+  }, [layer, layers]);
+
+  const selectByLocation = useCallback(async (params: SelectByLocationParameters): Promise<SelectionResult | null> => {
+    const targetLayer = findLayer(layers, params.targetLayerId) ?? layer;
+    const referenceLayer = findSpatialReference(layers, vectorOverlay, params.referenceLayerId);
+
+    if (!targetLayer) {
+      setMessage('请先上传或选择目标图层。');
+      return null;
+    }
+
+    if (!referenceLayer) {
+      setMessage('请选择一个参考图层或先运行缓冲区等空间分析工具。');
+      return null;
+    }
+
+    const matchedIndexes = targetLayer.geojson.features.flatMap((feature, index) => (
+      matchesLocation(feature, referenceLayer.geojson.features, params.relation) ? [index] : []
+    ));
+    const selectedFeatureIndexes = applySelectionMode(
+      targetLayer.selectedFeatureIndexes,
+      matchedIndexes,
+      params.selectionMode,
+    );
+    const result: SelectionResult = {
+      layerId: targetLayer.id,
+      layerName: targetLayer.fileName,
+      matchedCount: matchedIndexes.length,
+      selectedCount: selectedFeatureIndexes.length,
+      totalCount: targetLayer.geojson.features.length,
+    };
+
+    setLayers((current) => current.map((item) => (
+      item.id === targetLayer.id ? { ...item, selectedFeatureIndexes } : item
+    )));
+    setActiveLayerId(targetLayer.id);
+    setMessage(`按位置选择完成：命中 ${result.matchedCount} 个，当前选择 ${result.selectedCount} 个。`);
+
+    return result;
+  }, [layer, layers, vectorOverlay]);
 
   const runIdwInterpolation = useCallback(async (params: IdwParameters) => {
     if (!toolsReady) {
@@ -450,7 +648,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         throw new Error(`没有获得 GeoTIFF 输出。工具输出：${result.stdout.join('\n')}`);
       }
 
-      const nextRaster = readRasterOverlay(tiffBytes);
+      const nextRaster = readRasterOverlay(tiffBytes, outputName);
       setRaster(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
       setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
@@ -525,6 +723,66 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
   }, [layer, toolsReady]);
 
+  const runTerrainAnalysis = useCallback(async (tool: TerrainToolId, params: TerrainParameters) => {
+    if (!toolsReady) {
+      setMessage('WASM 工具仍在加载，请稍后再运行。');
+      return;
+    }
+
+    if (!raster) {
+      setMessage('请先添加一个 DEM GeoTIFF，或先生成一个栅格结果。');
+      return;
+    }
+
+    try {
+      setIsRunning(true);
+      setMessage(`正在浏览器 WASM 中运行${terrainToolLabel(tool)}`);
+
+      const outputName = ensureTifName(params.outputName || `${tool}.tif`);
+      const args = [
+        `--input=/work/${raster.toolInput.inputName}`,
+        `--output=/work/${outputName}`,
+      ];
+      const zFactor = positiveNumber(params.zFactor || '1', 'Z 因子');
+
+      args.push(`--z_factor=${zFactor}`);
+
+      if (tool === 'hillshade') {
+        args.push(`--altitude=${boundedNumber(params.altitude || '45', '太阳高度角', 0, 90)}`);
+        args.push(`--azimuth=${boundedNumber(params.azimuth || '315', '太阳方位角', 0, 360)}`);
+      }
+
+      if (tool === 'slope') {
+        args.push(`--units=${params.units || 'degrees'}`);
+      }
+
+      const result = await runTool(tool, {
+        args,
+        input: raster.toolInput.files,
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stdout.join('\n') || `工具运行失败，退出码 ${result.exitCode}`);
+      }
+
+      const outputBytes = result.files[outputName];
+
+      if (!outputBytes) {
+        throw new Error(`没有获得${terrainToolLabel(tool)}输出。工具输出：${result.stdout.join('\n')}`);
+      }
+
+      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+      setRaster(nextRaster);
+      setLayerVisibilityState((current) => ({ ...current, raster: true }));
+      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setMessage(`${terrainToolLabel(tool)}完成：${nextRaster.width} x ${nextRaster.height}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [raster, toolsReady]);
+
   const value = useMemo<GisContextValue>(() => ({
     layer,
     layers,
@@ -543,6 +801,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     message,
     uploadShapefileZip,
     uploadGeoJson,
+    uploadGeoTiff,
     setLayerVisibility,
     setUploadedLayerVisibility,
     setAllLayerVisibility,
@@ -553,9 +812,14 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     moveLayerOrder,
     setActiveLayer,
     setSelectedField,
+    setLayerSelection,
+    clearSelection,
+    selectByValue,
+    selectByLocation,
     runIdwInterpolation,
     runBufferAnalysis,
-  }), [activeLayerId, basemapStyle, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, uploadGeoJson, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
+    runTerrainAnalysis,
+  }), [activeLayerId, basemapStyle, clearSelection, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, uploadGeoJson, uploadGeoTiff, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -585,7 +849,7 @@ export function getPointBounds(points: PointFeature[]) {
   );
 }
 
-function readRasterOverlay(tiffBytes: Uint8Array): RasterOverlay {
+function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name): RasterOverlay {
   const reader = new GeoTiffReader(tiffBytes);
   const pixels = reader.read_band_f64(0);
   const nodata = reader.nodata;
@@ -602,7 +866,7 @@ function readRasterOverlay(tiffBytes: Uint8Array): RasterOverlay {
   }
 
   if (!Number.isFinite(min) || !Number.isFinite(max)) {
-    throw new Error('插值输出没有有效像元。');
+    throw new Error('GeoTIFF 没有有效像元。');
   }
 
   const raster = {
@@ -617,6 +881,11 @@ function readRasterOverlay(tiffBytes: Uint8Array): RasterOverlay {
   };
 
   return {
+    name,
+    toolInput: {
+      inputName,
+      files: { [inputName]: tiffBytes },
+    },
     imageUrl: rasterToCanvas(raster).toDataURL('image/png'),
     coordinates: rasterCoordinates4326(raster),
     width: raster.width,
@@ -777,6 +1046,18 @@ function isPointFeature(value: unknown): value is PointFeature {
   );
 }
 
+function getFields(features: unknown[]) {
+  const fields = new Set<string>();
+
+  for (const feature of features) {
+    const properties = isRecord(feature) && isRecord(feature.properties) ? feature.properties : {};
+
+    Object.keys(properties).forEach((key) => fields.add(key));
+  }
+
+  return [...fields].sort();
+}
+
 function getNumericFields(features: PointFeature[]) {
   const fields = new Set<string>();
 
@@ -789,6 +1070,449 @@ function getNumericFields(features: PointFeature[]) {
   }
 
   return [...fields].sort();
+}
+
+function findLayer(layers: UploadedLayer[], layerId?: string) {
+  return layerId ? layers.find((item) => item.id === layerId) ?? null : null;
+}
+
+function findSpatialReference(
+  layers: UploadedLayer[],
+  vectorOverlay: VectorOverlay | null,
+  referenceLayerId: string,
+): { id: string; name: string; geojson: { type: 'FeatureCollection'; features: unknown[] } } | null {
+  if (!referenceLayerId) {
+    return null;
+  }
+
+  if (referenceLayerId === 'vectorOverlay' && vectorOverlay) {
+    return { id: 'vectorOverlay', name: vectorOverlay.name, geojson: vectorOverlay.geojson };
+  }
+
+  const layer = layers.find((item) => item.id === referenceLayerId);
+
+  return layer ? { id: layer.id, name: layer.fileName, geojson: layer.geojson } : null;
+}
+
+function applySelectionMode(currentIndexes: number[], matchedIndexes: number[], mode: SelectionMode) {
+  const current = new Set(currentIndexes);
+  const matched = new Set(matchedIndexes);
+  let next: Set<number>;
+
+  if (mode === 'add') {
+    next = new Set([...current, ...matched]);
+  } else if (mode === 'remove') {
+    next = new Set([...current].filter((index) => !matched.has(index)));
+  } else if (mode === 'subset') {
+    next = new Set([...current].filter((index) => matched.has(index)));
+  } else {
+    next = matched;
+  }
+
+  return [...next].sort((left, right) => left - right);
+}
+
+function matchesValue(feature: unknown, params: SelectByValueParameters) {
+  const properties = isRecord(feature) && isRecord(feature.properties) ? feature.properties : {};
+  const featureValue = properties[params.field];
+
+  if (params.operator === 'isEmpty') {
+    return featureValue === undefined || featureValue === null || String(featureValue).trim() === '';
+  }
+
+  if (params.operator === 'isNotEmpty') {
+    return featureValue !== undefined && featureValue !== null && String(featureValue).trim() !== '';
+  }
+
+  const expected = params.value ?? '';
+
+  if (['greaterThan', 'greaterOrEqual', 'lessThan', 'lessOrEqual'].includes(params.operator)) {
+    const left = Number(featureValue);
+    const right = Number(expected);
+
+    if (!Number.isFinite(left) || !Number.isFinite(right)) {
+      return false;
+    }
+
+    if (params.operator === 'greaterThan') {
+      return left > right;
+    }
+
+    if (params.operator === 'greaterOrEqual') {
+      return left >= right;
+    }
+
+    if (params.operator === 'lessThan') {
+      return left < right;
+    }
+
+    return left <= right;
+  }
+
+  const left = normalizeComparable(featureValue, params.caseSensitive);
+  const right = normalizeComparable(expected, params.caseSensitive);
+
+  if (params.operator === 'equals') {
+    return left === right;
+  }
+
+  if (params.operator === 'notEquals') {
+    return left !== right;
+  }
+
+  if (params.operator === 'startsWith') {
+    return left.startsWith(right);
+  }
+
+  if (params.operator === 'endsWith') {
+    return left.endsWith(right);
+  }
+
+  return left.includes(right);
+}
+
+function normalizeComparable(value: unknown, caseSensitive: boolean) {
+  const text = value === undefined || value === null ? '' : String(value);
+
+  return caseSensitive ? text : text.toLocaleLowerCase();
+}
+
+function matchesLocation(feature: unknown, referenceFeatures: unknown[], relation: SelectByLocationRelation) {
+  const geometry = featureGeometry(feature);
+
+  if (!geometry) {
+    return relation === 'disjoint';
+  }
+
+  const relationMatches = (referenceFeature: unknown) => {
+    const referenceGeometry = featureGeometry(referenceFeature);
+
+    if (!referenceGeometry) {
+      return false;
+    }
+
+    if (relation === 'within') {
+      return geometryWithin(geometry, referenceGeometry);
+    }
+
+    if (relation === 'contains') {
+      return geometryWithin(referenceGeometry, geometry);
+    }
+
+    const intersects = geometryIntersects(geometry, referenceGeometry);
+
+    return relation === 'disjoint' ? !intersects : intersects;
+  };
+
+  if (relation === 'disjoint') {
+    return referenceFeatures.every(relationMatches);
+  }
+
+  return referenceFeatures.some(relationMatches);
+}
+
+function featureGeometry(feature: unknown) {
+  if (!isRecord(feature) || !isRecord(feature.geometry) || !('type' in feature.geometry)) {
+    return null;
+  }
+
+  return feature.geometry as { type: string; coordinates?: unknown; geometries?: unknown[] };
+}
+
+function geometryWithin(
+  geometry: { type: string; coordinates?: unknown; geometries?: unknown[] },
+  container: { type: string; coordinates?: unknown; geometries?: unknown[] },
+) {
+  const geometryBounds = geometryBbox(geometry);
+  const containerBounds = geometryBbox(container);
+
+  if (!geometryBounds || !containerBounds || !bboxContains(containerBounds, geometryBounds)) {
+    return false;
+  }
+
+  if (isPolygonGeometry(container)) {
+    const points = geometryPoints(geometry);
+
+    return points.length > 0 && points.every((point) => pointInPolygonGeometry(point, container));
+  }
+
+  return geometryIntersects(geometry, container);
+}
+
+function geometryIntersects(
+  left: { type: string; coordinates?: unknown; geometries?: unknown[] },
+  right: { type: string; coordinates?: unknown; geometries?: unknown[] },
+): boolean {
+  if (left.type === 'GeometryCollection') {
+    return (left.geometries ?? []).some((geometry) => (
+      isRecord(geometry) && geometryIntersects(geometry as { type: string; coordinates?: unknown; geometries?: unknown[] }, right)
+    ));
+  }
+
+  if (right.type === 'GeometryCollection') {
+    return (right.geometries ?? []).some((geometry) => (
+      isRecord(geometry) && geometryIntersects(left, geometry as { type: string; coordinates?: unknown; geometries?: unknown[] })
+    ));
+  }
+
+  const leftBounds = geometryBbox(left);
+  const rightBounds = geometryBbox(right);
+
+  if (!leftBounds || !rightBounds || !bboxIntersects(leftBounds, rightBounds)) {
+    return false;
+  }
+
+  const leftPoints = geometryPoints(left);
+  const rightPoints = geometryPoints(right);
+
+  if (isPointGeometry(left) && isPointGeometry(right)) {
+    return leftPoints.some((leftPoint) => rightPoints.some((rightPoint) => samePoint(leftPoint, rightPoint)));
+  }
+
+  if (isPolygonGeometry(left) && rightPoints.some((point) => pointInPolygonGeometry(point, left))) {
+    return true;
+  }
+
+  if (isPolygonGeometry(right) && leftPoints.some((point) => pointInPolygonGeometry(point, right))) {
+    return true;
+  }
+
+  const leftSegments = geometrySegments(left);
+  const rightSegments = geometrySegments(right);
+
+  if (leftSegments.some((leftSegment) => rightSegments.some((rightSegment) => segmentsIntersect(leftSegment, rightSegment)))) {
+    return true;
+  }
+
+  if (isPointGeometry(left)) {
+    return leftPoints.some((point) => rightSegments.some((segment) => pointOnSegment(point, segment)));
+  }
+
+  if (isPointGeometry(right)) {
+    return rightPoints.some((point) => leftSegments.some((segment) => pointOnSegment(point, segment)));
+  }
+
+  return bboxIntersects(leftBounds, rightBounds);
+}
+
+function isPointGeometry(geometry: { type: string }) {
+  return geometry.type === 'Point' || geometry.type === 'MultiPoint';
+}
+
+function isPolygonGeometry(geometry: { type: string }) {
+  return geometry.type === 'Polygon' || geometry.type === 'MultiPolygon';
+}
+
+function geometryBbox(geometry: { coordinates?: unknown; geometries?: unknown[] }): [number, number, number, number] | null {
+  const points = geometryPoints(geometry);
+
+  if (points.length === 0) {
+    return null;
+  }
+
+  return points.reduce(
+    (bounds, [x, y]) => [
+      Math.min(bounds[0], x),
+      Math.min(bounds[1], y),
+      Math.max(bounds[2], x),
+      Math.max(bounds[3], y),
+    ] as [number, number, number, number],
+    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
+  );
+}
+
+function geometryPoints(geometry: { coordinates?: unknown; geometries?: unknown[] }) {
+  const points: [number, number][] = [];
+
+  collectPoints(geometry.coordinates, points);
+  (geometry.geometries ?? []).forEach((item) => {
+    if (isRecord(item)) {
+      collectPoints(item.coordinates, points);
+    }
+  });
+
+  return points;
+}
+
+function collectPoints(value: unknown, points: [number, number][]) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  if (value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+    points.push([Number(value[0]), Number(value[1])]);
+    return;
+  }
+
+  value.forEach((item) => collectPoints(item, points));
+}
+
+function geometrySegments(geometry: { type: string; coordinates?: unknown; geometries?: unknown[] }) {
+  const segments: [[number, number], [number, number]][] = [];
+
+  collectSegments(geometry.type, geometry.coordinates, segments);
+  (geometry.geometries ?? []).forEach((item) => {
+    if (isRecord(item) && typeof item.type === 'string') {
+      collectSegments(item.type, item.coordinates, segments);
+    }
+  });
+
+  return segments;
+}
+
+function collectSegments(type: string, coordinates: unknown, segments: [[number, number], [number, number]][]) {
+  if (!Array.isArray(coordinates)) {
+    return;
+  }
+
+  if (type === 'LineString') {
+    addSegmentsFromPath(coordinates, segments);
+    return;
+  }
+
+  if (type === 'MultiLineString' || type === 'Polygon') {
+    coordinates.forEach((path) => addSegmentsFromPath(path, segments));
+    return;
+  }
+
+  if (type === 'MultiPolygon') {
+    coordinates.forEach((polygon) => {
+      if (Array.isArray(polygon)) {
+        polygon.forEach((ring) => addSegmentsFromPath(ring, segments));
+      }
+    });
+  }
+}
+
+function addSegmentsFromPath(path: unknown, segments: [[number, number], [number, number]][]) {
+  if (!Array.isArray(path)) {
+    return;
+  }
+
+  const points = path
+    .filter((point): point is unknown[] => Array.isArray(point))
+    .map((point) => [Number(point[0]), Number(point[1])] as [number, number])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y));
+
+  for (let index = 1; index < points.length; index += 1) {
+    segments.push([points[index - 1], points[index]]);
+  }
+}
+
+function pointInPolygonGeometry(point: [number, number], geometry: { type: string; coordinates?: unknown }) {
+  if (geometry.type === 'Polygon') {
+    return pointInPolygonCoordinates(point, geometry.coordinates);
+  }
+
+  if (geometry.type === 'MultiPolygon' && Array.isArray(geometry.coordinates)) {
+    return geometry.coordinates.some((polygon) => pointInPolygonCoordinates(point, polygon));
+  }
+
+  return false;
+}
+
+function pointInPolygonCoordinates(point: [number, number], polygon: unknown) {
+  if (!Array.isArray(polygon)) {
+    return false;
+  }
+
+  const rings = polygon.filter(Array.isArray);
+  const outerRing = rings[0];
+
+  if (!outerRing || !pointInRing(point, outerRing)) {
+    return false;
+  }
+
+  return !rings.slice(1).some((ring) => pointInRing(point, ring));
+}
+
+function pointInRing(point: [number, number], ring: unknown[]) {
+  let inside = false;
+  const [x, y] = point;
+
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const current = coordinatePair(ring[i]);
+    const previous = coordinatePair(ring[j]);
+
+    if (!current || !previous) {
+      continue;
+    }
+
+    if (pointOnSegment(point, [previous, current])) {
+      return true;
+    }
+
+    const intersects = ((current[1] > y) !== (previous[1] > y))
+      && x < ((previous[0] - current[0]) * (y - current[1])) / (previous[1] - current[1]) + current[0];
+
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+function coordinatePair(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length < 2) {
+    return null;
+  }
+
+  const point: [number, number] = [Number(value[0]), Number(value[1])];
+
+  return Number.isFinite(point[0]) && Number.isFinite(point[1]) ? point : null;
+}
+
+function bboxIntersects(left: [number, number, number, number], right: [number, number, number, number]) {
+  return left[0] <= right[2] && left[2] >= right[0] && left[1] <= right[3] && left[3] >= right[1];
+}
+
+function bboxContains(container: [number, number, number, number], inner: [number, number, number, number]) {
+  return container[0] <= inner[0] && container[1] <= inner[1] && container[2] >= inner[2] && container[3] >= inner[3];
+}
+
+function samePoint(left: [number, number], right: [number, number]) {
+  return Math.abs(left[0] - right[0]) <= 1e-10 && Math.abs(left[1] - right[1]) <= 1e-10;
+}
+
+function pointOnSegment(point: [number, number], segment: [[number, number], [number, number]]) {
+  const [[x1, y1], [x2, y2]] = segment;
+  const [x, y] = point;
+  const cross = (x - x1) * (y2 - y1) - (y - y1) * (x2 - x1);
+
+  if (Math.abs(cross) > 1e-10) {
+    return false;
+  }
+
+  return x >= Math.min(x1, x2) - 1e-10
+    && x <= Math.max(x1, x2) + 1e-10
+    && y >= Math.min(y1, y2) - 1e-10
+    && y <= Math.max(y1, y2) + 1e-10;
+}
+
+function segmentsIntersect(
+  left: [[number, number], [number, number]],
+  right: [[number, number], [number, number]],
+) {
+  const [a, b] = left;
+  const [c, d] = right;
+  const d1 = orientation(a, b, c);
+  const d2 = orientation(a, b, d);
+  const d3 = orientation(c, d, a);
+  const d4 = orientation(c, d, b);
+
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true;
+  }
+
+  return (Math.abs(d1) <= 1e-10 && pointOnSegment(c, left))
+    || (Math.abs(d2) <= 1e-10 && pointOnSegment(d, left))
+    || (Math.abs(d3) <= 1e-10 && pointOnSegment(a, right))
+    || (Math.abs(d4) <= 1e-10 && pointOnSegment(b, right));
+}
+
+function orientation(a: [number, number], b: [number, number], c: [number, number]) {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 }
 
 function colorRamp(t: number) {
@@ -830,6 +1554,18 @@ function ensureGeoJsonName(value: string) {
   return /\.geojson$/i.test(value) ? value : `${value}.geojson`;
 }
 
+function terrainToolLabel(tool: TerrainToolId) {
+  if (tool === 'hillshade') {
+    return '山体阴影';
+  }
+
+  if (tool === 'slope') {
+    return '坡度';
+  }
+
+  return '坡向';
+}
+
 function positiveNumber(value: string, name: string) {
   const number = Number(value);
 
@@ -865,6 +1601,16 @@ function nonNegativeInteger(value: string, name: string) {
 
   if (!Number.isInteger(number)) {
     throw new Error(`${name}必须是整数。`);
+  }
+
+  return number;
+}
+
+function boundedNumber(value: string, name: string, min: number, max: number) {
+  const number = Number(value);
+
+  if (!Number.isFinite(number) || number < min || number > max) {
+    throw new Error(`${name}必须在 ${min} 到 ${max} 之间。`);
   }
 
   return number;
