@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import initGeoLibre, {
+  CogBuilder,
   GeoTiffReader,
   transform_points_epsg,
   version as geolibreVersion,
@@ -32,6 +33,9 @@ export type RasterOverlay = {
   min: number;
   max: number;
   epsg?: number;
+  geoTransform: number[];
+  nodata?: number;
+  pixels: Float64Array;
 };
 
 export type VectorOverlay = {
@@ -77,6 +81,17 @@ export type TerrainParameters = {
   altitude: string;
   azimuth: string;
   units: SlopeUnits;
+};
+
+export type RasterAoiPolygon = {
+  type: 'Polygon';
+  coordinates: [number, number][][];
+};
+
+export type RasterEditParameters = {
+  polygon: RasterAoiPolygon;
+  value: string;
+  outputName?: string;
 };
 
 export type SelectionMode = 'new' | 'add' | 'remove' | 'subset';
@@ -232,6 +247,8 @@ type GisContextValue = {
   runIdwInterpolation: (params: IdwParameters) => Promise<void>;
   runBufferAnalysis: (params: BufferParameters) => Promise<void>;
   runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<void>;
+  editRasterByAoi: (params: RasterEditParameters) => Promise<void>;
+  saveRasterLayer: (options?: { fileName?: string }) => Promise<void>;
 };
 
 const GisContext = createContext<GisContextValue | null>(null);
@@ -1002,6 +1019,80 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
   }, [raster, toolsReady]);
 
+  const editRasterByAoi = useCallback(async (params: RasterEditParameters) => {
+    if (!raster) {
+      setMessage('请先添加一个 GeoTIFF 栅格图层。');
+      return;
+    }
+
+    const value = Number(params.value);
+
+    if (!Number.isFinite(value)) {
+      setMessage('请输入有效的像元值。');
+      return;
+    }
+
+    try {
+      setIsRunning(true);
+      setMessage('正在按 AOI 修改栅格像元值');
+
+      const rasterPolygon = polygonToRasterCrs(params.polygon, raster.epsg);
+      const pixels = new Float64Array(raster.pixels);
+      const editedCount = applyRasterEdit({
+        geoTransform: raster.geoTransform,
+        height: raster.height,
+        nodata: raster.nodata,
+        pixels,
+        polygon: rasterPolygon,
+        value,
+        width: raster.width,
+      });
+
+      if (editedCount === 0) {
+        setMessage('AOI 范围内没有命中有效像元。');
+        return;
+      }
+
+      const outputName = ensureTifName(params.outputName || editedRasterName(raster.name));
+      const outputBytes = writeRasterGeoTiff({
+        epsg: raster.epsg,
+        geoTransform: raster.geoTransform,
+        height: raster.height,
+        nodata: raster.nodata,
+        pixels,
+        width: raster.width,
+      });
+      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+
+      setRaster(nextRaster);
+      setLayerVisibilityState((current) => ({ ...current, raster: true }));
+      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setMessage(`栅格编辑完成：已更新 ${editedCount} 个像元，可导出 GeoTIFF。`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [raster]);
+
+  const saveRasterLayer = useCallback(async (options?: { fileName?: string }) => {
+    if (!raster) {
+      setMessage('没有可导出的 GeoTIFF 栅格。');
+      return;
+    }
+
+    const outputName = ensureTifName(options?.fileName || raster.name || 'edited-raster.tif');
+    const outputBytes = raster.toolInput.files[raster.toolInput.inputName];
+
+    if (!outputBytes) {
+      setMessage('当前栅格缺少可导出的 GeoTIFF 数据。');
+      return;
+    }
+
+    downloadBlob(new Blob([outputBytes.slice().buffer as ArrayBuffer], { type: 'image/tiff' }), outputName);
+    setMessage(`已导出 GeoTIFF：${outputName}`);
+  }, [raster]);
+
   const value = useMemo<GisContextValue>(() => ({
     layer,
     layers,
@@ -1042,7 +1133,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runIdwInterpolation,
     runBufferAnalysis,
     runTerrainAnalysis,
-  }), [activeLayerId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, saveGeoJsonLayer, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoTiff, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
+    editRasterByAoi,
+    saveRasterLayer,
+  }), [activeLayerId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, saveGeoJsonLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoTiff, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -1334,7 +1427,181 @@ function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name
     min: raster.min,
     max: raster.max,
     epsg: raster.epsg,
+    geoTransform: raster.geoTransform,
+    nodata: raster.nodata,
+    pixels: raster.pixels,
   };
+}
+
+function writeRasterGeoTiff(raster: {
+  width: number;
+  height: number;
+  epsg?: number;
+  geoTransform: number[];
+  nodata?: number;
+  pixels: Float64Array;
+}) {
+  if (raster.geoTransform.length < 6) {
+    throw new Error('GeoTIFF 缺少有效的 GeoTransform，无法导出修改结果。');
+  }
+
+  const builder = new CogBuilder(raster.width, raster.height, 1);
+
+  try {
+    builder.set_compression('deflate');
+    builder.set_geo_transform(new Float64Array(raster.geoTransform));
+
+    if (raster.epsg) {
+      builder.set_epsg(raster.epsg);
+    }
+
+    if (raster.nodata !== undefined && Number.isFinite(raster.nodata)) {
+      builder.set_nodata(raster.nodata);
+    }
+
+    return builder.write_f64(raster.pixels);
+  } finally {
+    builder.free();
+  }
+}
+
+function polygonToRasterCrs(polygon: RasterAoiPolygon, rasterEpsg?: number) {
+  if (!rasterEpsg) {
+    throw new Error('GeoTIFF 缺少 EPSG 坐标系，无法把 AOI 转换到栅格坐标系。');
+  }
+
+  if (rasterEpsg === 4326) {
+    return polygon.coordinates;
+  }
+
+  const points = polygon.coordinates.flatMap((ring) => ring);
+  const transformed = transform_points_epsg(4326, rasterEpsg, new Float64Array(points.flat()));
+  let offset = 0;
+
+  return polygon.coordinates.map((ring) => (
+    ring.map(() => {
+      const point: [number, number] = [transformed[offset], transformed[offset + 1]];
+      offset += 2;
+      return point;
+    })
+  ));
+}
+
+function applyRasterEdit({
+  geoTransform,
+  height,
+  nodata,
+  pixels,
+  polygon,
+  value,
+  width,
+}: {
+  geoTransform: number[];
+  height: number;
+  nodata?: number;
+  pixels: Float64Array;
+  polygon: [number, number][][];
+  value: number;
+  width: number;
+}) {
+  if (geoTransform.length < 6) {
+    throw new Error('GeoTIFF 缺少有效的 GeoTransform，无法定位 AOI 像元。');
+  }
+
+  const inverse = invertGeoTransform(geoTransform);
+  const bounds = polygonBounds(polygon);
+  const pixelBounds = [
+    mapToPixel(inverse, bounds[0], bounds[1]),
+    mapToPixel(inverse, bounds[2], bounds[1]),
+    mapToPixel(inverse, bounds[2], bounds[3]),
+    mapToPixel(inverse, bounds[0], bounds[3]),
+  ];
+  const minCol = clampInteger(Math.floor(Math.min(...pixelBounds.map((point) => point[0])) - 1), 0, width - 1);
+  const maxCol = clampInteger(Math.ceil(Math.max(...pixelBounds.map((point) => point[0])) + 1), 0, width - 1);
+  const minRow = clampInteger(Math.floor(Math.min(...pixelBounds.map((point) => point[1])) - 1), 0, height - 1);
+  const maxRow = clampInteger(Math.ceil(Math.max(...pixelBounds.map((point) => point[1])) + 1), 0, height - 1);
+  let editedCount = 0;
+
+  for (let row = minRow; row <= maxRow; row += 1) {
+    for (let col = minCol; col <= maxCol; col += 1) {
+      const index = row * width + col;
+      const currentValue = pixels[index];
+
+      if (!Number.isFinite(currentValue) || (nodata !== undefined && currentValue === nodata)) {
+        continue;
+      }
+
+      const center = pixelToMap(geoTransform, col + 0.5, row + 0.5);
+
+      if (!pointInPolygonRings(center, polygon)) {
+        continue;
+      }
+
+      pixels[index] = value;
+      editedCount += 1;
+    }
+  }
+
+  return editedCount;
+}
+
+function invertGeoTransform(gt: number[]) {
+  const determinant = gt[1] * gt[5] - gt[2] * gt[4];
+
+  if (Math.abs(determinant) < 1e-18) {
+    throw new Error('GeoTIFF GeoTransform 不可逆，无法定位 AOI 像元。');
+  }
+
+  return [
+    gt[5] / determinant,
+    -gt[2] / determinant,
+    -gt[4] / determinant,
+    gt[1] / determinant,
+    gt[0],
+    gt[3],
+  ];
+}
+
+function mapToPixel(inverse: number[], x: number, y: number): [number, number] {
+  const dx = x - inverse[4];
+  const dy = y - inverse[5];
+
+  return [
+    inverse[0] * dx + inverse[1] * dy,
+    inverse[2] * dx + inverse[3] * dy,
+  ];
+}
+
+function clampInteger(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function polygonBounds(polygon: [number, number][][]): [number, number, number, number] {
+  const points = polygon.flatMap((ring) => ring);
+
+  return points.reduce(
+    (bounds, [x, y]) => [
+      Math.min(bounds[0], x),
+      Math.min(bounds[1], y),
+      Math.max(bounds[2], x),
+      Math.max(bounds[3], y),
+    ] as [number, number, number, number],
+    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
+  );
+}
+
+function pointInPolygonRings(point: [number, number], rings: [number, number][][]) {
+  const outerRing = rings[0];
+
+  if (!outerRing || !pointInRing(point, outerRing)) {
+    return false;
+  }
+
+  return !rings.slice(1).some((ring) => pointInRing(point, ring));
+}
+
+function editedRasterName(name: string) {
+  return ensureTifName(name.replace(/\.tiff?$/i, '') + '-edited.tif');
 }
 
 function rasterToCanvas(raster: {

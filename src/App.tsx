@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, Fragment, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockviewReact,
   type DockviewApi,
@@ -54,6 +54,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
+import type { OpenLayersProjectionMapHandle } from './components/map/OpenLayersProjectionMap';
 import {
   AttributeTableProvider,
   defaultAttributeTableState,
@@ -69,6 +70,7 @@ import {
 import {
   MapCommandProvider,
   type BasemapId,
+  type DisplayCrsId,
   type MapCommand,
   type MapCommandState,
   type MapViewMode,
@@ -123,7 +125,7 @@ const quickTools = [
   { title: '缩小', icon: ZoomOut },
 ];
 
-const ribbonTabs = ['工程', '地图', '布局', '分析', '共享', '帮助'];
+const ribbonTabs = ['工程', '地图', '布局', '分析', '编辑', '共享', '帮助'];
 type RibbonTab = typeof ribbonTabs[number];
 const editRibbonTab = '编辑';
 
@@ -142,6 +144,33 @@ const dockColumnRatio = {
 const aiAssistantPanelId = 'ai-assistant-panel';
 const attributeChartPanelIdPrefix = 'attribute-chart:';
 const attributeTablePanelIdPrefix = 'attribute-table:';
+const projectionMapPanelId = 'projection-map';
+type ProjectionMapCommand = Extract<MapCommand, 'zoomIn' | 'zoomOut' | 'resetNorth' | 'locate'>;
+type ProjectionMapCommands = Pick<OpenLayersProjectionMapHandle, ProjectionMapCommand>;
+
+function isProjectionMapCommand(command: MapCommand): command is ProjectionMapCommand {
+  return command !== 'toggleDragRotate';
+}
+
+type DockPanelActionsValue = {
+  activateMapPanel: () => void;
+  activateProjectionMapPanel: () => void;
+  hasProjectionMapCommands: boolean;
+  registerProjectionMapCommands: (commands: ProjectionMapCommands) => () => void;
+  runProjectionMapCommand: (command: ProjectionMapCommand) => void;
+};
+
+const DockPanelActionsContext = createContext<DockPanelActionsValue>({
+  activateMapPanel: () => undefined,
+  activateProjectionMapPanel: () => undefined,
+  hasProjectionMapCommands: false,
+  registerProjectionMapCommands: () => () => undefined,
+  runProjectionMapCommand: () => undefined,
+});
+
+function useDockPanelActions() {
+  return useContext(DockPanelActionsContext);
+}
 
 function getAttributeTablePanelId(layerId: string) {
   return `${attributeTablePanelIdPrefix}${encodeURIComponent(layerId)}`;
@@ -179,6 +208,9 @@ const AttributeTablePanel = lazy(() => (
 ));
 const AttributeChartPanel = lazy(() => (
   import('./components/attributes/AttributeChartPanel').then((module) => ({ default: module.AttributeChartPanel }))
+));
+const ProjectionMap = lazy(() => (
+  import('./components/map/OpenLayersProjectionMap').then((module) => ({ default: module.OpenLayersProjectionMap }))
 ));
 
 const baseRibbonGroups: RibbonGroup[] = [
@@ -257,7 +289,7 @@ function createMapRibbonGroups({
   setSelectionActive: (active: boolean) => void;
   toggleSelectionActive: () => void;
 }): RibbonGroup[] {
-  return baseRibbonGroups.map((group, groupIndex) => {
+  const groups = baseRibbonGroups.map((group, groupIndex) => {
     if (groupIndex === 1) {
       return {
         ...group,
@@ -318,6 +350,53 @@ function createMapRibbonGroups({
 
     return group;
   });
+
+  return [
+    ...groups.slice(0, 2),
+    {
+      title: '坐标系',
+      tools: [],
+      accessory: <CoordinateSystemControls />,
+    },
+    ...groups.slice(2),
+  ];
+}
+
+const displayCrsOptions: { id: DisplayCrsId; label: string; title: string }[] = [
+  { id: 'webMercator', label: 'Web Mercator', title: 'EPSG:3857，使用 MapLibre 显示' },
+  { id: 'wgs84', label: 'WGS84', title: 'EPSG:4326，使用 OpenLayers 显示' },
+  { id: 'epsg32651', label: 'EPSG:32651', title: 'WGS 84 / UTM zone 51N，使用 OpenLayers 显示' },
+];
+
+function CoordinateSystemControls() {
+  const { hasMapCommands, mapCommandState, setDisplayCrs } = useMapCommands();
+  const { activateMapPanel, activateProjectionMapPanel } = useDockPanelActions();
+
+  return (
+    <div className="ribbon-crs-switcher" role="radiogroup" aria-label="显示坐标系">
+      {displayCrsOptions.map((option) => (
+        <button
+          key={option.id}
+          className={mapCommandState.displayCrs === option.id ? 'is-selected' : undefined}
+          type="button"
+          role="radio"
+          title={option.title}
+          aria-checked={mapCommandState.displayCrs === option.id}
+          disabled={!hasMapCommands || mapCommandState.mapMode === 'globe'}
+          onClick={() => {
+            setDisplayCrs(option.id);
+            if (option.id === 'webMercator') {
+              activateMapPanel();
+            } else {
+              activateProjectionMapPanel();
+            }
+          }}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 const layoutRibbonGroups: RibbonGroup[] = [
@@ -430,6 +509,11 @@ function createEditRibbonGroups({
       ],
     },
     {
+      title: '栅格',
+      tools: [],
+      accessory: <RasterEditControls />,
+    },
+    {
       title: '目标图层',
       tools: [],
       accessory: (
@@ -511,6 +595,70 @@ function createEditRibbonGroups({
       ],
     },
   ];
+}
+
+function RasterEditControls() {
+  const [value, setValue] = useState('0');
+  const digitize = useDigitize();
+  const { editRasterByAoi, isRunning, raster, saveRasterLayer } = useGis();
+  const hasValidValue = Number.isFinite(Number(value));
+
+  return (
+    <div className="ribbon-raster-edit">
+      <label className="ribbon-layer-select">
+        <Layers size={18} strokeWidth={1.7} />
+        <select value={raster ? 'raster' : ''} disabled={!raster} aria-label="当前栅格图层">
+          {raster ? (
+            <option value="raster">{raster.name}</option>
+          ) : (
+            <option value="">无栅格图层</option>
+          )}
+        </select>
+      </label>
+      <button
+        className={digitize.rasterAoiActive ? 'ribbon-aoi-button is-active' : 'ribbon-aoi-button'}
+        type="button"
+        title="绘制 AOI"
+        disabled={!raster}
+        aria-pressed={digitize.rasterAoiActive}
+        onClick={digitize.startRasterAoi}
+      >
+        <SquareDashedMousePointer size={23} strokeWidth={1.6} />
+        <span>AOI</span>
+      </button>
+      <label className="ribbon-value-input">
+        <span>修改值</span>
+        <input
+          type="number"
+          value={value}
+          aria-label="新像元值"
+          onChange={(event) => setValue(event.target.value)}
+        />
+      </label>
+      <button
+        className="ribbon-icon-only-button"
+        type="button"
+        title="执行栅格修改"
+        disabled={!raster || !digitize.rasterAoi || !hasValidValue || isRunning}
+        onClick={() => {
+          if (digitize.rasterAoi) {
+            void editRasterByAoi({ polygon: digitize.rasterAoi, value });
+          }
+        }}
+      >
+        <Play size={23} strokeWidth={1.6} />
+      </button>
+      <button
+        className="ribbon-icon-only-button"
+        type="button"
+        title="下载 GeoTIFF"
+        disabled={!raster || isRunning}
+        onClick={() => void saveRasterLayer()}
+      >
+        <Download size={23} strokeWidth={1.6} />
+      </button>
+    </div>
+  );
 }
 
 function ToolButton({
@@ -1747,6 +1895,63 @@ function AttributeChartDockPanel(props: IDockviewPanelProps<{ layerId?: string; 
   );
 }
 
+function ProjectionMapDockPanel() {
+  const { mapCommandState } = useMapCommands();
+  const { registerProjectionMapCommands } = useDockPanelActions();
+  const [coords, setCoords] = useState('');
+  const projectionMapRef = useRef<OpenLayersProjectionMapHandle | null>(null);
+
+  useEffect(() => {
+    if (mapCommandState.displayCrs === 'webMercator') {
+      return undefined;
+    }
+
+    return registerProjectionMapCommands({
+      locate: () => projectionMapRef.current?.locate(),
+      resetNorth: () => projectionMapRef.current?.resetNorth(),
+      zoomIn: () => projectionMapRef.current?.zoomIn(),
+      zoomOut: () => projectionMapRef.current?.zoomOut(),
+    });
+  }, [mapCommandState.displayCrs, registerProjectionMapCommands]);
+
+  if (mapCommandState.displayCrs === 'webMercator') {
+    return (
+      <section className="map-panel projection-panel-empty">
+        <div className="map-status">请选择 WGS84 或 EPSG:32651 投影视图。</div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="map-panel">
+      <Suspense fallback={<div className="openlayers-projection-map is-visible" />}>
+        <ProjectionMap
+          basemap={mapCommandState.basemap}
+          displayCrs={mapCommandState.displayCrs}
+          key={mapCommandState.displayCrs}
+          onCoordinateChange={setCoords}
+          ref={projectionMapRef}
+          visible
+        />
+      </Suspense>
+      <div className="map-status">{displayCrsTitle(mapCommandState.displayCrs)}</div>
+      {coords ? <div className="map-readout">{coords}</div> : null}
+    </section>
+  );
+}
+
+function displayCrsTitle(displayCrs: DisplayCrsId) {
+  if (displayCrs === 'epsg32651') {
+    return 'EPSG:32651 / WGS 84 UTM Zone 51N';
+  }
+
+  if (displayCrs === 'wgs84') {
+    return 'WGS84 / EPSG:4326';
+  }
+
+  return 'Web Mercator / EPSG:3857';
+}
+
 function MapHeaderPrefixActions({ panels }: IDockviewHeaderActionsProps) {
   const { toolsReady } = useGis();
 
@@ -1797,11 +2002,14 @@ const basemapOptions: { id: BasemapId; label: string }[] = [
 
 function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
   const { hasMapCommands, mapCommandState, runMapCommand, setBasemap, setMapMode } = useMapCommands();
+  const { hasProjectionMapCommands, runProjectionMapCommand } = useDockPanelActions();
   const { layers, clearSelection } = useGis();
   const { getTableState, openAttributeChart, updateTableState } = useAttributeTable();
   const [isBasemapMenuOpen, setIsBasemapMenuOpen] = useState(false);
   const [isMapModeSwitcherOpen, setIsMapModeSwitcherOpen] = useState(false);
   const attributeLayerId = getLayerIdFromAttributeTablePanelId(activePanel?.id);
+  const projectionPanelActive = activePanel?.id === projectionMapPanelId;
+  const projectionDisplayActive = projectionPanelActive && mapCommandState.displayCrs !== 'webMercator';
 
   if (attributeLayerId) {
     const layer = layers.find((item) => item.id === attributeLayerId) ?? null;
@@ -1877,7 +2085,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
     return <LayoutHeaderActions />;
   }
 
-  if (activePanel?.id !== 'map') {
+  if (activePanel?.id !== 'map' && activePanel?.id !== projectionMapPanelId) {
     return null;
   }
 
@@ -1889,6 +2097,10 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
       {mapHeaderTools.map((tool) => {
         const Icon = tool.icon;
         const isActive = tool.active?.(mapCommandState) ?? false;
+        const isProjectionCommand = isProjectionMapCommand(tool.command);
+        const isDisabled = projectionPanelActive
+          ? !projectionDisplayActive || !hasProjectionMapCommands || !isProjectionCommand
+          : !hasMapCommands;
 
         return (
           <Fragment key={tool.command}>
@@ -1898,10 +2110,14 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
               title={tool.title}
               aria-label={tool.title}
               aria-pressed={tool.active ? isActive : undefined}
-              disabled={!hasMapCommands}
+              disabled={isDisabled}
               onClick={(event) => {
                 event.stopPropagation();
-                runMapCommand(tool.command);
+                if (projectionDisplayActive && isProjectionMapCommand(tool.command)) {
+                  runProjectionMapCommand(tool.command);
+                } else {
+                  runMapCommand(tool.command);
+                }
               }}
             >
               <Icon size={15} strokeWidth={1.8} />
@@ -1921,7 +2137,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
                   aria-label={currentMapMode.title}
                   aria-expanded={isMapModeSwitcherOpen}
                   data-tooltip={currentMapMode.title}
-                  disabled={!hasMapCommands}
+                  disabled={!hasMapCommands || projectionPanelActive}
                   onClick={(event) => {
                     event.stopPropagation();
                     setIsBasemapMenuOpen(false);
@@ -2023,6 +2239,8 @@ export default function App() {
   const [attributeTableStateByLayerId, setAttributeTableStateByLayerId] = useState<Record<string, AttributeTableState>>({});
   const dockviewApiRef = useRef<DockviewApi | null>(null);
   const aiAssistantPanelRef = useRef<IDockviewPanel | null>(null);
+  const projectionMapCommandsRef = useRef<ProjectionMapCommands | null>(null);
+  const [hasProjectionMapCommands, setHasProjectionMapCommands] = useState(false);
 
   const components = useMemo(
     () => ({
@@ -2032,6 +2250,7 @@ export default function App() {
       contents: EmbeddedContentsPanel,
       layout: LayoutPanel,
       map: MapPanel,
+      projectionMap: ProjectionMapDockPanel,
       inspector: InspectorPanel,
       python: PythonPanel,
       placeholder: PlaceholderPanel,
@@ -2042,6 +2261,77 @@ export default function App() {
   const changeRibbonTab = useCallback((tab: RibbonTab) => {
     setActiveRibbonTab(tab);
   }, []);
+
+  const ensureProjectionMapPanel = useCallback((api: DockviewApi) => {
+    const existingPanel = api.getPanel(projectionMapPanelId);
+
+    if (existingPanel) {
+      return existingPanel;
+    }
+
+    const mapPanel = api.getPanel('map');
+
+    return api.addPanel({
+      id: projectionMapPanelId,
+      component: 'projectionMap',
+      title: '投影视图',
+      inactive: true,
+      position: mapPanel ? {
+        direction: 'within',
+        referencePanel: mapPanel,
+        index: mapPanel.group.panels.length,
+      } : undefined,
+      minimumWidth: 280,
+      minimumHeight: 180,
+    });
+  }, []);
+
+  const activateMapPanel = useCallback(() => {
+    dockviewApiRef.current?.getPanel('map')?.api.setActive();
+  }, []);
+
+  const activateProjectionMapPanel = useCallback(() => {
+    const api = dockviewApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    ensureProjectionMapPanel(api).api.setActive();
+  }, [ensureProjectionMapPanel]);
+
+  const registerProjectionMapCommands = useCallback((commands: ProjectionMapCommands) => {
+    projectionMapCommandsRef.current = commands;
+    setHasProjectionMapCommands(true);
+
+    return () => {
+      if (projectionMapCommandsRef.current === commands) {
+        projectionMapCommandsRef.current = null;
+        setHasProjectionMapCommands(false);
+      }
+    };
+  }, []);
+
+  const runProjectionMapCommand = useCallback((command: ProjectionMapCommand) => {
+    projectionMapCommandsRef.current?.[command]();
+  }, []);
+
+  const dockPanelActions = useMemo(
+    () => ({
+      activateMapPanel,
+      activateProjectionMapPanel,
+      hasProjectionMapCommands,
+      registerProjectionMapCommands,
+      runProjectionMapCommand,
+    }),
+    [
+      activateMapPanel,
+      activateProjectionMapPanel,
+      hasProjectionMapCommands,
+      registerProjectionMapCommands,
+      runProjectionMapCommand,
+    ],
+  );
 
   const addAiAssistantPanel = useCallback((api: DockviewApi) => {
     const existingPanel = api.getPanel(aiAssistantPanelId);
@@ -2208,11 +2498,21 @@ export default function App() {
     });
 
     event.api.addPanel({
+      id: projectionMapPanelId,
+      component: 'projectionMap',
+      title: '投影视图',
+      inactive: true,
+      position: { direction: 'within', referencePanel: map, index: 1 },
+      minimumWidth: 280,
+      minimumHeight: 180,
+    });
+
+    event.api.addPanel({
       id: 'layout',
       component: 'layout',
       title: '布局',
       inactive: true,
-      position: { direction: 'within', referencePanel: map, index: 1 },
+      position: { direction: 'within', referencePanel: map, index: 2 },
       minimumWidth: 280,
       minimumHeight: 180,
     });
@@ -2269,6 +2569,7 @@ export default function App() {
         <DigitizeProvider>
           <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
             <LayoutProvider>
+            <DockPanelActionsContext.Provider value={dockPanelActions}>
               <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
               <QuickAccessBar
                 isAiAssistantPanelVisible={isAiAssistantPanelVisible}
@@ -2294,6 +2595,7 @@ export default function App() {
               </main>
               <StatusFooter />
               </div>
+            </DockPanelActionsContext.Provider>
             </LayoutProvider>
           </AttributeTableProvider>
         </DigitizeProvider>

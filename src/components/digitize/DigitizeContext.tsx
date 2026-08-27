@@ -2,12 +2,20 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 
 export type DigitizeGeometryType = 'Point' | 'LineString' | 'Polygon';
 
+export type RasterAoiPolygon = {
+  type: 'Polygon';
+  coordinates: [number, number][][];
+};
+
 type DigitizeState = {
   activeTool: DigitizeGeometryType;
   clearRequestId: number;
   editingActive: boolean;
   featureCount: number;
   modifyEnabled: boolean;
+  rasterAoi: RasterAoiPolygon | null;
+  rasterAoiActive: boolean;
+  rasterAoiRevision: number;
   snapEnabled: boolean;
   status: string;
   traceEnabled: boolean;
@@ -15,12 +23,15 @@ type DigitizeState = {
 
 type DigitizeContextValue = DigitizeState & {
   clearFeatures: () => void;
+  clearRasterAoi: () => void;
   setActiveTool: (tool: DigitizeGeometryType) => void;
   setEditingActive: (active: boolean) => void;
   setFeatureCount: (count: number) => void;
+  setRasterAoi: (polygon: RasterAoiPolygon | null) => void;
   setSnapEnabled: (enabled: boolean) => void;
   setStatus: (status: string) => void;
   setTraceEnabled: (enabled: boolean) => void;
+  startRasterAoi: () => void;
   toggleModify: () => void;
 };
 
@@ -35,6 +46,9 @@ export function DigitizeProvider({ children }: { children: ReactNode }) {
     editingActive: false,
     featureCount: 0,
     modifyEnabled: false,
+    rasterAoi: null,
+    rasterAoiActive: false,
+    rasterAoiRevision: 0,
     snapEnabled: true,
     status: defaultStatus,
     traceEnabled: true,
@@ -45,7 +59,40 @@ export function DigitizeProvider({ children }: { children: ReactNode }) {
       ...current,
       activeTool: tool,
       modifyEnabled: false,
+      rasterAoiActive: false,
       status: getToolStatus(tool, current.snapEnabled, current.traceEnabled),
+    }));
+  }, []);
+
+  const startRasterAoi = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      modifyEnabled: false,
+      rasterAoi: null,
+      rasterAoiActive: true,
+      rasterAoiRevision: current.rasterAoiRevision + 1,
+      status: 'AOI 绘制已启用：在地图上绘制一个多边形，双击结束。',
+    }));
+  }, []);
+
+  const setRasterAoi = useCallback((rasterAoi: RasterAoiPolygon | null) => {
+    setState((current) => ({
+      ...current,
+      rasterAoi,
+      rasterAoiActive: rasterAoi ? false : current.rasterAoiActive,
+      status: rasterAoi
+        ? 'AOI 已绘制，可输入像元值并执行栅格修改。'
+        : 'AOI 已清空。',
+    }));
+  }, []);
+
+  const clearRasterAoi = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      rasterAoi: null,
+      rasterAoiActive: false,
+      rasterAoiRevision: current.rasterAoiRevision + 1,
+      status: 'AOI 已清空。',
     }));
   }, []);
 
@@ -54,6 +101,7 @@ export function DigitizeProvider({ children }: { children: ReactNode }) {
       ...current,
       editingActive,
       modifyEnabled: editingActive ? current.modifyEnabled : false,
+      rasterAoiActive: editingActive ? current.rasterAoiActive : false,
       status: editingActive
         ? getToolStatus(current.activeTool, current.snapEnabled, current.traceEnabled)
         : current.status,
@@ -64,6 +112,7 @@ export function DigitizeProvider({ children }: { children: ReactNode }) {
     setState((current) => ({
       ...current,
       modifyEnabled: !current.modifyEnabled,
+      rasterAoiActive: false,
       status: !current.modifyEnabled
         ? '节点编辑已启用，拖动顶点时支持 Snap。'
         : getToolStatus(current.activeTool, current.snapEnabled, current.traceEnabled),
@@ -100,6 +149,7 @@ export function DigitizeProvider({ children }: { children: ReactNode }) {
       clearRequestId: current.clearRequestId + 1,
       featureCount: 0,
       modifyEnabled: false,
+      rasterAoiActive: false,
       status: '已清空数字化草图。',
     }));
   }, []);
@@ -108,15 +158,31 @@ export function DigitizeProvider({ children }: { children: ReactNode }) {
     () => ({
       ...state,
       clearFeatures,
+      clearRasterAoi,
       setActiveTool,
       setEditingActive,
       setFeatureCount,
+      setRasterAoi,
       setSnapEnabled,
       setStatus,
       setTraceEnabled,
+      startRasterAoi,
       toggleModify,
     }),
-    [clearFeatures, setActiveTool, setEditingActive, setFeatureCount, setSnapEnabled, setStatus, setTraceEnabled, state, toggleModify],
+    [
+      clearFeatures,
+      clearRasterAoi,
+      setActiveTool,
+      setEditingActive,
+      setFeatureCount,
+      setRasterAoi,
+      setSnapEnabled,
+      setStatus,
+      setTraceEnabled,
+      startRasterAoi,
+      state,
+      toggleModify,
+    ],
   );
 
   return <DigitizeContext.Provider value={value}>{children}</DigitizeContext.Provider>;

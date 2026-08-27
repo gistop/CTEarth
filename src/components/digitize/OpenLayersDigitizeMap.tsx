@@ -60,6 +60,7 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
   const isSyncingFromMapLibreRef = useRef(false);
   const isSyncingToMapLibreRef = useRef(false);
   const editableSourceRef = useRef(new VectorSource<Feature<Geometry>>());
+  const rasterAoiSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const referenceSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const boundaryCacheRef = useRef<BoundaryCache | null>(null);
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
@@ -146,6 +147,10 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
       opacity: rasterStyle.opacity,
       visible: false,
     });
+    const rasterAoiLayer = new VectorLayer({
+      source: rasterAoiSourceRef.current,
+      style: createRasterAoiStyle,
+    });
     const editableLayer = new VectorLayer({
       source: editableSourceRef.current,
       style: createEditableStyle,
@@ -158,6 +163,7 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
         baseLayers.tianditu,
         baseLayers.esri,
         rasterLayer,
+        rasterAoiLayer,
         referenceLayer,
         editableLayer,
       ],
@@ -235,12 +241,14 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
     const source = editableSourceRef.current;
     const format = new GeoJSON();
 
-    source.clear();
-    boundaryCacheRef.current = null;
+      source.clear();
+      boundaryCacheRef.current = null;
 
     if (!editableLayer) {
       digitize.setFeatureCount(0);
-      digitize.setStatus('请选择内容列表中的矢量图层作为当前编辑图层。');
+      if (!digitize.rasterAoiActive) {
+        digitize.setStatus('请选择内容列表中的矢量图层作为当前编辑图层。');
+      }
       return;
     }
 
@@ -264,7 +272,7 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
     if (visible) {
       digitize.setStatus(`正在编辑图层：${editableLayer.fileName}，${features.length} 个要素。`);
     }
-  }, [editableLayer?.id, editableLayer?.geojson, editableLayer?.selectedFeatureIndexes, editableLayer?.fileName, uploadedLayerStyles, visible]);
+  }, [digitize.rasterAoiActive, editableLayer?.id, editableLayer?.geojson, editableLayer?.selectedFeatureIndexes, editableLayer?.fileName, uploadedLayerStyles, visible]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -382,7 +390,33 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
     selectRef.current?.setActive(digitize.modifyEnabled);
     modifyRef.current?.setActive(digitize.modifyEnabled);
 
-    if (!digitize.modifyEnabled) {
+    if (digitize.rasterAoiActive) {
+      const draw = new Draw({
+        source: rasterAoiSourceRef.current,
+        type: 'Polygon',
+      });
+
+      draw.on('drawstart', () => {
+        rasterAoiSourceRef.current.clear();
+        digitize.setStatus('AOI 绘制中，双击结束多边形。');
+      });
+      draw.on('drawend', (event) => {
+        const polygon = featureToAoiPolygon(event.feature as Feature<Geometry>);
+
+        if (!polygon) {
+          digitize.setStatus('AOI 绘制失败，请重新绘制一个有效多边形。');
+          return;
+        }
+
+        digitize.setRasterAoi(polygon);
+      });
+
+      drawRef.current = draw;
+      map.addInteraction(draw);
+      return;
+    }
+
+    if (!digitize.modifyEnabled && editableLayer) {
       const activeTool = editableLayer?.geometryType ?? digitize.activeTool;
       const draw = new Draw({
         source: editableSourceRef.current,
@@ -417,7 +451,11 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
       map.addInteraction(draw);
       resetSnapInteractions(map, digitize.snapEnabled, editableSnapRef.current, referenceSnapRef.current);
     }
-  }, [digitize.activeTool, digitize.modifyEnabled, digitize.traceEnabled, visible, editableLayer?.geometryType, editableLayer?.id]);
+  }, [digitize.activeTool, digitize.modifyEnabled, digitize.rasterAoiActive, digitize.traceEnabled, visible, editableLayer?.geometryType, editableLayer?.id]);
+
+  useEffect(() => {
+    rasterAoiSourceRef.current.clear();
+  }, [digitize.rasterAoiRevision]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -663,6 +701,49 @@ function createEditableStyle() {
       stroke: new Stroke({ color: '#ffffff', width: 2 }),
     }),
   });
+}
+
+function createRasterAoiStyle() {
+  return new Style({
+    fill: new Fill({ color: 'rgba(214, 162, 31, 0.18)' }),
+    stroke: new Stroke({
+      color: '#d6a21f',
+      lineDash: [8, 5],
+      width: 3,
+    }),
+  });
+}
+
+function featureToAoiPolygon(feature: Feature<Geometry>) {
+  const format = new GeoJSON();
+  const object = format.writeFeatureObject(feature, {
+    dataProjection: 'EPSG:4326',
+    featureProjection: 'EPSG:3857',
+  }) as { geometry?: { type?: string; coordinates?: unknown } };
+
+  if (object.geometry?.type !== 'Polygon' || !isPolygonCoordinates(object.geometry.coordinates)) {
+    return null;
+  }
+
+  return {
+    type: 'Polygon' as const,
+    coordinates: object.geometry.coordinates,
+  };
+}
+
+function isPolygonCoordinates(value: unknown): value is [number, number][][] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((ring) => (
+      Array.isArray(ring)
+      && ring.length >= 4
+      && ring.every((coordinate) => (
+        Array.isArray(coordinate)
+        && coordinate.length >= 2
+        && Number.isFinite(Number(coordinate[0]))
+        && Number.isFinite(Number(coordinate[1]))
+      ))
+    ));
 }
 
 function getDrawingStatus(tool: string, traceEnabled: boolean) {

@@ -4,7 +4,7 @@ import { defaultUploadedLayerStyle, getPointBounds, useGis, type UploadedLayerSt
 import { useDigitize } from './digitize/DigitizeContext';
 import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeMap';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
-import { type BasemapId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
+import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { useMapSelection } from './map/MapSelectionContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
@@ -307,7 +307,7 @@ export function MapPanel() {
   useEffect(() => {
     mapModeRef.current = mapCommandState.mapMode;
     digitizeMapVisibleRef.current = editingActive && mapCommandState.mapMode !== 'globe';
-  }, [mapCommandState.mapMode]);
+  }, [editingActive, mapCommandState.mapMode]);
 
   useEffect(() => {
     digitizeMapVisibleRef.current = editingActive && mapCommandState.mapMode !== 'globe';
@@ -747,6 +747,10 @@ export function MapPanel() {
     updateMapCommandState({ mapMode });
   }, [updateMapCommandState]);
 
+  const setDisplayCrs = useCallback((displayCrs: DisplayCrsId) => {
+    updateMapCommandState({ displayCrs, mapMode: displayCrs !== 'webMercator' ? 'planar' : mapModeRef.current });
+  }, [updateMapCommandState]);
+
   const locate = useCallback(() => {
     if (mapModeRef.current === 'globe') {
       const cesium = cesiumRef.current;
@@ -779,11 +783,12 @@ export function MapPanel() {
       zoomOut,
       resetNorth,
       setBasemap,
+      setDisplayCrs,
       setMapMode,
       toggleDragRotate,
       locate,
     }),
-    [locate, resetNorth, setBasemap, setMapMode, toggleDragRotate, zoomIn, zoomOut],
+    [locate, resetNorth, setBasemap, setDisplayCrs, setMapMode, toggleDragRotate, zoomIn, zoomOut],
   );
 
   useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
