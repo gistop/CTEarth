@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
 import { defaultUploadedLayerStyle, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
+import { useDigitize } from './digitize/DigitizeContext';
+import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeMap';
+import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
+import { useMapSelection } from './map/MapSelectionContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
 const CHINA_ZOOM = 3.6;
@@ -16,6 +20,10 @@ const basemapLayers: Record<BasemapId, string[]> = {
 };
 const rasterLayerIds = ['idw-interpolation'];
 const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
+
+const OpenLayersDigitizeMap = lazy(() => (
+  import('./digitize/OpenLayersDigitizeMap').then((module) => ({ default: module.OpenLayersDigitizeMap }))
+));
 
 type CesiumViewer = {
   camera: {
@@ -262,10 +270,14 @@ export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const digitizeMapRef = useRef<OpenLayersDigitizeMapHandle | null>(null);
   const cesiumRef = useRef<{ Cesium: CesiumNamespace; viewer: CesiumViewer } | null>(null);
   const lastLayerNameRef = useRef('');
   const mapModeRef = useRef<MapViewMode>('planar');
+  const digitizeMapVisibleRef = useRef(false);
+  const { editingActive, status: digitizeStatus } = useDigitize();
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
+  const { selectionActive } = useMapSelection();
   const {
     layer,
     layers,
@@ -281,11 +293,31 @@ export function MapPanel() {
   } = useGis();
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('正在初始化在线地图');
+  const [hasLoadedDigitizeMap, setHasLoadedDigitizeMap] = useState(false);
   const [mapReady, setMapReady] = useState(false);
+  const featureSelectionActive = selectionActive && !editingActive && mapCommandState.mapMode !== 'globe';
+  const selectionStatus = selectionActive
+    ? mapCommandState.mapMode === 'globe'
+      ? '选择工具暂不支持三维视图'
+      : layers.length === 0
+        ? '选择工具：请先加载矢量图层'
+        : '选择工具：单击要素选择，Ctrl/⌘ 切换，Shift 添加'
+    : '';
 
   useEffect(() => {
     mapModeRef.current = mapCommandState.mapMode;
+    digitizeMapVisibleRef.current = editingActive && mapCommandState.mapMode !== 'globe';
   }, [mapCommandState.mapMode]);
+
+  useEffect(() => {
+    digitizeMapVisibleRef.current = editingActive && mapCommandState.mapMode !== 'globe';
+  }, [editingActive, mapCommandState.mapMode]);
+
+  useEffect(() => {
+    if (editingActive) {
+      setHasLoadedDigitizeMap(true);
+    }
+  }, [editingActive]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -626,6 +658,11 @@ export function MapPanel() {
       return;
     }
 
+    if (digitizeMapVisibleRef.current && digitizeMapRef.current) {
+      digitizeMapRef.current.zoomIn();
+      return;
+    }
+
     const map = mapRef.current;
 
     if (!map) {
@@ -646,6 +683,11 @@ export function MapPanel() {
       return;
     }
 
+    if (digitizeMapVisibleRef.current && digitizeMapRef.current) {
+      digitizeMapRef.current.zoomOut();
+      return;
+    }
+
     const map = mapRef.current;
 
     if (!map) {
@@ -663,6 +705,11 @@ export function MapPanel() {
         flyCesiumToChina(cesium.viewer, cesium.Cesium);
       }
 
+      return;
+    }
+
+    if (digitizeMapVisibleRef.current && digitizeMapRef.current) {
+      digitizeMapRef.current.resetNorth();
       return;
     }
 
@@ -711,6 +758,11 @@ export function MapPanel() {
       return;
     }
 
+    if (digitizeMapVisibleRef.current && digitizeMapRef.current) {
+      digitizeMapRef.current.locate();
+      return;
+    }
+
     mapRef.current?.easeTo({
       center: CHINA_CENTER,
       zoom: CHINA_ZOOM,
@@ -739,8 +791,21 @@ export function MapPanel() {
   return (
     <section className="map-panel">
       <div className={`map-canvas${mapCommandState.mapMode === 'globe' ? ' is-hidden' : ''}`} ref={containerRef} />
+      <MapFeatureSelection active={featureSelectionActive} map={mapRef.current} mapReady={mapReady} />
+      {hasLoadedDigitizeMap ? (
+        <Suspense fallback={<div className="openlayers-digitize-map is-visible" />}>
+          <OpenLayersDigitizeMap
+            ref={digitizeMapRef}
+            basemap={mapCommandState.basemap}
+            mapLibreMap={mapRef.current}
+            visible={editingActive && mapCommandState.mapMode !== 'globe'}
+          />
+        </Suspense>
+      ) : null}
       <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
-      {status ? <div className="map-status">{status}</div> : null}
+      {editingActive || selectionStatus || status ? (
+        <div className="map-status">{editingActive ? digitizeStatus : selectionStatus || status}</div>
+      ) : null}
       <div className="map-readout">{coords}</div>
     </section>
   );

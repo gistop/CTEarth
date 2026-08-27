@@ -468,6 +468,8 @@ function ChatThread({
       </header>
 
       <ThreadPrimitive.Viewport className="ai-thread-viewport">
+        <MapAwarenessCard />
+
         <ThreadPrimitive.Empty>
           <div className="ai-empty-state">
             <Bot size={20} />
@@ -503,6 +505,48 @@ function ChatThread({
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
+  );
+}
+
+function MapAwarenessCard() {
+  const gis = useGis();
+  const context = getSelectedMapContext(gis);
+
+  if (!context) {
+    return null;
+  }
+
+  const actions = getMapAwareActions(context);
+
+  return (
+    <section className="ai-map-context-card" aria-label="地图感知">
+      <div className="ai-map-context-header">
+        <Sparkles size={14} />
+        <span>地图感知</span>
+      </div>
+      <div className="ai-map-context-summary" title={context.layerName}>
+        <strong>当前选中</strong>
+        <span>{context.layerName} · {context.selectedCount} 个{context.geometryLabel}要素</span>
+      </div>
+      <div className="ai-map-context-meta">
+        <span>{context.fieldCount} 字段</span>
+        <span>{context.numericFieldCount} 数值字段</span>
+        <span>{context.totalLayerCount} 图层</span>
+        {context.hasRaster ? <span>有栅格</span> : null}
+      </div>
+      <div className="ai-map-context-actions">
+        {actions.map((action) => (
+          <ThreadPrimitive.Suggestion
+            className="ai-context-action"
+            key={action.label}
+            method="replace"
+            prompt={action.prompt}
+          >
+            {action.label}
+          </ThreadPrimitive.Suggestion>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -572,6 +616,144 @@ function Composer() {
       </div>
     </ComposerPrimitive.Root>
   );
+}
+
+type SelectedMapContext = {
+  fieldCount: number;
+  geometryLabel: string;
+  hasOtherVectorLayers: boolean;
+  hasRaster: boolean;
+  hasVectorOverlay: boolean;
+  layerName: string;
+  numericFieldCount: number;
+  selectedCount: number;
+  totalLayerCount: number;
+};
+
+function getSelectedMapContext(gis: GisRuntime): SelectedMapContext | null {
+  const layer = gis.layer;
+
+  if (!layer || layer.selectedFeatureIndexes.length === 0) {
+    return null;
+  }
+
+  const geometryTypes = layer.selectedFeatureIndexes
+    .map((index) => getFeatureGeometryType(layer.geojson.features[index]))
+    .filter(Boolean);
+
+  return {
+    fieldCount: layer.fields.length,
+    geometryLabel: formatGeometryLabel(geometryTypes),
+    hasOtherVectorLayers: gis.layers.some((item) => item.id !== layer.id),
+    hasRaster: Boolean(gis.raster),
+    hasVectorOverlay: Boolean(gis.vectorOverlay),
+    layerName: layer.fileName,
+    numericFieldCount: layer.numericFields.length,
+    selectedCount: layer.selectedFeatureIndexes.length,
+    totalLayerCount: gis.layers.length,
+  };
+}
+
+function getMapAwareActions(context: SelectedMapContext) {
+  const actions = [
+    {
+      label: '分析建议',
+      prompt: `请基于当前选中的 ${context.selectedCount} 个${context.geometryLabel}要素，结合当前图层和系统已有GIS工具，给出最值得做的分析建议，并说明推荐理由。`,
+    },
+  ];
+
+  if (context.fieldCount > 0) {
+    actions.push({
+      label: '查看属性',
+      prompt: '请概括当前选中要素的属性信息，优先列出最有代表性的字段和值，并指出哪些字段适合继续分析。',
+    });
+  }
+
+  actions.push({
+    label: '缓冲区',
+    prompt: '请帮我为当前选中要素所在图层设置缓冲区分析参数。请先建议一个合理距离，并说明当前缓冲区工具会对活动图层执行。',
+  });
+
+  if (context.hasOtherVectorLayers || context.hasVectorOverlay) {
+    actions.push({
+      label: '按位置选择',
+      prompt: '请基于当前选中要素，帮我判断是否适合做按位置选择，并给出目标图层、参考图层和空间关系的参数建议。',
+    });
+  }
+
+  if (context.hasRaster) {
+    actions.push({
+      label: '地形分析',
+      prompt: '请结合当前选中区域和已加载栅格，判断是否适合做坡度、坡向或山体阴影分析，并给出参数建议。',
+    });
+  }
+
+  return actions.slice(0, 5);
+}
+
+function formatGeometryLabel(geometryTypes: string[]) {
+  const uniqueTypes = [...new Set(geometryTypes)];
+
+  if (uniqueTypes.length === 0) {
+    return '';
+  }
+
+  if (uniqueTypes.length > 1) {
+    return '混合';
+  }
+
+  const type = uniqueTypes[0];
+
+  if (type === 'Point' || type === 'MultiPoint') {
+    return '点';
+  }
+
+  if (type === 'LineString' || type === 'MultiLineString') {
+    return '线';
+  }
+
+  if (type === 'Polygon' || type === 'MultiPolygon') {
+    return '面';
+  }
+
+  return type;
+}
+
+function getFeatureGeometryType(feature: unknown) {
+  if (!isPlainObject(feature) || !isPlainObject(feature.geometry) || typeof feature.geometry.type !== 'string') {
+    return '';
+  }
+
+  return feature.geometry.type;
+}
+
+function getFeaturePropertiesPreview(feature: unknown) {
+  if (!isPlainObject(feature) || !isPlainObject(feature.properties)) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(feature.properties)
+      .slice(0, 12)
+      .map(([key, value]) => [key, previewPropertyValue(value)]),
+  );
+}
+
+function previewPropertyValue(value: unknown) {
+  if (value === undefined || value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return value ?? null;
+  }
+
+  if (typeof value === 'string') {
+    return value.length > 80 ? `${value.slice(0, 77)}...` : value;
+  }
+
+  try {
+    const text = JSON.stringify(value);
+    return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+  } catch {
+    return String(value);
+  }
 }
 
 function AiInlineSettings({
@@ -824,6 +1006,20 @@ function summarizeGisContext(gis: GisRuntime) {
       numericFields: layer.numericFields,
       selectedField: layer.selectedField,
       selectedFeatureCount: layer.selectedFeatureIndexes.length,
+      selectedFeatureIndexes: layer.selectedFeatureIndexes,
+      selectedFeatures: layer.selectedFeatureIndexes.slice(0, 5).flatMap((featureIndex) => {
+        const feature = layer.geojson.features[featureIndex];
+
+        if (!feature) {
+          return [];
+        }
+
+        return [{
+          featureIndex,
+          geometryType: getFeatureGeometryType(feature),
+          properties: getFeaturePropertiesPreview(feature),
+        }];
+      }),
       visible: gis.uploadedLayerVisibility[layer.id] ?? true,
     })),
     outputs: {

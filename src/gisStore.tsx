@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import initGeoLibre, {
   GeoTiffReader,
   transform_points_epsg,
@@ -41,6 +41,13 @@ export type VectorOverlay = {
     features: unknown[];
   };
 };
+
+export type GeoJsonFeatureCollection = {
+  type: 'FeatureCollection';
+  features: unknown[];
+};
+
+export type EditableGeometryType = 'Point' | 'LineString' | 'Polygon';
 
 export type IdwParameters = {
   field: string;
@@ -144,6 +151,7 @@ export type RasterToolInput = {
 export type UploadedLayer = {
   id: string;
   fileName: string;
+  geometryType?: EditableGeometryType;
   toolInput: ShapefileInput;
   geojson: {
     type: 'FeatureCollection';
@@ -203,6 +211,10 @@ type GisContextValue = {
   uploadShapefileZip: (file: File) => Promise<void>;
   uploadGeoJson: (file: File) => Promise<void>;
   uploadGeoTiff: (file: File) => Promise<void>;
+  createBlankGeoJsonLayer: (params: { fileName?: string; geometryType: EditableGeometryType }) => string;
+  deleteUploadedLayer: (layerId?: string) => void;
+  saveGeoJsonLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
+  updateUploadedLayerGeoJson: (layerId: string, geojson: GeoJsonFeatureCollection) => void;
   setLayerVisibility: (id: LayerVisibilityId, visible: boolean) => void;
   setUploadedLayerVisibility: (id: string, visible: boolean) => void;
   setAllLayerVisibility: (visible: boolean) => void;
@@ -255,6 +267,7 @@ export const defaultBasemapStyle: BasemapLayerStyle = {
 };
 
 export function GisProvider({ children }: { children: React.ReactNode }) {
+  const fileHandlesRef = useRef<Record<string, LocalSaveFileHandle>>({});
   const [layers, setLayers] = useState<UploadedLayer[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [raster, setRaster] = useState<RasterOverlay | null>(null);
@@ -268,6 +281,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [layerOrder, setLayerOrder] = useState<LayerOrderId[]>(defaultLayerOrder);
   const [toolsReady, setToolsReady] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const [message, setMessage] = useState('WASM 工具正在加载');
 
   const layer = useMemo(
@@ -366,6 +380,74 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+
+    readVectorDraft()
+      .then((draft) => {
+        if (!active) {
+          return;
+        }
+
+        if (draft?.layers.length) {
+          const nextLayers = draft.layers.map(draftLayerToUploadedLayer);
+          const layerIds = new Set(nextLayers.map((item) => item.id));
+
+          setLayers(nextLayers);
+          setActiveLayerId(draft.activeLayerId && layerIds.has(draft.activeLayerId) ? draft.activeLayerId : nextLayers.at(-1)?.id ?? null);
+          setUploadedLayerVisibilityState(draft.uploadedLayerVisibility ?? {});
+          setUploadedLayerStyles(draft.uploadedLayerStyles ?? {});
+          setLayerOrder([
+            ...draft.layerOrder.filter((id) => id === 'basemap' || id === 'raster' || id === 'vectorOverlay' || layerIds.has(id.slice('uploaded:'.length))),
+            ...nextLayers
+              .map((item) => `uploaded:${item.id}` as const)
+              .filter((id) => !draft.layerOrder.includes(id)),
+            'basemap',
+          ]);
+          setMessage(`已恢复本地草稿：${nextLayers.length} 个 GeoJSON 图层`);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setMessage(errorMessage(error));
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setDraftLoaded(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!draftLoaded) {
+      return undefined;
+    }
+
+    const handle = window.setTimeout(() => {
+      if (layers.length === 0) {
+        void deleteVectorDraft();
+        return;
+      }
+
+      void writeVectorDraft({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        activeLayerId,
+        layers: layers.map(layerToDraftLayer),
+        uploadedLayerStyles,
+        uploadedLayerVisibility,
+        layerOrder,
+      });
+    }, 500);
+
+    return () => window.clearTimeout(handle);
+  }, [activeLayerId, draftLoaded, layerOrder, layers, uploadedLayerStyles, uploadedLayerVisibility]);
+
   const uploadShapefileZip = useCallback(async (file: File) => {
     try {
       setMessage('正在读取 Shapefile 压缩包');
@@ -426,10 +508,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const nextLayer: UploadedLayer = {
         id: createLayerId(file.name),
         fileName: file.name,
-        toolInput: {
-          inputName,
-          files: { [inputName]: bytes },
-        },
+        toolInput: createGeoJsonToolInput(inputName, geojson),
         geojson,
         points: {
           type: 'FeatureCollection',
@@ -477,6 +556,146 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       setMessage(errorMessage(error));
     }
+  }, []);
+
+  const createBlankGeoJsonLayer = useCallback((params: { fileName?: string; geometryType: EditableGeometryType }) => {
+    const fileName = ensureGeoJsonName((params.fileName || `${params.geometryType.toLowerCase()}-layer.geojson`).trim() || 'new-layer.geojson');
+    const geojson: GeoJsonFeatureCollection = { type: 'FeatureCollection', features: [] };
+    const nextLayer: UploadedLayer = {
+      id: createLayerId(fileName),
+      fileName,
+      geometryType: params.geometryType,
+      toolInput: createGeoJsonToolInput(fileName, geojson),
+      geojson,
+      points: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+      fields: [],
+      numericFields: [],
+      selectedField: '',
+      selectedFeatureIndexes: [],
+    };
+
+    setRaster(null);
+    setVectorOverlay(null);
+    setLayerVisibilityState((current) => ({
+      ...current,
+      raster: true,
+      vectorOverlay: true,
+    }));
+    setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
+    setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
+    setLayers((current) => [...current, nextLayer]);
+    setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
+    setActiveLayerId(nextLayer.id);
+    setMessage(`已新建空白 GeoJSON 图层：${fileName}`);
+
+    return nextLayer.id;
+  }, []);
+
+  const deleteUploadedLayer = useCallback((layerId?: string) => {
+    const targetLayer = findLayer(layers, layerId) ?? layer;
+
+    if (!targetLayer) {
+      setMessage('没有可删除的矢量图层。');
+      return;
+    }
+
+    const targetId = targetLayer.id;
+    const remainingLayers = layers.filter((item) => item.id !== targetId);
+    const nextActiveLayerId = remainingLayers.at(-1)?.id ?? null;
+
+    delete fileHandlesRef.current[targetId];
+    setLayers(remainingLayers);
+    setActiveLayerId((current) => {
+      if (current && current !== targetId && remainingLayers.some((item) => item.id === current)) {
+        return current;
+      }
+
+      return nextActiveLayerId;
+    });
+    setUploadedLayerVisibilityState((current) => {
+      const { [targetId]: _removed, ...next } = current;
+      return next;
+    });
+    setUploadedLayerStyles((current) => {
+      const { [targetId]: _removed, ...next } = current;
+      return next;
+    });
+    setLayerOrder((current) => current.filter((id) => id !== `uploaded:${targetId}`));
+    setMessage(`已删除图层：${targetLayer.fileName}`);
+  }, [layer, layers]);
+
+  const saveGeoJsonLayer = useCallback(async (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => {
+    const targetLayer = findLayer(layers, layerId) ?? layer;
+
+    if (!targetLayer) {
+      setMessage('没有可保存的 GeoJSON 图层。');
+      return;
+    }
+
+    const fileName = ensureGeoJsonName((options?.fileName || targetLayer.fileName || 'layer.geojson').trim() || 'layer.geojson');
+    const blob = geoJsonBlob(targetLayer.geojson);
+
+    try {
+      if (!options?.saveAs && fileHandlesRef.current[targetLayer.id]) {
+        await writeFileHandle(fileHandlesRef.current[targetLayer.id], blob);
+      } else if (options?.saveAs) {
+        const handle = await pickSaveFile(fileName);
+
+        if (handle) {
+          await writeFileHandle(handle, blob);
+          fileHandlesRef.current[targetLayer.id] = handle;
+        } else {
+          downloadBlob(blob, fileName);
+        }
+      } else {
+        downloadBlob(blob, fileName);
+      }
+
+      setMessage(`已保存 GeoJSON：${fileName}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, [layer, layers]);
+
+  const updateUploadedLayerGeoJson = useCallback((layerId: string, nextGeoJson: GeoJsonFeatureCollection) => {
+    const geojson = normalizeGeoJson(nextGeoJson);
+    const points = geojson.features.filter(isPointFeature);
+    const fields = getFields(geojson.features);
+    const numericFields = getNumericFields(points);
+
+    setLayers((current) => current.map((item) => {
+      if (item.id !== layerId) {
+        return item;
+      }
+
+      const outputName = ensureGeoJsonName(item.fileName || 'edited-layer.geojson');
+      const bytes = new TextEncoder().encode(JSON.stringify(geojson));
+      const selectedField = numericFields.includes(item.selectedField)
+        ? item.selectedField
+        : numericFields[0] ?? '';
+
+      return {
+        ...item,
+        toolInput: {
+          inputName: outputName,
+          files: { [outputName]: bytes },
+        },
+        geojson,
+        points: {
+          type: 'FeatureCollection',
+          features: points,
+        },
+        fields,
+        numericFields,
+        selectedField,
+        selectedFeatureIndexes: item.selectedFeatureIndexes.filter((index) => index < geojson.features.length),
+      };
+    }));
+    setActiveLayerId(layerId);
+    setMessage(`已更新编辑图层：${geojson.features.length} 个要素`);
   }, []);
 
   const setSelectedField = useCallback((field: string) => {
@@ -802,6 +1021,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     uploadShapefileZip,
     uploadGeoJson,
     uploadGeoTiff,
+    createBlankGeoJsonLayer,
+    deleteUploadedLayer,
+    saveGeoJsonLayer,
+    updateUploadedLayerGeoJson,
     setLayerVisibility,
     setUploadedLayerVisibility,
     setAllLayerVisibility,
@@ -819,7 +1042,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runIdwInterpolation,
     runBufferAnalysis,
     runTerrainAnalysis,
-  }), [activeLayerId, basemapStyle, clearSelection, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, uploadGeoJson, uploadGeoTiff, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
+  }), [activeLayerId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, saveGeoJsonLayer, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoTiff, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -832,6 +1055,224 @@ export function useGis() {
   }
 
   return value;
+}
+
+type LocalWritableFile = {
+  write: (data: Blob) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type LocalSaveFileHandle = {
+  createWritable: () => Promise<LocalWritableFile>;
+};
+
+type SaveFilePickerWindow = Window & {
+  showSaveFilePicker?: (options?: {
+    suggestedName?: string;
+    types?: Array<{
+      description: string;
+      accept: Record<string, string[]>;
+    }>;
+  }) => Promise<LocalSaveFileHandle>;
+};
+
+type VectorDraftLayer = {
+  id: string;
+  fileName: string;
+  geometryType?: EditableGeometryType;
+  geojson: GeoJsonFeatureCollection;
+  selectedField: string;
+  selectedFeatureIndexes: number[];
+};
+
+type VectorDraft = {
+  version: 1;
+  savedAt: string;
+  activeLayerId: string | null;
+  layers: VectorDraftLayer[];
+  uploadedLayerStyles: Record<string, UploadedLayerStyle>;
+  uploadedLayerVisibility: Record<string, boolean>;
+  layerOrder: LayerOrderId[];
+};
+
+const vectorDraftDbName = 'ctearth-vector-drafts';
+const vectorDraftStoreName = 'drafts';
+const vectorDraftKey = 'current';
+
+function createGeoJsonToolInput(inputName: string, geojson: GeoJsonFeatureCollection): ShapefileInput {
+  const outputName = ensureGeoJsonName(inputName);
+
+  return {
+    inputName: outputName,
+    files: { [outputName]: new TextEncoder().encode(JSON.stringify(geojson)) },
+  };
+}
+
+function geoJsonBlob(geojson: GeoJsonFeatureCollection) {
+  return new Blob([`${JSON.stringify(geojson, null, 2)}\n`], { type: 'application/geo+json;charset=utf-8' });
+}
+
+async function pickSaveFile(suggestedName: string) {
+  const picker = (window as SaveFilePickerWindow).showSaveFilePicker;
+
+  if (!picker) {
+    return null;
+  }
+
+  return picker({
+    suggestedName,
+    types: [
+      {
+        description: 'GeoJSON',
+        accept: {
+          'application/geo+json': ['.geojson'],
+          'application/json': ['.json'],
+        },
+      },
+    ],
+  });
+}
+
+async function writeFileHandle(handle: LocalSaveFileHandle, blob: Blob) {
+  const writable = await handle.createWritable();
+
+  await writable.write(blob);
+  await writable.close();
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.style.display = 'none';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function layerToDraftLayer(layer: UploadedLayer): VectorDraftLayer {
+  return {
+    id: layer.id,
+    fileName: ensureGeoJsonName(layer.fileName || 'draft-layer.geojson'),
+    geometryType: layer.geometryType,
+    geojson: layer.geojson,
+    selectedField: layer.selectedField,
+    selectedFeatureIndexes: layer.selectedFeatureIndexes,
+  };
+}
+
+function draftLayerToUploadedLayer(layer: VectorDraftLayer): UploadedLayer {
+  const geojson = normalizeGeoJson(layer.geojson);
+  const points = geojson.features.filter(isPointFeature);
+  const fields = getFields(geojson.features);
+  const numericFields = getNumericFields(points);
+
+  return {
+    id: layer.id,
+    fileName: ensureGeoJsonName(layer.fileName || 'draft-layer.geojson'),
+    geometryType: layer.geometryType,
+    toolInput: createGeoJsonToolInput(layer.fileName || 'draft-layer.geojson', geojson),
+    geojson,
+    points: {
+      type: 'FeatureCollection',
+      features: points,
+    },
+    fields,
+    numericFields,
+    selectedField: numericFields.includes(layer.selectedField) ? layer.selectedField : numericFields[0] ?? '',
+    selectedFeatureIndexes: layer.selectedFeatureIndexes.filter((index) => index < geojson.features.length),
+  };
+}
+
+async function readVectorDraft(): Promise<VectorDraft | null> {
+  const database = await openVectorDraftDb();
+
+  if (!database) {
+    return null;
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(vectorDraftStoreName, 'readonly');
+    const request = transaction.objectStore(vectorDraftStoreName).get(vectorDraftKey);
+
+    request.addEventListener('success', () => resolve(isVectorDraft(request.result) ? request.result : null));
+    request.addEventListener('error', () => reject(request.error));
+    transaction.addEventListener('complete', () => database.close());
+  });
+}
+
+async function writeVectorDraft(draft: VectorDraft): Promise<void> {
+  const database = await openVectorDraftDb();
+
+  if (!database) {
+    return;
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(vectorDraftStoreName, 'readwrite');
+
+    transaction.objectStore(vectorDraftStoreName).put(draft, vectorDraftKey);
+    transaction.addEventListener('complete', () => {
+      database.close();
+      resolve();
+    });
+    transaction.addEventListener('error', () => {
+      database.close();
+      reject(transaction.error);
+    });
+  });
+}
+
+async function deleteVectorDraft(): Promise<void> {
+  const database = await openVectorDraftDb();
+
+  if (!database) {
+    return;
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(vectorDraftStoreName, 'readwrite');
+
+    transaction.objectStore(vectorDraftStoreName).delete(vectorDraftKey);
+    transaction.addEventListener('complete', () => {
+      database.close();
+      resolve();
+    });
+    transaction.addEventListener('error', () => {
+      database.close();
+      reject(transaction.error);
+    });
+  });
+}
+
+async function openVectorDraftDb(): Promise<IDBDatabase | null> {
+  if (!('indexedDB' in window)) {
+    return null;
+  }
+
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(vectorDraftDbName, 1);
+
+    request.addEventListener('upgradeneeded', () => {
+      if (!request.result.objectStoreNames.contains(vectorDraftStoreName)) {
+        request.result.createObjectStore(vectorDraftStoreName);
+      }
+    });
+    request.addEventListener('success', () => resolve(request.result));
+    request.addEventListener('error', () => reject(request.error));
+  });
+}
+
+function isVectorDraft(value: unknown): value is VectorDraft {
+  return isRecord(value)
+    && value.version === 1
+    && Array.isArray(value.layers)
+    && Array.isArray(value.layerOrder)
+    && isRecord(value.uploadedLayerStyles)
+    && isRecord(value.uploadedLayerVisibility);
 }
 
 export function getPointBounds(points: PointFeature[]) {

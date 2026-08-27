@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles.css';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import 'ol/ol.css';
 import 'dockview-react/dist/styles/dockview.css';
 
 if (import.meta.env.DEV && 'serviceWorker' in navigator) {

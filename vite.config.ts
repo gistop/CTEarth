@@ -17,6 +17,7 @@ export default defineConfig({
     }),
     VitePWA({
       registerType: 'autoUpdate',
+      showMaximumFileSizeToCacheInBytesWarning: true,
       includeAssets: ['icons/icon.svg'],
       manifest: {
         name: 'CTEarth GIS/RS Workbench',
@@ -38,7 +39,8 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
         globIgnores: ['cesium/**/*'],
-        navigateFallback: '/index.html'
+        navigateFallback: '/index.html',
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       }
     })
   ],

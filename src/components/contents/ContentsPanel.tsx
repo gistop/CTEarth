@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
 import {
   Database,
+  Download,
   FolderPlus,
   GripVertical,
   Grid2X2,
   Layers,
   Map as MapIcon,
   PenTool,
+  Plus,
   RotateCcw,
+  Save,
   Search,
   Settings,
   TableProperties,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useAttributeTable } from '../attributes/AttributeTableContext';
@@ -61,6 +65,9 @@ function LayerSection() {
     layerVisibility,
     uploadedLayerVisibility,
     layerOrder,
+    createBlankGeoJsonLayer,
+    deleteUploadedLayer,
+    saveGeoJsonLayer,
     uploadGeoJson,
     uploadGeoTiff,
     uploadShapefileZip,
@@ -92,6 +99,7 @@ function LayerSection() {
 
   const allVisible = layerItems.every((item) => item.checked);
   const someVisible = layerItems.some((item) => item.checked);
+  const selectedUploadedLayer = activeLayerId ? layers.find((item) => item.id === activeLayerId) ?? null : null;
 
   useEffect(() => {
     if (rootCheckboxRef.current) {
@@ -115,6 +123,29 @@ function LayerSection() {
     }
 
     event.target.value = '';
+  };
+
+  const handleCreateBlankLayer = () => {
+    const fileName = window.prompt('GeoJSON layer name', 'polygon-layer.geojson');
+
+    if (fileName === null) {
+      return;
+    }
+
+    createBlankGeoJsonLayer({ fileName, geometryType: 'Polygon' });
+  };
+
+  const handleDeleteSelectedLayer = () => {
+    if (!selectedUploadedLayer) {
+      return;
+    }
+
+    if (!window.confirm(`删除图层 ${selectedUploadedLayer.fileName}？`)) {
+      return;
+    }
+
+    deleteUploadedLayer(selectedUploadedLayer.id);
+    setExpandedStyleId((current) => (current === `uploaded:${selectedUploadedLayer.id}` ? null : current));
   };
 
   const handleDrop = (targetId: LayerOrderId) => {
@@ -153,11 +184,46 @@ function LayerSection() {
         </button>
         <button
           type="button"
+          title="新建空白 GeoJSON 图层"
+          aria-label="新建空白 GeoJSON 图层"
+          onClick={handleCreateBlankLayer}
+        >
+          <Plus size={18} />
+        </button>
+        <button
+          type="button"
+          title="保存当前 GeoJSON 图层"
+          aria-label="保存当前 GeoJSON 图层"
+          disabled={!layer}
+          onClick={() => void saveGeoJsonLayer(layer?.id)}
+        >
+          <Save size={18} />
+        </button>
+        <button
+          type="button"
+          title="另存当前 GeoJSON 图层"
+          aria-label="另存当前 GeoJSON 图层"
+          disabled={!layer}
+          onClick={() => void saveGeoJsonLayer(layer?.id, { saveAs: true })}
+        >
+          <Download size={18} />
+        </button>
+        <button
+          type="button"
           title="添加数据"
           aria-label="添加 Shapefile ZIP、GeoJSON 或 GeoTIFF 数据"
           onClick={() => fileInputRef.current?.click()}
         >
           <FolderPlus size={18} />
+        </button>
+        <button
+          type="button"
+          title="删除选中图层"
+          aria-label="删除鼠标选中的图层"
+          disabled={!selectedUploadedLayer}
+          onClick={handleDeleteSelectedLayer}
+        >
+          <Trash2 size={18} />
         </button>
         <input
           ref={fileInputRef}

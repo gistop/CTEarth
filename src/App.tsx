@@ -62,6 +62,11 @@ import {
 } from './components/attributes/AttributeTableContext';
 import { ContentsPanel as EmbeddedContentsPanel } from './components/contents/ContentsPanel';
 import {
+  DigitizeProvider,
+  useDigitize,
+  type DigitizeGeometryType,
+} from './components/digitize/DigitizeContext';
+import {
   MapCommandProvider,
   type BasemapId,
   type MapCommand,
@@ -69,9 +74,22 @@ import {
   type MapViewMode,
   useMapCommands,
 } from './components/map/MapCommandContext';
+import { MapSelectionProvider, useMapSelection } from './components/map/MapSelectionContext';
+import {
+  LayoutElementControls,
+  LayoutAlignSplitButton,
+  LayoutExportSplitButton,
+  LayoutHeaderActions,
+  LayoutPanel,
+  LayoutOrderButton,
+  LayoutPageSettings,
+  LayoutSelectionSplitButton,
+  LayoutProvider,
+} from './components/layout/LayoutPanel';
 import {
   GisProvider,
   type BufferParameters as BufferRunParameters,
+  type EditableGeometryType,
   type IdwParameters as IdwRunParameters,
   type SelectByLocationParameters as SelectByLocationRunParameters,
   type SelectByValueParameters as SelectByValueRunParameters,
@@ -81,9 +99,19 @@ import {
 } from './gisStore';
 
 type RibbonTool = {
+  active?: boolean;
+  disabled?: boolean;
   label: string;
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
   muted?: boolean;
+  render?: () => React.ReactNode;
+  onClick?: () => void;
+};
+
+type RibbonGroup = {
+  accessory?: React.ReactNode;
+  title: string;
+  tools: RibbonTool[];
 };
 
 const quickTools = [
@@ -95,7 +123,9 @@ const quickTools = [
   { title: '缩小', icon: ZoomOut },
 ];
 
-const ribbonTabs = ['工程', '地图', '插入', '分析', '视图', '编辑', '影像', '共享', '帮助'];
+const ribbonTabs = ['工程', '地图', '布局', '分析', '共享', '帮助'];
+type RibbonTab = typeof ribbonTabs[number];
+const editRibbonTab = '编辑';
 
 const dockColumnWidths = {
   contents: 180,
@@ -151,7 +181,7 @@ const AttributeChartPanel = lazy(() => (
   import('./components/attributes/AttributeChartPanel').then((module) => ({ default: module.AttributeChartPanel }))
 ));
 
-const ribbonGroups: { title: string; tools: RibbonTool[] }[] = [
+const baseRibbonGroups: RibbonGroup[] = [
   {
     title: '剪贴板',
     tools: [
@@ -196,7 +226,7 @@ const ribbonGroups: { title: string; tools: RibbonTool[] }[] = [
     ],
   },
   {
-    title: '标注',
+    title: '输出',
     tools: [
       { label: '暂停', icon: Pause },
       { label: '锁定', icon: Settings },
@@ -211,6 +241,277 @@ const ribbonGroups: { title: string; tools: RibbonTool[] }[] = [
     ],
   },
 ];
+
+function createMapRibbonGroups({
+  clearSelection,
+  activeTab,
+  hasLayers,
+  selectionActive,
+  setSelectionActive,
+  toggleSelectionActive,
+}: {
+  clearSelection: ReturnType<typeof useGis>['clearSelection'];
+  activeTab: RibbonTab;
+  hasLayers: boolean;
+  selectionActive: boolean;
+  setSelectionActive: (active: boolean) => void;
+  toggleSelectionActive: () => void;
+}): RibbonGroup[] {
+  return baseRibbonGroups.map((group, groupIndex) => {
+    if (groupIndex === 1) {
+      return {
+        ...group,
+        tools: group.tools.map((tool, toolIndex) => (
+          toolIndex === 0
+            ? { ...tool, active: !selectionActive, onClick: () => setSelectionActive(false) }
+            : tool
+        )),
+      };
+    }
+
+    if (groupIndex === 3) {
+      return {
+        ...group,
+        tools: group.tools.map((tool, toolIndex) => {
+          if (toolIndex === 0) {
+            return {
+              ...tool,
+              active: selectionActive,
+              disabled: !hasLayers,
+              muted: !hasLayers,
+              onClick: toggleSelectionActive,
+            };
+          }
+
+          if (toolIndex === 3) {
+            return {
+              ...tool,
+              disabled: !hasLayers,
+              icon: X,
+              muted: !hasLayers,
+              onClick: () => clearSelection(),
+            };
+          }
+
+          return tool;
+        }),
+      };
+    }
+
+    if (activeTab === '共享' && groupIndex === 5) {
+      return {
+        ...group,
+        tools: group.tools.map((tool, toolIndex) => {
+          if (toolIndex === 0) {
+            return {
+              ...tool,
+              label: '导出',
+              icon: Download,
+              render: () => <LayoutExportSplitButton />,
+            };
+          }
+
+          return tool;
+        }),
+      };
+    }
+
+    return group;
+  });
+}
+
+const layoutRibbonGroups: RibbonGroup[] = [
+  {
+    title: '剪贴板',
+    tools: [
+      { label: '粘贴', icon: Plus },
+      { label: '剪切', icon: SquareDashedMousePointer, muted: true },
+      { label: '复制', icon: Grid2X2, muted: true },
+    ],
+  },
+  {
+    title: '导航',
+    tools: [
+      { label: '选择浏览', icon: MousePointer2 },
+      { label: '平移页面', icon: Map },
+      { label: '定位页面', icon: Search },
+    ],
+  },
+  {
+    title: '选择',
+    tools: [
+      { label: '选择元素', icon: MousePointer2, render: () => <LayoutSelectionSplitButton /> },
+      { label: '框选元素', icon: SquareDashedMousePointer },
+      { label: '清除选择', icon: X, muted: true },
+    ],
+  },
+  {
+    title: '整饬元素',
+    tools: [],
+    accessory: <LayoutElementControls />,
+  },
+  {
+    title: '排列',
+    tools: [
+      { label: '对齐', icon: Grid2X2, render: () => <LayoutAlignSplitButton /> },
+      { label: '分布', icon: SlidersHorizontal },
+      { label: '上移', icon: Layers },
+      { label: '下移', icon: Tags },
+    ],
+  },
+  {
+    title: '页面设置',
+    tools: [],
+    accessory: <LayoutPageSettings />,
+  },
+];
+
+function createEditRibbonGroups({
+  activeLayerId,
+  createBlankGeoJsonLayer,
+  digitize,
+  layers,
+  saveGeoJsonLayer,
+  setActiveLayer,
+}: {
+  activeLayerId: string | null;
+  createBlankGeoJsonLayer: ReturnType<typeof useGis>['createBlankGeoJsonLayer'];
+  digitize: ReturnType<typeof useDigitize>;
+  layers: ReturnType<typeof useGis>['layers'];
+  saveGeoJsonLayer: ReturnType<typeof useGis>['saveGeoJsonLayer'];
+  setActiveLayer: ReturnType<typeof useGis>['setActiveLayer'];
+}): RibbonGroup[] {
+  const hasEditableLayer = layers.length > 0;
+  const activeLayer = layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null;
+  const activeGeometryType = activeLayer?.geometryType;
+  const activeSaveLayerId = activeLayerId ?? activeLayer?.id;
+  const createLayerTool = (geometryType: EditableGeometryType, label: string, icon: RibbonTool['icon']): RibbonTool => ({
+    icon,
+    label,
+    onClick: () => {
+      const defaultName = `${geometryType.toLowerCase()}-layer.geojson`;
+      const fileName = window.prompt('GeoJSON layer name', defaultName);
+
+      if (fileName === null) {
+        return;
+      }
+
+      createBlankGeoJsonLayer({ fileName, geometryType });
+      digitize.setActiveTool(geometryType);
+    },
+  });
+  const drawTool = (tool: DigitizeGeometryType, label: string, icon: RibbonTool['icon']): RibbonTool => ({
+    active: digitize.activeTool === tool && !digitize.modifyEnabled,
+    disabled: !hasEditableLayer || (Boolean(activeGeometryType) && activeGeometryType !== tool),
+    icon,
+    label,
+    onClick: () => digitize.setActiveTool(tool),
+  });
+
+  return [
+    {
+      title: 'GeoJSON',
+      tools: [
+        createLayerTool('Point', 'New Pt', Plus),
+        createLayerTool('LineString', 'New Ln', PenTool),
+        createLayerTool('Polygon', 'New Poly', SquareDashedMousePointer),
+        {
+          disabled: !activeSaveLayerId,
+          icon: Save,
+          label: 'Save',
+          onClick: () => void saveGeoJsonLayer(activeSaveLayerId),
+        },
+        {
+          disabled: !activeSaveLayerId,
+          icon: Download,
+          label: 'Save As',
+          onClick: () => void saveGeoJsonLayer(activeSaveLayerId, { saveAs: true }),
+        },
+      ],
+    },
+    {
+      title: '目标图层',
+      tools: [],
+      accessory: (
+        <label className="ribbon-layer-select">
+          <Layers size={18} strokeWidth={1.7} />
+          <select
+            value={activeLayerId ?? layers.at(-1)?.id ?? ''}
+            disabled={layers.length === 0}
+            aria-label="当前编辑图层"
+            onChange={(event) => {
+              if (event.target.value) {
+                setActiveLayer(event.target.value);
+              }
+            }}
+          >
+            {layers.length === 0 ? <option value="">无可编辑图层</option> : null}
+            {layers.map((layer) => (
+              <option key={layer.id} value={layer.id}>
+                {layer.fileName}
+              </option>
+            ))}
+          </select>
+        </label>
+      ),
+    },
+    {
+      title: '创建要素',
+      tools: [
+        drawTool('Point', '点', Plus),
+        drawTool('LineString', '线', PenTool),
+        drawTool('Polygon', '面', SquareDashedMousePointer),
+      ],
+    },
+    {
+      title: '编辑',
+      tools: [
+        {
+          active: digitize.modifyEnabled,
+          disabled: !hasEditableLayer,
+          icon: MousePointer2,
+          label: '节点编辑',
+          onClick: digitize.toggleModify,
+        },
+        {
+          disabled: !hasEditableLayer,
+          icon: X,
+          label: '清空图层',
+          muted: digitize.featureCount === 0,
+          onClick: digitize.clearFeatures,
+        },
+      ],
+    },
+    {
+      title: '辅助',
+      tools: [
+        {
+          active: digitize.snapEnabled,
+          icon: LocateFixed,
+          label: 'Snap',
+          onClick: () => digitize.setSnapEnabled(!digitize.snapEnabled),
+        },
+        {
+          active: digitize.traceEnabled,
+          disabled: !hasEditableLayer,
+          icon: SlidersHorizontal,
+          label: '自动完成面',
+          onClick: () => digitize.setTraceEnabled(!digitize.traceEnabled),
+        },
+      ],
+    },
+    {
+      title: '状态',
+      tools: [
+        {
+          icon: Layers,
+          label: `编辑 ${digitize.featureCount}`,
+          muted: true,
+        },
+      ],
+    },
+  ];
+}
 
 function ToolButton({
   title,
@@ -285,29 +586,103 @@ function QuickAccessBar({
 }
 
 function Ribbon({
+  activeTab,
   collapsed,
+  onChangeTab,
 }: {
+  activeTab: RibbonTab;
   collapsed: boolean;
+  onChangeTab: (tab: RibbonTab) => void;
 }) {
+  const digitize = useDigitize();
+  const { activeLayerId, clearSelection, createBlankGeoJsonLayer, layers, saveGeoJsonLayer, setActiveLayer } = useGis();
+  const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
+  const activeEditLayer = layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null;
+
+  useEffect(() => {
+    if (activeTab === editRibbonTab && activeEditLayer?.geometryType && digitize.activeTool !== activeEditLayer.geometryType) {
+      digitize.setActiveTool(activeEditLayer.geometryType);
+    }
+  }, [activeEditLayer?.geometryType, activeTab, digitize]);
+
+  const activeGroups = activeTab === editRibbonTab
+    ? createEditRibbonGroups({ activeLayerId, createBlankGeoJsonLayer, digitize, layers, saveGeoJsonLayer, setActiveLayer })
+    : activeTab === '布局'
+      ? layoutRibbonGroups.map((group, groupIndex) => {
+        if (groupIndex !== 4) {
+          return group;
+        }
+
+        return {
+          ...group,
+          tools: group.tools.map((tool, toolIndex) => {
+            if (toolIndex === 2) {
+              return { ...tool, render: () => <LayoutOrderButton direction="up" /> };
+            }
+
+            if (toolIndex === 3) {
+              return { ...tool, render: () => <LayoutOrderButton direction="down" /> };
+            }
+
+            return tool;
+          }),
+        };
+      })
+      : createMapRibbonGroups({
+        activeTab,
+        clearSelection,
+        hasLayers: layers.length > 0,
+        selectionActive,
+        setSelectionActive,
+        toggleSelectionActive,
+      });
+
   return (
-    <section className="ribbon" aria-label="功能区">
+    <section className={`ribbon${activeTab === ribbonTabs[2] ? ' layout-ribbon' : ''}`} aria-label="功能区">
       <nav className="ribbon-tabs" aria-label="菜单">
         <div className="ribbon-tab-list">
           {ribbonTabs.map((tab) => (
-            <button key={tab} className={tab === '地图' ? 'is-selected' : ''} type="button">
+            <button
+              key={tab}
+              className={tab === activeTab ? 'is-selected' : ''}
+              type="button"
+              onClick={() => {
+                onChangeTab(tab);
+                digitize.setEditingActive(tab === editRibbonTab);
+              }}
+            >
               {tab}
             </button>
           ))}
         </div>
       </nav>
       <div className="ribbon-strip" aria-hidden={collapsed}>
-        {ribbonGroups.map((group) => (
+        {activeGroups.map((group) => (
           <div className="ribbon-group" key={group.title}>
-            <div className="ribbon-tools">
+            <div className={group.accessory ? 'ribbon-tools ribbon-tools-accessory' : 'ribbon-tools'}>
+              {group.accessory}
               {group.tools.map((tool) => {
+                if (tool.render) {
+                  return (
+                    <Fragment key={tool.label}>
+                      {tool.render()}
+                    </Fragment>
+                  );
+                }
+
                 const Icon = tool.icon;
                 return (
-                  <button className={tool.muted ? 'is-muted' : ''} key={tool.label} type="button">
+                  <button
+                    className={[
+                      tool.muted ? 'is-muted' : '',
+                      tool.active ? 'is-active' : '',
+                    ].filter(Boolean).join(' ')}
+                    disabled={tool.disabled}
+                    key={tool.label}
+                    type="button"
+                    aria-pressed={tool.onClick ? tool.active : undefined}
+                    onClick={tool.onClick}
+                  >
                     <Icon size={23} strokeWidth={1.6} />
                     <span>{tool.label}</span>
                   </button>
@@ -1372,10 +1747,10 @@ function AttributeChartDockPanel(props: IDockviewPanelProps<{ layerId?: string; 
   );
 }
 
-function MapHeaderPrefixActions({ activePanel }: IDockviewHeaderActionsProps) {
+function MapHeaderPrefixActions({ panels }: IDockviewHeaderActionsProps) {
   const { toolsReady } = useGis();
 
-  if (activePanel?.id !== 'map') {
+  if (!panels.some((panel) => panel.id === 'map')) {
     return null;
   }
 
@@ -1496,6 +1871,10 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
         </button>
       </div>
     );
+  }
+
+  if (activePanel?.id === 'layout') {
+    return <LayoutHeaderActions />;
   }
 
   if (activePanel?.id !== 'map') {
@@ -1638,6 +2017,7 @@ function StatusFooter() {
 }
 
 export default function App() {
+  const [activeRibbonTab, setActiveRibbonTab] = useState<RibbonTab>('地图');
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState(false);
   const [isAiAssistantPanelVisible, setIsAiAssistantPanelVisible] = useState(false);
   const [attributeTableStateByLayerId, setAttributeTableStateByLayerId] = useState<Record<string, AttributeTableState>>({});
@@ -1650,6 +2030,7 @@ export default function App() {
       attributeChart: AttributeChartDockPanel,
       attributeTable: AttributeTableDockPanel,
       contents: EmbeddedContentsPanel,
+      layout: LayoutPanel,
       map: MapPanel,
       inspector: InspectorPanel,
       python: PythonPanel,
@@ -1657,6 +2038,10 @@ export default function App() {
     }),
     [],
   );
+
+  const changeRibbonTab = useCallback((tab: RibbonTab) => {
+    setActiveRibbonTab(tab);
+  }, []);
 
   const addAiAssistantPanel = useCallback((api: DockviewApi) => {
     const existingPanel = api.getPanel(aiAssistantPanelId);
@@ -1822,6 +2207,16 @@ export default function App() {
       minimumHeight: 180,
     });
 
+    event.api.addPanel({
+      id: 'layout',
+      component: 'layout',
+      title: '布局',
+      inactive: true,
+      position: { direction: 'within', referencePanel: map, index: 1 },
+      minimumWidth: 280,
+      minimumHeight: 180,
+    });
+
     const inspector = event.api.addPanel({
       id: 'inspector',
       component: 'inspector',
@@ -1870,31 +2265,39 @@ export default function App() {
   return (
     <GisProvider>
       <MapCommandProvider>
-        <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
-          <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
-          <QuickAccessBar
-            isAiAssistantPanelVisible={isAiAssistantPanelVisible}
-            isRibbonCollapsed={isRibbonCollapsed}
-            onToggleAiAssistantPanel={toggleAiAssistantPanel}
-            onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
-          />
-          <Ribbon
-            collapsed={isRibbonCollapsed}
-          />
-          <main className="workspace">
-            <DockviewReact
-              className="dockview-theme-light cte-dockview"
-              components={components}
-              disableTabsOverflowList={false}
-              floatingGroupBounds="boundedWithinViewport"
-              onReady={onReady}
-              prefixHeaderActionsComponent={MapHeaderPrefixActions}
-              rightHeaderActionsComponent={MapHeaderActions}
-            />
-          </main>
-          <StatusFooter />
-          </div>
-        </AttributeTableProvider>
+        <MapSelectionProvider>
+        <DigitizeProvider>
+          <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
+            <LayoutProvider>
+              <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
+              <QuickAccessBar
+                isAiAssistantPanelVisible={isAiAssistantPanelVisible}
+                isRibbonCollapsed={isRibbonCollapsed}
+                onToggleAiAssistantPanel={toggleAiAssistantPanel}
+                onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
+              />
+              <Ribbon
+                activeTab={activeRibbonTab}
+                collapsed={isRibbonCollapsed}
+                onChangeTab={changeRibbonTab}
+              />
+              <main className="workspace">
+                <DockviewReact
+                  className="dockview-theme-light cte-dockview"
+                  components={components}
+                  disableTabsOverflowList={false}
+                  floatingGroupBounds="boundedWithinViewport"
+                  onReady={onReady}
+                  prefixHeaderActionsComponent={MapHeaderPrefixActions}
+                  rightHeaderActionsComponent={MapHeaderActions}
+                />
+              </main>
+              <StatusFooter />
+              </div>
+            </LayoutProvider>
+          </AttributeTableProvider>
+        </DigitizeProvider>
+        </MapSelectionProvider>
       </MapCommandProvider>
     </GisProvider>
   );
