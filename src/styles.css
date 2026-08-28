@@ -1119,6 +1119,125 @@ button {
   color: inherit;
 }
 
+.add-data-split {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+}
+
+.contents-tabs .add-data-split button {
+  height: 26px;
+  min-width: 0;
+}
+
+.contents-tabs .add-data-local {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: auto;
+  min-width: 58px;
+  padding: 0 7px;
+  border-right-color: #d8e0e7;
+  border-radius: 4px 0 0 4px;
+}
+
+.contents-tabs .add-data-local span {
+  max-width: 32px;
+  overflow: hidden;
+  color: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.contents-tabs .add-data-toggle {
+  width: 22px;
+  border-left: 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.contents-tabs .add-data-toggle.is-open,
+.contents-tabs .add-data-split:hover .add-data-local,
+.contents-tabs .add-data-split:hover .add-data-toggle {
+  border-color: #b6d8ec;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.add-data-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 7px;
+  width: min(260px, calc(100vw - 28px));
+  padding: 8px;
+  border: 1px solid #b9c4ce;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 12px 26px rgb(15 23 42 / 18%);
+}
+
+.add-data-url-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.add-data-url-field > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #3d5062;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.add-data-url-field input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid #b9c4ce;
+  border-radius: 4px;
+  outline: 0;
+  background: #ffffff;
+  color: #263849;
+  font-size: 12px;
+}
+
+.add-data-url-field input:focus {
+  border-color: #7fb6dc;
+  box-shadow: 0 0 0 2px rgb(127 182 220 / 24%);
+}
+
+.contents-tabs .add-data-menu .add-data-remote-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  justify-self: end;
+  width: auto;
+  min-width: 64px;
+  padding: 0 9px;
+  border: 1px solid #9fc8e3;
+  border-radius: 4px;
+  background: #dff0fb;
+  color: #0f5d8e;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.contents-tabs .add-data-menu .add-data-remote-submit:disabled {
+  border-color: #d1d8df;
+  background: #eef2f5;
+  color: #8b98a6;
+}
+
 .hidden-file-input {
   display: none;
 }

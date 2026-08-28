@@ -20,6 +20,8 @@
     "dockview-react": "^7.0.4",
     "echarts": "^6.1.0",
     "geolibre-wasm": "^1.5.1",
+    "hyparquet": "^1.29.2",
+    "hyparquet-compressors": "^1.1.1",
     "jszip": "^3.10.1",
     "lucide-react": "^0.539.0",
     "maplibre-gl": "^5.6.2",

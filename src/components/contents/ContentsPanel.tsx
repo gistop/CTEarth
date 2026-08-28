@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Database,
   Download,
-  FolderPlus,
   GripVertical,
   Grid2X2,
   Layers,
@@ -18,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAttributeTable } from '../attributes/AttributeTableContext';
+import { AddDataSplitButton } from './AddDataSplitButton';
 import {
   defaultBasemapStyle,
   defaultRasterStyle,
@@ -47,7 +47,6 @@ export function ContentsPanel() {
 }
 
 function LayerSection() {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rootCheckboxRef = useRef<HTMLInputElement | null>(null);
   const [draggingId, setDraggingId] = useState<LayerOrderId | null>(null);
   const [dropTargetId, setDropTargetId] = useState<LayerOrderId | null>(null);
@@ -58,6 +57,7 @@ function LayerSection() {
     activeLayerId,
     raster,
     vectorOverlay,
+    message,
     basemapStyle,
     rasterStyle,
     vectorOverlayStyle,
@@ -68,9 +68,6 @@ function LayerSection() {
     createBlankGeoJsonLayer,
     deleteUploadedLayer,
     saveGeoJsonLayer,
-    uploadGeoJson,
-    uploadGeoTiff,
-    uploadShapefileZip,
     setLayerVisibility,
     setUploadedLayerVisibility,
     setAllLayerVisibility,
@@ -106,24 +103,6 @@ function LayerSection() {
       rootCheckboxRef.current.indeterminate = someVisible && !allVisible;
     }
   }, [allVisible, someVisible]);
-
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
-
-    if (isGeoTiffFile(file.name)) {
-      await uploadGeoTiff(file);
-    } else if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
-      await uploadGeoJson(file);
-    } else {
-      await uploadShapefileZip(file);
-    }
-
-    event.target.value = '';
-  };
 
   const handleCreateBlankLayer = () => {
     const fileName = window.prompt('GeoJSON layer name', 'polygon-layer.geojson');
@@ -208,14 +187,7 @@ function LayerSection() {
         >
           <Download size={18} />
         </button>
-        <button
-          type="button"
-          title="添加数据"
-          aria-label="添加 Shapefile ZIP、GeoJSON 或 GeoTIFF 数据"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <FolderPlus size={18} />
-        </button>
+        <AddDataSplitButton />
         <button
           type="button"
           title="删除选中图层"
@@ -225,13 +197,6 @@ function LayerSection() {
         >
           <Trash2 size={18} />
         </button>
-        <input
-          ref={fileInputRef}
-          className="hidden-file-input"
-          type="file"
-          accept=".zip,.geojson,.json,.tif,.tiff,.geotiff"
-          onChange={handleFileChange}
-        />
       </div>
       <section className="layer-tree contents-layer-tree">
         <h3>绘制顺序</h3>
@@ -325,6 +290,7 @@ function LayerSection() {
         {layers.length === 0 ? (
           <div className="layer-note">点击上方添加数据按钮，选择 Shapefile ZIP 或 GeoJSON。</div>
         ) : null}
+        <div className="layer-note status">{message}</div>
       </section>
     </section>
   );
@@ -684,10 +650,6 @@ function buildLayerItems({
   }
 
   return items;
-}
-
-function isGeoTiffFile(fileName: string) {
-  return /\.(tif|tiff|geotiff)$/i.test(fileName);
 }
 
 function swatchClassForItem(item: LayerListItem) {

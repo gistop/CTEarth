@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import initGeoLibre, {
   CogBuilder,
+  CogStream,
   GeoTiffReader,
   transform_points_epsg,
+  vector_to_geojson_reproject,
   version as geolibreVersion,
 } from 'geolibre-wasm';
-import { initTools, runTool } from 'geolibre-wasm/tools';
+import { extractCogSubset, initTools, runTool } from 'geolibre-wasm/tools';
 import JSZip from 'jszip';
 import shp from 'shpjs';
 
@@ -225,7 +227,11 @@ type GisContextValue = {
   message: string;
   uploadShapefileZip: (file: File) => Promise<void>;
   uploadGeoJson: (file: File) => Promise<void>;
+  uploadGeoParquetFile: (file: File) => Promise<void>;
+  uploadGeoParquetUrl: (url: string) => Promise<void>;
+  uploadGeoPackage: (file: File) => Promise<void>;
   uploadGeoTiff: (file: File) => Promise<void>;
+  uploadGeoTiffUrl: (url: string) => Promise<void>;
   createBlankGeoJsonLayer: (params: { fileName?: string; geometryType: EditableGeometryType }) => string;
   deleteUploadedLayer: (layerId?: string) => void;
   saveGeoJsonLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
@@ -370,6 +376,38 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
   const setActiveLayer = useCallback((id: string) => {
     setActiveLayerId(id);
+  }, []);
+
+  const addGeoJsonLayer = useCallback((fileName: string, geojson: GeoJsonFeatureCollection, formatLabel: string) => {
+    const points = geojson.features.filter(isPointFeature);
+    const fields = getFields(geojson.features);
+    const numericFields = getNumericFields(points);
+    const nextLayer: UploadedLayer = {
+      id: createLayerId(fileName),
+      fileName,
+      toolInput: createGeoJsonToolInput(geoJsonToolInputName(fileName), geojson),
+      geojson,
+      points: {
+        type: 'FeatureCollection',
+        features: points,
+      },
+      fields,
+      numericFields,
+      selectedField: numericFields[0] ?? '',
+      selectedFeatureIndexes: [],
+    };
+
+    setLayerVisibilityState((current) => ({
+      ...current,
+      raster: true,
+      vectorOverlay: true,
+    }));
+    setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
+    setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
+    setLayers((current) => [...current, nextLayer]);
+    setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
+    setActiveLayerId(nextLayer.id);
+    setMessage(`已加载 ${geojson.features.length} 个 ${formatLabel} 要素：${fileName}`);
   }, []);
 
   useEffect(() => {
@@ -517,41 +555,63 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const text = new TextDecoder().decode(bytes);
       const geojson = normalizeGeoJson(JSON.parse(text));
-      const points = geojson.features.filter(isPointFeature);
-      const fields = getFields(geojson.features);
-      const numericFields = getNumericFields(points);
-
-      const inputName = ensureGeoJsonName(file.name || 'input.geojson');
-      const nextLayer: UploadedLayer = {
-        id: createLayerId(file.name),
-        fileName: file.name,
-        toolInput: createGeoJsonToolInput(inputName, geojson),
-        geojson,
-        points: {
-          type: 'FeatureCollection',
-          features: points,
-        },
-        fields,
-        numericFields,
-        selectedField: numericFields[0] ?? '',
-        selectedFeatureIndexes: [],
-      };
-
-      setLayerVisibilityState((current) => ({
-        ...current,
-        raster: true,
-        vectorOverlay: true,
-      }));
-      setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
-      setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
-      setLayers((current) => [...current, nextLayer]);
-      setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
-      setActiveLayerId(nextLayer.id);
-      setMessage(`已加载 ${geojson.features.length} 个 GeoJSON 要素：${file.name}`);
+      addGeoJsonLayer(file.name || 'input.geojson', geojson, 'GeoJSON');
     } catch (error) {
       setMessage(errorMessage(error));
     }
-  }, []);
+  }, [addGeoJsonLayer]);
+
+  const uploadGeoParquetFile = useCallback(async (file: File) => {
+    try {
+      setMessage('正在读取 GeoParquet');
+      setRaster(null);
+      setVectorOverlay(null);
+
+      const { readGeoParquetFile } = await import('./geoParquet');
+      const geojson = await readGeoParquetFile(file);
+
+      addGeoJsonLayer(file.name || 'input.geoparquet', geojson, 'GeoParquet');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, [addGeoJsonLayer]);
+
+  const uploadGeoParquetUrl = useCallback(async (url: string) => {
+    try {
+      const trimmedUrl = url.trim();
+
+      if (!trimmedUrl) {
+        setMessage('请输入 GeoParquet 远程地址。');
+        return;
+      }
+
+      setMessage('正在读取远程 GeoParquet');
+      setRaster(null);
+      setVectorOverlay(null);
+
+      const { readGeoParquetUrl } = await import('./geoParquet');
+      const geojson = await readGeoParquetUrl(trimmedUrl);
+
+      addGeoJsonLayer(remoteGeoParquetFileName(trimmedUrl), geojson, 'GeoParquet');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, [addGeoJsonLayer]);
+
+  const uploadGeoPackage = useCallback(async (file: File) => {
+    try {
+      setMessage('正在读取 GeoPackage');
+      setRaster(null);
+      setVectorOverlay(null);
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const geojson = normalizeGeoJson(JSON.parse(vector_to_geojson_reproject(bytes, 'geopackage', 4326, 0)));
+
+      addGeoJsonLayer(file.name || 'input.gpkg', geojson, 'GeoPackage');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, [addGeoJsonLayer]);
 
   const uploadGeoTiff = useCallback(async (file: File) => {
     try {
@@ -572,6 +632,45 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setMessage(`已加载 GeoTIFF：${file.name}（${nextRaster.width} x ${nextRaster.height}）`);
     } catch (error) {
       setMessage(errorMessage(error));
+    }
+  }, []);
+
+  const uploadGeoTiffUrl = useCallback(async (url: string) => {
+    try {
+      const trimmedUrl = url.trim();
+
+      if (!trimmedUrl) {
+        setMessage('请输入 COG/GeoTIFF 远程地址。');
+        return;
+      }
+
+      setIsRunning(true);
+      setMessage('正在读取远程 COG/GeoTIFF');
+      setVectorOverlay(null);
+
+      const metadata = await readRemoteCogMetadata(trimmedUrl);
+      const outputBytes = await extractCogSubset(trimmedUrl, {
+        bbox: metadata.bounds,
+        bboxCrs: 4326,
+        level: metadata.level,
+        outputCrs: 4326,
+        initialHeaderBytes: metadata.headerBytes,
+      });
+      const inputName = remoteGeoTiffFileName(trimmedUrl);
+      const nextRaster = readRasterOverlay(outputBytes, inputName, inputName);
+
+      setRaster(nextRaster);
+      setLayerVisibilityState((current) => ({
+        ...current,
+        raster: true,
+        vectorOverlay: true,
+      }));
+      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setMessage(`已加载远程 COG/GeoTIFF：${inputName}（${nextRaster.width} x ${nextRaster.height}）`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setIsRunning(false);
     }
   }, []);
 
@@ -1111,7 +1210,11 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     message,
     uploadShapefileZip,
     uploadGeoJson,
+    uploadGeoParquetFile,
+    uploadGeoParquetUrl,
+    uploadGeoPackage,
     uploadGeoTiff,
+    uploadGeoTiffUrl,
     createBlankGeoJsonLayer,
     deleteUploadedLayer,
     saveGeoJsonLayer,
@@ -1135,7 +1238,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runTerrainAnalysis,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, saveGeoJsonLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoTiff, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
+  }), [activeLayerId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, saveGeoJsonLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -1431,6 +1534,126 @@ function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name
     nodata: raster.nodata,
     pixels: raster.pixels,
   };
+}
+
+type RemoteCogMetadata = {
+  bounds: [number, number, number, number];
+  headerBytes: number;
+  level: number;
+};
+
+type CogLevelInfo = {
+  level: number;
+  width: number;
+  height: number;
+};
+
+async function readRemoteCogMetadata(url: string): Promise<RemoteCogMetadata> {
+  const initialHeaderBytes = 256 * 1024;
+  const maxHeaderBytes = 8 * 1024 * 1024;
+  let headerBytes = initialHeaderBytes;
+  let lastError: unknown = null;
+
+  while (headerBytes <= maxHeaderBytes) {
+    const header = await fetchRemoteCogHeader(url, headerBytes);
+
+    try {
+      const stream = new CogStream(header);
+
+      try {
+        const bounds = parseLonLatBounds(stream.bounds_lonlat());
+        const levels = parseCogLevels(stream.levels_json());
+
+        return {
+          bounds,
+          headerBytes,
+          level: selectCogPreviewLevel(levels),
+        };
+      } finally {
+        stream.free();
+      }
+    } catch (error) {
+      lastError = error;
+
+      if (!isMoreCogHeaderNeeded(error)) {
+        throw error;
+      }
+
+      headerBytes *= 2;
+    }
+  }
+
+  throw new Error(`COG 头部超过 ${formatBytes(maxHeaderBytes)}，无法解析远程影像。${lastError ? ` ${errorMessage(lastError)}` : ''}`);
+}
+
+async function fetchRemoteCogHeader(url: string, byteLength: number) {
+  const response = await fetch(url, {
+    headers: {
+      Range: `bytes=0-${byteLength - 1}`,
+    },
+  });
+
+  if (response.status !== 206) {
+    throw new Error(`远程 COG 需要服务器支持 HTTP Range 请求；当前返回状态 ${response.status}。`);
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function parseLonLatBounds(bounds: Float64Array): [number, number, number, number] {
+  if (bounds.length < 4) {
+    throw new Error('远程 COG 缺少可转换为经纬度的空间范围。');
+  }
+
+  const result = Array.from(bounds.slice(0, 4)) as [number, number, number, number];
+
+  if (!result.every(Number.isFinite)) {
+    throw new Error('远程 COG 的经纬度范围无效。');
+  }
+
+  return result;
+}
+
+function parseCogLevels(levelsJson: string): CogLevelInfo[] {
+  const parsed = JSON.parse(levelsJson) as unknown;
+
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+
+  return parsed
+    .filter((level): level is CogLevelInfo => (
+      isRecord(level)
+      && Number.isFinite(level.level)
+      && Number.isFinite(level.width)
+      && Number.isFinite(level.height)
+    ))
+    .sort((left, right) => left.level - right.level);
+}
+
+function selectCogPreviewLevel(levels: CogLevelInfo[], maxPixels = 1_500_000) {
+  if (!levels.length) {
+    return 0;
+  }
+
+  return levels.find((level) => level.width * level.height <= maxPixels)?.level ?? levels[levels.length - 1].level;
+}
+
+function isMoreCogHeaderNeeded(error: unknown) {
+  const message = errorMessage(error).toLowerCase();
+
+  return message.includes('header')
+    || message.includes('buffer')
+    || message.includes('ifd')
+    || message.includes('offset');
+}
+
+function formatBytes(value: number) {
+  if (value < 1024 * 1024) {
+    return `${Math.round(value / 1024)} KB`;
+  }
+
+  return `${Math.round(value / (1024 * 1024))} MB`;
 }
 
 function writeRasterGeoTiff(raster: {
@@ -2260,6 +2483,40 @@ function ensureTifName(value: string) {
 
 function ensureGeoJsonName(value: string) {
   return /\.geojson$/i.test(value) ? value : `${value}.geojson`;
+}
+
+function geoJsonToolInputName(fileName: string) {
+  const baseName = basename(fileName || 'input')
+    .replace(/\.(geo)?parquet$/i, '')
+    .replace(/\.json$/i, '')
+    .replace(/\.geojson$/i, '')
+    .trim() || 'input';
+
+  return ensureGeoJsonName(baseName);
+}
+
+function remoteGeoParquetFileName(url: string) {
+  try {
+    const parsedUrl = new URL(url);
+    const pathName = decodeURIComponent(parsedUrl.pathname);
+    const fileName = basename(pathName);
+
+    return fileName || 'remote.geoparquet';
+  } catch {
+    return basename(url) || 'remote.geoparquet';
+  }
+}
+
+function remoteGeoTiffFileName(url: string) {
+  try {
+    const parsedUrl = new URL(url);
+    const pathName = decodeURIComponent(parsedUrl.pathname);
+    const fileName = basename(pathName);
+
+    return ensureTifName(fileName || 'remote-cog.tif');
+  } catch {
+    return ensureTifName(basename(url) || 'remote-cog.tif');
+  }
 }
 
 function terrainToolLabel(tool: TerrainToolId) {

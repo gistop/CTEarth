@@ -510,8 +510,8 @@ export function MapPanel() {
         ? getPointBounds(layer.points.features)
         : getGeoJsonBounds(layer.geojson);
 
-      if (bounds) {
-        map.fitBounds(padBounds(bounds, 0.14), { padding: 80, duration: 700 });
+      if (bounds && !fitValidBounds(map, bounds, 0.14, 80, 700)) {
+        setStatus('图层坐标超出经纬度范围，已跳过自动定位');
       }
 
       lastLayerNameRef.current = layer.id;
@@ -555,7 +555,7 @@ export function MapPanel() {
     );
     setLayersVisibility(map, rasterLayerIds, layerVisibility.raster);
     applyLayerOrder(map, layerOrder, layers, true, Boolean(vectorOverlay));
-    map.fitBounds(boundsFromCoordinates(raster.coordinates), { padding: 80, duration: 700 });
+    fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
   }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
   useEffect(() => {
@@ -622,8 +622,8 @@ export function MapPanel() {
 
     const bounds = getGeoJsonBounds(vectorOverlay.geojson);
 
-    if (bounds) {
-      map.fitBounds(padBounds(bounds, 0.12), { padding: 80, duration: 700 });
+    if (bounds && !fitValidBounds(map, bounds, 0.12, 80, 700)) {
+      setStatus('结果图层坐标超出经纬度范围，已跳过自动定位');
     }
   }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
@@ -1060,15 +1060,65 @@ function layerGroupIds(id: string, uploadedIds: Set<string>, hasRaster: boolean,
   return [];
 }
 
-function padBounds(bounds: [number, number, number, number], ratio: number): [[number, number], [number, number]] {
+function fitValidBounds(
+  map: maplibregl.Map,
+  bounds: [number, number, number, number],
+  ratio: number,
+  padding: number,
+  duration: number,
+) {
+  const paddedBounds = padBounds(bounds, ratio);
+
+  return paddedBounds ? fitValidLngLatBounds(map, paddedBounds, padding, duration) : false;
+}
+
+function fitValidLngLatBounds(
+  map: maplibregl.Map,
+  bounds: [[number, number], [number, number]],
+  padding: number,
+  duration: number,
+) {
+  if (!isValidLngLatBounds(bounds)) {
+    return false;
+  }
+
+  try {
+    map.fitBounds(bounds, { padding, duration });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function padBounds(bounds: [number, number, number, number], ratio: number): [[number, number], [number, number]] | null {
   const [minLon, minLat, maxLon, maxLat] = bounds;
+
+  if (!bounds.every(Number.isFinite) || minLon > maxLon || minLat > maxLat || minLat < -90 || maxLat > 90) {
+    return null;
+  }
+
   const lonPad = Math.max((maxLon - minLon) * ratio, 0.01);
   const latPad = Math.max((maxLat - minLat) * ratio, 0.01);
 
   return [
-    [minLon - lonPad, minLat - latPad],
-    [maxLon + lonPad, maxLat + latPad],
+    [minLon - lonPad, clampLatitude(minLat - latPad)],
+    [maxLon + lonPad, clampLatitude(maxLat + latPad)],
   ];
+}
+
+function isValidLngLatBounds(bounds: [[number, number], [number, number]]) {
+  const [[west, south], [east, north]] = bounds;
+
+  return [west, south, east, north].every(Number.isFinite)
+    && south >= -90
+    && south <= 90
+    && north >= -90
+    && north <= 90
+    && south <= north;
+}
+
+function clampLatitude(value: number) {
+  return Math.max(-90, Math.min(90, value));
 }
 
 function boundsFromCoordinates(
