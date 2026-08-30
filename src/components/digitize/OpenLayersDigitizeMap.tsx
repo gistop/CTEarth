@@ -24,7 +24,7 @@ import type Geometry from 'ol/geom/Geometry.js';
 import MultiPolygon from 'ol/geom/MultiPolygon.js';
 import Polygon from 'ol/geom/Polygon.js';
 import type { BasemapId } from '../map/MapCommandContext';
-import { defaultUploadedLayerStyle, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
+import { displayLayerName, defaultUploadedLayerStyle, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
 import { useDigitize } from './DigitizeContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
@@ -270,7 +270,7 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
     digitize.setFeatureCount(features.length);
 
     if (visible) {
-      digitize.setStatus(`正在编辑图层：${editableLayer.fileName}，${features.length} 个要素。`);
+      digitize.setStatus(`正在编辑图层：${displayLayerName(editableLayer.fileName)}，${features.length} 个要素。`);
     }
   }, [digitize.rasterAoiActive, editableLayer?.id, editableLayer?.geojson, editableLayer?.selectedFeatureIndexes, editableLayer?.fileName, uploadedLayerStyles, visible]);
 

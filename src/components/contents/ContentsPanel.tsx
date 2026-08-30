@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Database,
-  Download,
   GripVertical,
   Grid2X2,
   Layers,
@@ -15,18 +14,23 @@ import {
   TableProperties,
   Trash2,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import { useAttributeTable } from '../attributes/AttributeTableContext';
 import { AddDataSplitButton } from './AddDataSplitButton';
+import { SaveAsSplitButton } from './SaveAsSplitButton';
 import {
   defaultBasemapStyle,
   defaultRasterStyle,
   defaultUploadedLayerStyle,
   defaultVectorOverlayStyle,
+  displayLayerName,
+  getPointBounds,
   useGis,
   type BasemapLayerStyle,
   type LayerOrderId,
   type RasterLayerStyle,
+  type RasterOverlay,
   type UploadedLayer,
   type UploadedLayerStyle,
   type VectorOverlayStyle,
@@ -35,7 +39,7 @@ import {
 type LayerListItem =
   | { id: 'basemap'; kind: 'basemap'; label: string; checked: boolean }
   | { id: `uploaded:${string}`; kind: 'uploaded'; layer: UploadedLayer; label: string; checked: boolean }
-  | { id: 'raster'; kind: 'raster'; label: string; checked: boolean }
+  | { id: `raster:${string}`; kind: 'raster'; raster: RasterOverlay; label: string; checked: boolean }
   | { id: 'vectorOverlay'; kind: 'vectorOverlay'; label: string; checked: boolean };
 
 export function ContentsPanel() {
@@ -52,10 +56,10 @@ function LayerSection() {
   const [dropTargetId, setDropTargetId] = useState<LayerOrderId | null>(null);
   const [expandedStyleId, setExpandedStyleId] = useState<LayerOrderId | null>(null);
   const {
-    layer,
     layers,
     activeLayerId,
     raster,
+    rasters,
     vectorOverlay,
     message,
     basemapStyle,
@@ -63,12 +67,15 @@ function LayerSection() {
     vectorOverlayStyle,
     uploadedLayerStyles,
     layerVisibility,
+    rasterLayerVisibility,
     uploadedLayerVisibility,
     layerOrder,
     createBlankGeoJsonLayer,
     deleteUploadedLayer,
     saveGeoJsonLayer,
+    saveGeoPackageLayer,
     setLayerVisibility,
+    setRasterLayerVisibility,
     setUploadedLayerVisibility,
     setAllLayerVisibility,
     setBasemapStyle,
@@ -77,26 +84,52 @@ function LayerSection() {
     setUploadedLayerStyle,
     moveLayerOrder,
     setActiveLayer,
+    setActiveRaster,
+    zoomToLayer,
   } = useGis();
   const { openAttributeTable } = useAttributeTable();
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
 
   const layerItems = useMemo(
     () => buildLayerItems({
       layers,
       layerOrder,
       layerVisibility,
+      rasterLayerVisibility,
+      rasters,
       uploadedLayerVisibility,
-      hasRaster: Boolean(raster),
-      rasterLabel: raster ? `${raster.name} ${raster.width} x ${raster.height}` : '',
-      vectorOverlayLabel: vectorOverlay?.name ?? '',
+      vectorOverlayLabel: displayLayerName(vectorOverlay?.name ?? ''),
       hasVectorOverlay: Boolean(vectorOverlay),
     }),
-    [layerOrder, layerVisibility, layers, raster, uploadedLayerVisibility, vectorOverlay],
+    [layerOrder, layerVisibility, layers, rasterLayerVisibility, rasters, uploadedLayerVisibility, vectorOverlay],
   );
 
   const allVisible = layerItems.every((item) => item.checked);
   const someVisible = layerItems.some((item) => item.checked);
-  const selectedUploadedLayer = activeLayerId ? layers.find((item) => item.id === activeLayerId) ?? null : null;
+  const selectedUploadedLayer = selectedItemId?.startsWith('uploaded:')
+    ? layers.find((item) => `uploaded:${item.id}` === selectedItemId) ?? null
+    : null;
+  const selectedVectorOverlay = selectedItemId === 'vectorOverlay' ? vectorOverlay : null;
+  const selectedLayerBounds = selectedUploadedLayer ? getLayerBounds(selectedUploadedLayer) : null;
+
+  useEffect(() => {
+    if (activeLayerId) {
+      setSelectedItemId(`uploaded:${activeLayerId}`);
+      return;
+    }
+
+    if (raster) {
+      setSelectedItemId(`raster:${raster.id}`);
+      return;
+    }
+
+    if (vectorOverlay) {
+      setSelectedItemId('vectorOverlay');
+      return;
+    }
+
+    setSelectedItemId(null);
+  }, [activeLayerId, raster?.id, vectorOverlay]);
 
   useEffect(() => {
     if (rootCheckboxRef.current) {
@@ -119,12 +152,20 @@ function LayerSection() {
       return;
     }
 
-    if (!window.confirm(`删除图层 ${selectedUploadedLayer.fileName}？`)) {
+    if (!window.confirm(`删除图层 ${displayLayerName(selectedUploadedLayer.fileName)}？`)) {
       return;
     }
 
     deleteUploadedLayer(selectedUploadedLayer.id);
     setExpandedStyleId((current) => (current === `uploaded:${selectedUploadedLayer.id}` ? null : current));
+  };
+
+  const handleZoomToSelectedLayer = () => {
+    if (!selectedUploadedLayer || !selectedLayerBounds) {
+      return;
+    }
+
+    zoomToLayer(selectedUploadedLayer.id);
   };
 
   const handleDrop = (targetId: LayerOrderId) => {
@@ -152,10 +193,15 @@ function LayerSection() {
           type="button"
           title="打开属性表"
           aria-label="打开当前矢量图层属性表"
-          disabled={!layer}
+          disabled={!selectedUploadedLayer && !selectedVectorOverlay}
           onClick={() => {
-            if (layer) {
-              openAttributeTable(layer.id, layer.fileName);
+            if (selectedUploadedLayer) {
+              openAttributeTable(selectedUploadedLayer.id, displayLayerName(selectedUploadedLayer.fileName));
+              return;
+            }
+
+            if (selectedVectorOverlay) {
+              openAttributeTable('vectorOverlay', displayLayerName(selectedVectorOverlay.name));
             }
           }}
         >
@@ -173,20 +219,42 @@ function LayerSection() {
           type="button"
           title="保存当前 GeoJSON 图层"
           aria-label="保存当前 GeoJSON 图层"
-          disabled={!layer}
-          onClick={() => void saveGeoJsonLayer(layer?.id)}
+          disabled={!selectedUploadedLayer && !selectedVectorOverlay}
+          onClick={() => {
+            if (selectedUploadedLayer) {
+              void saveGeoJsonLayer(selectedUploadedLayer.id);
+              return;
+            }
+
+            if (selectedVectorOverlay) {
+              void saveGeoJsonLayer('vectorOverlay');
+            }
+          }}
         >
           <Save size={18} />
         </button>
-        <button
-          type="button"
-          title="另存当前 GeoJSON 图层"
-          aria-label="另存当前 GeoJSON 图层"
-          disabled={!layer}
-          onClick={() => void saveGeoJsonLayer(layer?.id, { saveAs: true })}
-        >
-          <Download size={18} />
-        </button>
+        <SaveAsSplitButton
+          disabled={!selectedUploadedLayer && !selectedVectorOverlay}
+          onExport={(format) => {
+            if (selectedUploadedLayer) {
+              if (format === 'geojson') {
+                return saveGeoJsonLayer(selectedUploadedLayer.id, { saveAs: true });
+              }
+
+              return saveGeoPackageLayer(selectedUploadedLayer.id, { saveAs: true });
+            }
+
+            if (selectedVectorOverlay) {
+              if (format === 'geojson') {
+                return saveGeoJsonLayer('vectorOverlay', { saveAs: true, fileName: selectedVectorOverlay.name });
+              }
+
+              return saveGeoPackageLayer('vectorOverlay', { saveAs: true, fileName: selectedVectorOverlay.name });
+            }
+
+            return undefined;
+          }}
+        />
         <AddDataSplitButton />
         <button
           type="button"
@@ -196,6 +264,15 @@ function LayerSection() {
           onClick={handleDeleteSelectedLayer}
         >
           <Trash2 size={18} />
+        </button>
+        <button
+          type="button"
+          title="缩放到图层"
+          aria-label="缩放到当前图层范围"
+          disabled={!selectedUploadedLayer || !selectedLayerBounds}
+          onClick={handleZoomToSelectedLayer}
+        >
+          <ZoomIn size={18} />
         </button>
       </div>
       <section className="layer-tree contents-layer-tree">
@@ -221,7 +298,7 @@ function LayerSection() {
               <LayerRow
                 checked={item.checked}
                 dragState={item.id === draggingId ? 'dragging' : item.id === dropTargetId ? 'target' : undefined}
-                isSelected={item.kind === 'uploaded' && item.layer.id === (activeLayerId ?? layer?.id)}
+                isSelected={selectedItemId === item.id}
                 isStyleOpen={isStyleOpen}
                 label={item.label}
                 orderId={item.id}
@@ -235,6 +312,8 @@ function LayerSection() {
                 onChange={(checked) => {
                   if (item.kind === 'uploaded') {
                     setUploadedLayerVisibility(item.layer.id, checked);
+                  } else if (item.kind === 'raster') {
+                    setRasterLayerVisibility(item.raster.id, checked);
                   } else {
                     setLayerVisibility(item.kind, checked);
                   }
@@ -250,11 +329,29 @@ function LayerSection() {
                 }}
                 onDragStart={() => setDraggingId(item.id)}
                 onDrop={() => handleDrop(item.id)}
-                onSelect={item.kind === 'uploaded' ? () => setActiveLayer(item.layer.id) : undefined}
+                onSelect={item.kind === 'uploaded'
+                  ? () => {
+                    setSelectedItemId(item.id);
+                    setActiveLayer(item.layer.id);
+                  }
+                  : item.kind === 'raster'
+                    ? () => {
+                      setSelectedItemId(item.id);
+                      setActiveRaster(item.raster.id);
+                    }
+                    : item.kind === 'vectorOverlay'
+                      ? () => setSelectedItemId(item.id)
+                      : undefined}
                 onToggleStyle={() => {
                   setExpandedStyleId((current) => (current === item.id ? null : item.id));
                   if (item.kind === 'uploaded') {
+                    setSelectedItemId(item.id);
                     setActiveLayer(item.layer.id);
+                  } else if (item.kind === 'raster') {
+                    setSelectedItemId(item.id);
+                    setActiveRaster(item.raster.id);
+                  } else if (item.kind === 'vectorOverlay') {
+                    setSelectedItemId(item.id);
                   }
                 }}
               />
@@ -287,7 +384,7 @@ function LayerSection() {
           );
         })}
 
-        {layers.length === 0 ? (
+        {layers.length === 0 && rasters.length === 0 ? (
           <div className="layer-note">点击上方添加数据按钮，选择 Shapefile ZIP 或 GeoJSON。</div>
         ) : null}
         <div className="layer-note status">{message}</div>
@@ -577,32 +674,79 @@ function RangeControl({
   );
 }
 
+function getLayerBounds(layer: UploadedLayer) {
+  return layer.points.features.length > 0
+    ? getPointBounds(layer.points.features)
+    : getGeoJsonBounds(layer.geojson);
+}
+
+function getGeoJsonBounds(geojson: { features: unknown[] }): [number, number, number, number] | null {
+  const bounds: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+
+  for (const feature of geojson.features) {
+    if (!isRecord(feature) || !isRecord(feature.geometry)) {
+      continue;
+    }
+
+    expandCoordinateBounds(feature.geometry.coordinates, bounds);
+  }
+
+  if (!Number.isFinite(bounds[0])) {
+    return null;
+  }
+
+  return bounds;
+}
+
+function expandCoordinateBounds(value: unknown, bounds: [number, number, number, number]) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  if (value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+    const lon = Number(value[0]);
+    const lat = Number(value[1]);
+    bounds[0] = Math.min(bounds[0], lon);
+    bounds[1] = Math.min(bounds[1], lat);
+    bounds[2] = Math.max(bounds[2], lon);
+    bounds[3] = Math.max(bounds[3], lat);
+    return;
+  }
+
+  value.forEach((item) => expandCoordinateBounds(item, bounds));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
 function buildLayerItems({
   layers,
   layerOrder,
   layerVisibility,
+  rasterLayerVisibility,
+  rasters,
   uploadedLayerVisibility,
-  hasRaster,
-  rasterLabel,
   hasVectorOverlay,
   vectorOverlayLabel,
 }: {
   layers: UploadedLayer[];
   layerOrder: LayerOrderId[];
   layerVisibility: ReturnType<typeof useGis>['layerVisibility'];
+  rasterLayerVisibility: Record<string, boolean>;
+  rasters: RasterOverlay[];
   uploadedLayerVisibility: Record<string, boolean>;
-  hasRaster: boolean;
-  rasterLabel: string;
   hasVectorOverlay: boolean;
   vectorOverlayLabel: string;
 }) {
   const uploadedById = new Map(layers.map((item) => [item.id, item]));
+  const rasterById = new Map(rasters.map((item) => [item.id, item]));
   const seen = new Set<LayerOrderId>();
   const normalizedOrder = [
     ...layerOrder,
     ...layers.map((item) => `uploaded:${item.id}` as const),
+    ...rasters.map((item) => `raster:${item.id}` as const),
     'basemap' as const,
-    ...(hasRaster ? ['raster' as const] : []),
     ...(hasVectorOverlay ? ['vectorOverlay' as const] : []),
   ];
   const items: LayerListItem[] = [];
@@ -620,10 +764,6 @@ function buildLayerItems({
     }
 
     if (id === 'raster') {
-      if (hasRaster) {
-        items.push({ id, kind: 'raster', label: rasterLabel, checked: layerVisibility.raster });
-      }
-
       continue;
     }
 
@@ -635,16 +775,40 @@ function buildLayerItems({
       continue;
     }
 
-    const layerId = id.slice('uploaded:'.length);
-    const uploadedLayer = uploadedById.get(layerId);
+    if (id.startsWith('uploaded:')) {
+      const itemId = id as `uploaded:${string}`;
+      const layerId = id.slice('uploaded:'.length);
+      const uploadedLayer = uploadedById.get(layerId);
 
-    if (uploadedLayer) {
+      if (!uploadedLayer) {
+        continue;
+      }
+
       items.push({
-        id,
+        id: itemId,
         kind: 'uploaded',
         layer: uploadedLayer,
-        label: uploadedLayer.fileName,
+        label: displayLayerName(uploadedLayer.fileName),
         checked: uploadedLayerVisibility[uploadedLayer.id] ?? true,
+      });
+      continue;
+    }
+
+    if (id.startsWith('raster:')) {
+      const itemId = id as `raster:${string}`;
+      const rasterId = id.slice('raster:'.length);
+      const raster = rasterById.get(rasterId);
+
+      if (!raster) {
+        continue;
+      }
+
+      items.push({
+        id: itemId,
+        kind: 'raster',
+        raster,
+        label: `${displayLayerName(raster.name)} ${raster.width} x ${raster.height}`,
+        checked: rasterLayerVisibility[raster.id] ?? layerVisibility.raster,
       });
     }
   }

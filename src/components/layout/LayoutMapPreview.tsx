@@ -357,7 +357,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
     const normalizedOrder = normalizeLayoutLayerOrder(
       layerOrder,
       layers.map((item) => item.id),
-      Boolean(raster),
+      raster?.id ?? null,
       Boolean(vectorOverlay),
     );
     const zIndexByLayerId = new globalThis.Map<LayerOrderId, number>();
@@ -374,7 +374,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
     });
 
     graticuleLayerRef.current?.setZIndex(basemapZIndex + 0.5);
-    rasterLayerRef.current?.setZIndex(zIndexByLayerId.get('raster') ?? 0);
+    rasterLayerRef.current?.setZIndex(zIndexByLayerId.get(raster ? `raster:${raster.id}` : 'raster') ?? zIndexByLayerId.get('raster') ?? 0);
     vectorOverlayLayerRef.current?.setZIndex(zIndexByLayerId.get('vectorOverlay') ?? 0);
 
     uploadedLayersRef.current.forEach(({ layer }, layerId) => {
@@ -481,16 +481,17 @@ function createLayoutTiandituTiles(layer: 'vec' | 'cva') {
 function normalizeLayoutLayerOrder(
   layerOrder: LayerOrderId[],
   uploadedLayerIds: string[],
-  hasRaster: boolean,
+  rasterId: string | null,
   hasVectorOverlay: boolean,
 ) {
   const seen = new Set<LayerOrderId>();
+  const rasterOrderId = rasterId ? `raster:${rasterId}` as const : null;
   const order = [
     ...layerOrder,
     ...uploadedLayerIds.map((id) => `uploaded:${id}` as const),
-    'basemap' as const,
-    ...(hasRaster ? ['raster' as const] : []),
     ...(hasVectorOverlay ? ['vectorOverlay' as const] : []),
+    ...(rasterOrderId ? [rasterOrderId] : []),
+    'basemap' as const,
   ];
 
   return order.filter((id) => {

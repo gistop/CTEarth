@@ -31,6 +31,7 @@ import {
   type SlopeUnits,
   type TerrainParameters,
   type TerrainToolId,
+  displayLayerName,
 } from '../../gisStore';
 
 const DIRECT_API_URL = 'https://api.deepseek.com/chat/completions';
@@ -82,6 +83,7 @@ const systemPrompt = [
   'Reply in the user language.',
   'When the user asks to operate the current map, use the available GIS tools instead of only explaining.',
   'The GIS runtime is entirely in the browser with WASM. Tool distances and cell sizes use the current input data coordinate units.',
+  'For IDW on WGS84 lon/lat point layers, CTEarth converts a cellSize larger than the layer degree extent from meters to approximate degrees before calling WASM.',
   'If required parameters or layers are missing, ask one short follow-up question.',
   'When the user asks for choices, use A. B. C. D. option format.',
 ].join('\n');
@@ -297,7 +299,7 @@ const gisTools: DeepSeekTool[] = [
           },
           cellSize: {
             type: 'number',
-            description: 'Positive output pixel size in the input layer coordinate units.',
+            description: 'Positive output pixel size. For WGS84 lon/lat point layers, meter-sized values such as 1000 are converted to approximate degrees by CTEarth.',
           },
           weight: {
             type: 'number',
@@ -596,7 +598,7 @@ function TextPart() {
 
 function Composer() {
   const { layer } = useGis();
-  const placeholder = layer ? `询问 ${layer.fileName}` : '询问地图、图层或分析问题...';
+  const placeholder = layer ? `询问 ${displayLayerName(layer.fileName)}` : '询问地图、图层或分析问题...';
 
   return (
     <ComposerPrimitive.Root className="ai-composer-root">
@@ -647,7 +649,7 @@ function getSelectedMapContext(gis: GisRuntime): SelectedMapContext | null {
     hasOtherVectorLayers: gis.layers.some((item) => item.id !== layer.id),
     hasRaster: Boolean(gis.raster),
     hasVectorOverlay: Boolean(gis.vectorOverlay),
-    layerName: layer.fileName,
+    layerName: displayLayerName(layer.fileName),
     numericFieldCount: layer.numericFields.length,
     selectedCount: layer.selectedFeatureIndexes.length,
     totalLayerCount: gis.layers.length,
@@ -725,6 +727,71 @@ function getFeatureGeometryType(feature: unknown) {
   }
 
   return feature.geometry.type;
+}
+
+function layerBbox(layer: GisRuntime['layers'][number]): [number, number, number, number] | null {
+  let bbox: [number, number, number, number] | null = null;
+
+  for (const feature of layer.geojson.features) {
+    const points = featureCoordinatePairs(feature);
+
+    for (const [x, y] of points) {
+      bbox = bbox
+        ? [
+          Math.min(bbox[0], x),
+          Math.min(bbox[1], y),
+          Math.max(bbox[2], x),
+          Math.max(bbox[3], y),
+        ]
+        : [x, y, x, y];
+    }
+  }
+
+  return bbox;
+}
+
+function layerCoordinateHint(layer: GisRuntime['layers'][number]) {
+  const bbox = layerBbox(layer);
+
+  if (!bbox) {
+    return 'unknown';
+  }
+
+  return bbox[0] >= -180 && bbox[2] <= 180 && bbox[1] >= -90 && bbox[3] <= 90
+    ? 'likely_wgs84_lonlat_degrees'
+    : 'projected_or_local_map_units';
+}
+
+function featureCoordinatePairs(feature: unknown) {
+  if (!isPlainObject(feature) || !isPlainObject(feature.geometry)) {
+    return [];
+  }
+
+  const points: [number, number][] = [];
+  collectCoordinatePairs(feature.geometry.coordinates, points);
+
+  if (Array.isArray(feature.geometry.geometries)) {
+    feature.geometry.geometries.forEach((geometry) => {
+      if (isPlainObject(geometry)) {
+        collectCoordinatePairs(geometry.coordinates, points);
+      }
+    });
+  }
+
+  return points;
+}
+
+function collectCoordinatePairs(value: unknown, points: [number, number][]) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  if (value.length >= 2 && typeof value[0] === 'number' && typeof value[1] === 'number') {
+    points.push([value[0], value[1]]);
+    return;
+  }
+
+  value.forEach((item) => collectCoordinatePairs(item, points));
 }
 
 function getFeaturePropertiesPreview(feature: unknown) {
@@ -996,16 +1063,18 @@ function summarizeGisContext(gis: GisRuntime) {
     isRunning: gis.isRunning,
     message: gis.message,
     activeLayerId: gis.layer?.id ?? null,
-    activeLayerName: gis.layer?.fileName ?? null,
+    activeLayerName: gis.layer ? displayLayerName(gis.layer.fileName) : null,
     layers: gis.layers.map((layer) => ({
       id: layer.id,
-      fileName: layer.fileName,
+      fileName: displayLayerName(layer.fileName),
       featureCount: layer.geojson.features.length,
       pointCount: layer.points.features.length,
       fields: layer.fields,
       numericFields: layer.numericFields,
       selectedField: layer.selectedField,
       selectedFeatureCount: layer.selectedFeatureIndexes.length,
+      bbox: layerBbox(layer),
+      coordinateHint: layerCoordinateHint(layer),
       selectedFeatureIndexes: layer.selectedFeatureIndexes,
       selectedFeatures: layer.selectedFeatureIndexes.slice(0, 5).flatMap((featureIndex) => {
         const feature = layer.geojson.features[featureIndex];
@@ -1034,7 +1103,7 @@ function summarizeGisContext(gis: GisRuntime) {
       } : null,
       vectorOverlay: gis.vectorOverlay ? {
         id: 'vectorOverlay',
-        name: gis.vectorOverlay.name,
+        name: displayLayerName(gis.vectorOverlay.name),
         featureCount: gis.vectorOverlay.geojson.features.length,
         visible: gis.layerVisibility.vectorOverlay,
       } : null,
@@ -1306,7 +1375,7 @@ async function runAgentBuffer(
     outputName: overlay?.name ?? params.outputName,
     featureCount,
     sourceLayerId: gis.layer.id,
-    sourceLayerName: gis.layer.fileName,
+    sourceLayerName: displayLayerName(gis.layer.fileName),
     parameters: params,
   });
 }
@@ -1323,36 +1392,33 @@ async function runAgentIdw(
     ]);
   }
 
-  if (!gis.layer) {
+  const inputLayer = gis.layer?.points.features.length ? gis.layer : gis.layers.find((layer) => layer.points.features.length > 0) ?? null;
+
+  if (!inputLayer) {
     return blockedToolResult('idw_interpolation', 'No active point layer is available. Please upload or select a point layer first.', [
-      'Active input layer exists: no',
+      'Point input layer exists: no',
     ]);
   }
 
-  if (gis.layer.points.features.length < 1) {
-    return blockedToolResult('idw_interpolation', 'The active layer has no point features for IDW.', [
-      'Active layer contains point features: no',
+  if (inputLayer.numericFields.length < 1) {
+    return blockedToolResult('idw_interpolation', 'The selected point layer has no numeric field for IDW.', [
+      'Point layer has numeric fields: no',
     ]);
   }
 
-  if (gis.layer.numericFields.length < 1) {
-    return blockedToolResult('idw_interpolation', 'The active layer has no numeric field for IDW.', [
-      'Active layer has numeric fields: no',
-    ]);
-  }
+  const field = stringArg(input.field, inputLayer.selectedField || inputLayer.numericFields[0]);
 
-  const field = stringArg(input.field, gis.layer.selectedField || gis.layer.numericFields[0]);
-
-  if (!gis.layer.numericFields.includes(field)) {
-    return blockedToolResult('idw_interpolation', `Field "${field}" is not a numeric field on the active layer.`, [
+  if (!inputLayer.numericFields.includes(field)) {
+    return blockedToolResult('idw_interpolation', `Field "${field}" is not a numeric field on the selected point layer.`, [
       'Requested field exists in numeric fields: no',
     ], {
-      numericFields: gis.layer.numericFields,
+      numericFields: inputLayer.numericFields,
     });
   }
 
   const cellSize = numberArg(input.cellSize);
   const params: IdwParameters = {
+    layerId: inputLayer.id,
     field,
     outputName: stringArg(input.outputName, 'agent-idw.tif'),
     cellSize: Number.isFinite(cellSize) && cellSize > 0 ? String(cellSize) : '0.001',
@@ -1388,8 +1454,8 @@ async function runAgentIdw(
     min: raster.min,
     max: raster.max,
     epsg: raster.epsg ?? null,
-    sourceLayerId: gis.layer.id,
-    sourceLayerName: gis.layer.fileName,
+    sourceLayerId: inputLayer.id,
+    sourceLayerName: displayLayerName(inputLayer.fileName),
     parameters: params,
   });
 }

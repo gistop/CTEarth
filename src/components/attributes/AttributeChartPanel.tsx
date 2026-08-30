@@ -11,7 +11,7 @@ import {
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import { ChartColumn } from 'lucide-react';
-import { useGis, type UploadedLayer } from '../../gisStore';
+import { displayLayerName, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
 import { useAttributeTable } from './AttributeTableContext';
 
 use([
@@ -36,16 +36,33 @@ type AttributeChartRow = {
   properties: Record<string, unknown>;
 };
 
+type AttributeLayer = {
+  id: string;
+  fileName: string;
+  geojson: GeoJsonFeatureCollection;
+  fields: string[];
+  selectedFeatureIndexes: number[];
+};
+
 export function AttributeChartPanel({ params }: IDockviewPanelProps<AttributeChartPanelParams>) {
   const layerId = params.layerId ?? null;
-  const { layers } = useGis();
+  const { layers, vectorOverlay } = useGis();
   const { getTableState } = useAttributeTable();
   const tableState = getTableState(layerId);
   const chartElementRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<ECharts | null>(null);
-  const layer = useMemo(
-    () => layers.find((item) => item.id === layerId) ?? null,
-    [layerId, layers],
+  const vectorOverlayLayer = useMemo<AttributeLayer | null>(() => (
+    layerId === 'vectorOverlay' && vectorOverlay ? {
+      id: 'vectorOverlay',
+      fileName: vectorOverlay.name,
+      geojson: vectorOverlay.geojson,
+      fields: getFields(vectorOverlay.geojson.features),
+      selectedFeatureIndexes: [],
+    } : null
+  ), [layerId, vectorOverlay]);
+  const layer = useMemo<AttributeLayer | null>(
+    () => layers.find((item) => item.id === layerId) ?? vectorOverlayLayer,
+    [layerId, layers, vectorOverlayLayer],
   );
   const fields = layer?.fields ?? [];
   const defaultField = useMemo(
@@ -121,7 +138,7 @@ export function AttributeChartPanel({ params }: IDockviewPanelProps<AttributeCha
   }
 
   return (
-    <section className="attribute-chart-panel" aria-label={`${layer.fileName} 属性统计图`}>
+    <section className="attribute-chart-panel" aria-label={`${displayLayerName(layer.fileName)} 属性统计图`}>
       <header className="attribute-chart-toolbar">
         <label>
           <span>字段</span>
@@ -157,7 +174,7 @@ export function AttributeChartPanel({ params }: IDockviewPanelProps<AttributeCha
   );
 }
 
-function chooseDefaultField(layer: UploadedLayer | null, preferredField?: string) {
+function chooseDefaultField(layer: AttributeLayer | null, preferredField?: string) {
   if (!layer) {
     return '';
   }
@@ -179,7 +196,7 @@ function chooseDefaultField(layer: UploadedLayer | null, preferredField?: string
 }
 
 function buildRows(
-  layer: UploadedLayer | null,
+  layer: AttributeLayer | null,
   query: string,
   showSelectedOnly: boolean,
   selectedIndexes: Set<number>,
@@ -408,4 +425,16 @@ function formatNumber(value: number) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function getFields(features: unknown[]) {
+  const fields = new Set<string>();
+
+  for (const feature of features) {
+    const properties = isRecord(feature) && isRecord(feature.properties) ? feature.properties : {};
+
+    Object.keys(properties).forEach((key) => fields.add(key));
+  }
+
+  return [...fields].sort();
 }

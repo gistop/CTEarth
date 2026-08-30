@@ -41,6 +41,13 @@ If a previous PWA cache causes stale content during development, use a different
 npm run dev -- --port 5174
 ```
 
+## Technical Documentation
+
+Developer notes live in `docs/`.
+
+- `docs/map-projection.md`: language index for map engines, CRS conventions,
+  supported projections, projection conversion rules, and development caveats.
+
 ## Build
 
 ```bash

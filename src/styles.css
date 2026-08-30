@@ -377,40 +377,207 @@ button {
   font-size: 12px;
 }
 
-.ribbon-crs-switcher {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 64px;
-  width: 236px;
+.ribbon-tools-accessory:has(.ribbon-coordinate-system) {
+  grid-auto-columns: 308px;
 }
 
-.ribbon-crs-switcher button {
+.ribbon-coordinate-system {
+  display: grid;
+  grid-template-columns: minmax(0, 238px) 56px;
+  grid-template-rows: 26px 26px;
+  align-content: center;
+  align-items: center;
+  gap: 4px 6px;
+  position: relative;
+  width: 300px;
+  height: 64px;
+  min-width: 0;
+}
+
+.ribbon-crs-search,
+.ribbon-crs-select-button {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: auto;
+  width: 100%;
   min-width: 0;
-  height: 28px;
-  min-height: 0;
-  padding: 0 9px;
+  height: 26px;
   border: 1px solid #b9c4ce;
   border-radius: 4px;
   background: #ffffff;
   color: #33475b;
+}
+
+.ribbon-crs-search {
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.ribbon-crs-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #263849;
   font-size: 12px;
+}
+
+.ribbon-crs-search input::placeholder {
+  color: #7d8b99;
+}
+
+.ribbon-crs-selector {
+  position: relative;
+  min-width: 0;
+}
+
+.ribbon-tools .ribbon-coordinate-system button {
+  display: inline-flex;
+  grid-template-rows: none;
+  place-items: initial;
+  min-height: 0;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.ribbon-crs-select-button {
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 6px 0 8px;
+  cursor: pointer;
+}
+
+.ribbon-crs-select-button span {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  height: 100%;
+  width: auto;
+  min-width: 0;
+  overflow: hidden;
+  padding-top: 1px;
+  line-height: 1;
+  text-align: left;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ribbon-crs-switcher button.is-selected {
+.ribbon-crs-select-button.is-open,
+.ribbon-crs-select-button:hover,
+.ribbon-crs-search:focus-within {
   border-color: #91c4e6;
-  background: #dff0fb;
+  box-shadow: 0 0 0 1px rgb(145 196 230 / 40%);
+}
+
+.ribbon-crs-apply-button {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 1px solid #87bede;
+  background: #e8f5fc;
+  color: #0f5d8e;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.ribbon-crs-menu {
+  display: flex;
+  position: absolute;
+  top: 29px;
+  left: 0;
+  z-index: 50;
+  min-height: 96px;
+  max-height: 236px;
+  border: 1px solid #bac6d1;
+  border-radius: 5px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgb(18 32 48 / 18%);
+}
+
+.ribbon-crs-menu-column {
+  display: flex;
+  flex-direction: column;
+  width: 196px;
+  min-width: 196px;
+  max-height: 236px;
+  overflow-y: auto;
+  padding: 4px;
+  border-right: 1px solid #e3e8ed;
+}
+
+.ribbon-crs-menu-column:last-child {
+  border-right: 0;
+}
+
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 0;
+  background: transparent;
+  color: #263849;
+  cursor: pointer;
+  gap: 6px;
+}
+
+.ribbon-crs-menu-item span {
+  display: block;
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ribbon-crs-menu-item small {
+  color: #0f5d8e;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.ribbon-crs-submenu-icon {
+  flex: 0 0 auto;
+  color: #7d8b99;
+}
+
+.ribbon-crs-check-icon[aria-hidden="true"] {
+  visibility: hidden;
+}
+
+.ribbon-crs-menu-item:hover,
+.ribbon-crs-menu-item.is-active,
+.ribbon-crs-menu-item.is-highlighted {
+  background: #e8f5fc;
   color: #0f5d8e;
 }
 
-.ribbon-crs-switcher button:disabled {
+.ribbon-crs-menu-item.is-selected {
+  color: #0b547f;
+  font-weight: 600;
+}
+
+.ribbon-crs-menu-item:hover .ribbon-crs-submenu-icon,
+.ribbon-crs-menu-item.is-active .ribbon-crs-submenu-icon {
+  color: #0f5d8e;
+}
+
+.ribbon-coordinate-system button:disabled,
+.ribbon-crs-search:has(input:disabled) {
   color: #9aa6b2;
   background: #eef2f5;
+  cursor: default;
+  box-shadow: none;
 }
 
 .layout-page-settings {
@@ -528,6 +695,50 @@ button {
   text-align: center;
   line-height: 1.15;
   font-size: 12px;
+}
+
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-select-button {
+  width: 100%;
+  height: 26px;
+  min-height: 0;
+}
+
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-apply-button {
+  width: 56px;
+  height: 56px;
+  min-height: 0;
+}
+
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-select-button span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 1;
+  height: 100%;
+  width: auto;
+  min-width: 0;
+  padding-top: 1px;
+  line-height: 1;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-menu-item span {
+  display: block;
+  justify-content: initial;
+  width: auto;
+  overflow-wrap: normal;
+  text-align: left;
+  line-height: normal;
+}
+
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-menu-item:hover,
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-menu-item.is-active,
+.ribbon-tools .ribbon-coordinate-system .ribbon-crs-menu-item.is-highlighted {
+  border-color: transparent;
+  background: #e8f5fc;
+  color: #0f5d8e;
 }
 
 .ribbon-tools .ribbon-raster-edit > button {
@@ -1167,6 +1378,84 @@ button {
   color: #0f5d8e;
 }
 
+.save-as-split {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+}
+
+.contents-tabs .save-as-split button {
+  height: 26px;
+  min-width: 0;
+}
+
+.contents-tabs .save-as-main {
+  width: 26px;
+  border-right-color: #d8e0e7;
+  border-radius: 4px 0 0 4px;
+}
+
+.contents-tabs .save-as-toggle {
+  width: 18px;
+  border-left: 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.contents-tabs .save-as-toggle.is-open,
+.contents-tabs .save-as-split:hover .save-as-main,
+.contents-tabs .save-as-split:hover .save-as-toggle {
+  border-color: #b6d8ec;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.save-as-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  gap: 2px;
+  min-width: 170px;
+  padding: 4px;
+  border: 1px solid #b9c4ce;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 12px 26px rgb(15 23 42 / 18%);
+}
+
+.save-as-menu button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  justify-items: start;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #3d5062;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.save-as-menu button:hover,
+.save-as-menu button.is-selected {
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.save-as-menu button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+}
+
 .add-data-menu {
   position: absolute;
   top: calc(100% + 5px);
@@ -1659,6 +1948,58 @@ button {
   color: #34495e;
   text-align: center;
   font-size: 12px;
+}
+
+.map-identify-maplibre-popup .maplibregl-popup-content,
+.ol-overlay-container .map-identify-popup {
+  padding: 0;
+  border: 1px solid #b7c7d5;
+  border-radius: 6px;
+  background: #ffffff;
+  box-shadow: 0 12px 26px rgb(15 23 42 / 18%);
+}
+
+.map-identify-maplibre-popup .maplibregl-popup-close-button {
+  width: 22px;
+  height: 22px;
+  color: #6b7785;
+  font-size: 16px;
+  line-height: 20px;
+}
+
+.map-identify-popup {
+  display: grid;
+  min-width: 170px;
+  max-width: 260px;
+  overflow: hidden;
+}
+
+.map-identify-layer {
+  min-width: 0;
+  padding: 6px 28px 5px 9px;
+  border-bottom: 1px solid #e3e8ed;
+  color: #263849;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-identify-field {
+  padding: 6px 9px 0;
+  color: #657485;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.map-identify-value {
+  padding: 2px 9px 8px;
+  color: #102a43;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .maplibregl-ctrl-group {

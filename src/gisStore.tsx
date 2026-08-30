@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import type { Feature } from 'geojson';
 import initGeoLibre, {
   CogBuilder,
   CogStream,
@@ -8,6 +9,9 @@ import initGeoLibre, {
   version as geolibreVersion,
 } from 'geolibre-wasm';
 import { extractCogSubset, initTools, runTool } from 'geolibre-wasm/tools';
+import type { RunToolOptions, ToolResult } from 'geolibre-wasm/tools';
+import { FeatureColumn, GeoPackageDataType, GeometryType } from '@ngageoint/geopackage';
+import geoPackageSqlWasmUrl from '@ngageoint/geopackage/dist/sql-wasm.wasm?url';
 import JSZip from 'jszip';
 import shp from 'shpjs';
 
@@ -26,6 +30,7 @@ export type PointCollection = {
 };
 
 export type RasterOverlay = {
+  id: string;
   name: string;
   toolInput: RasterToolInput;
   imageUrl: string;
@@ -56,6 +61,7 @@ export type GeoJsonFeatureCollection = {
 export type EditableGeometryType = 'Point' | 'LineString' | 'Polygon';
 
 export type IdwParameters = {
+  layerId: string;
   field: string;
   outputName: string;
   cellSize: string;
@@ -73,6 +79,17 @@ export type BufferParameters = {
   dissolve: boolean;
 };
 
+type VectorExportFormat = 'geojson' | 'geopackage';
+
+export type OverlayToolId = 'intersect' | 'union' | 'erase';
+
+export type OverlayParameters = {
+  inputLayerId: string;
+  overlayLayerId: string;
+  outputName: string;
+  snapTolerance: string;
+};
+
 export type TerrainToolId = 'hillshade' | 'slope' | 'aspect';
 
 export type SlopeUnits = 'degrees' | 'radians' | 'percent';
@@ -83,6 +100,12 @@ export type TerrainParameters = {
   altitude: string;
   azimuth: string;
   units: SlopeUnits;
+};
+
+export type ExtractByMaskParameters = {
+  maskLayerId: string;
+  outputName: string;
+  maintainDimensions: boolean;
 };
 
 export type RasterAoiPolygon = {
@@ -140,7 +163,7 @@ export type SelectionResult = {
 export type GisToolExecutionResult = {
   ok: boolean;
   status: 'success' | 'blocked' | 'failed';
-  tool: 'idw_interpolation' | 'buffer_vector' | 'select_by_value' | 'select_by_location';
+  tool: 'idw_interpolation' | 'buffer_vector' | 'select_by_value' | 'select_by_location' | 'extract_by_mask' | OverlayToolId;
   message: string;
   qa: {
     passed: boolean;
@@ -153,7 +176,7 @@ export type LayerVisibilityId = 'basemap' | 'raster' | 'vectorOverlay';
 
 export type LayerVisibility = Record<LayerVisibilityId, boolean>;
 
-export type LayerOrderId = LayerVisibilityId | `uploaded:${string}`;
+export type LayerOrderId = LayerVisibilityId | `uploaded:${string}` | `raster:${string}`;
 
 export type ShapefileInput = {
   inputName: string;
@@ -213,13 +236,17 @@ type GisContextValue = {
   layer: UploadedLayer | null;
   layers: UploadedLayer[];
   activeLayerId: string | null;
+  layerZoomRequest: { layerId: string; requestId: number } | null;
   raster: RasterOverlay | null;
+  rasters: RasterOverlay[];
+  activeRasterId: string | null;
   vectorOverlay: VectorOverlay | null;
   basemapStyle: BasemapLayerStyle;
   rasterStyle: RasterLayerStyle;
   vectorOverlayStyle: VectorOverlayStyle;
   uploadedLayerStyles: Record<string, UploadedLayerStyle>;
   layerVisibility: LayerVisibility;
+  rasterLayerVisibility: Record<string, boolean>;
   uploadedLayerVisibility: Record<string, boolean>;
   layerOrder: LayerOrderId[];
   toolsReady: boolean;
@@ -235,6 +262,7 @@ type GisContextValue = {
   createBlankGeoJsonLayer: (params: { fileName?: string; geometryType: EditableGeometryType }) => string;
   deleteUploadedLayer: (layerId?: string) => void;
   saveGeoJsonLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
+  saveGeoPackageLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
   updateUploadedLayerGeoJson: (layerId: string, geojson: GeoJsonFeatureCollection) => void;
   setLayerVisibility: (id: LayerVisibilityId, visible: boolean) => void;
   setUploadedLayerVisibility: (id: string, visible: boolean) => void;
@@ -245,6 +273,9 @@ type GisContextValue = {
   setUploadedLayerStyle: (id: string, patch: Partial<UploadedLayerStyle>) => void;
   moveLayerOrder: (draggedId: LayerOrderId, targetId: LayerOrderId) => void;
   setActiveLayer: (id: string) => void;
+  setActiveRaster: (id: string) => void;
+  zoomToLayer: (layerId: string) => void;
+  setRasterLayerVisibility: (id: string, visible: boolean) => void;
   setSelectedField: (field: string) => void;
   setLayerSelection: (layerId: string, indexes: number[]) => void;
   clearSelection: (layerId?: string) => void;
@@ -252,7 +283,9 @@ type GisContextValue = {
   selectByLocation: (params: SelectByLocationParameters) => Promise<SelectionResult | null>;
   runIdwInterpolation: (params: IdwParameters) => Promise<void>;
   runBufferAnalysis: (params: BufferParameters) => Promise<void>;
+  runOverlayAnalysis: (tool: OverlayToolId, params: OverlayParameters) => Promise<void>;
   runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<void>;
+  runExtractByMask: (params: ExtractByMaskParameters) => Promise<void>;
   editRasterByAoi: (params: RasterEditParameters) => Promise<void>;
   saveRasterLayer: (options?: { fileName?: string }) => Promise<void>;
 };
@@ -288,18 +321,22 @@ export const defaultVectorOverlayStyle: VectorOverlayStyle = {
 export const defaultBasemapStyle: BasemapLayerStyle = {
   opacity: 1,
 };
+const maxIdwOutputCells = 50_000_000;
 
 export function GisProvider({ children }: { children: React.ReactNode }) {
   const fileHandlesRef = useRef<Record<string, LocalSaveFileHandle>>({});
   const [layers, setLayers] = useState<UploadedLayer[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
-  const [raster, setRaster] = useState<RasterOverlay | null>(null);
+  const [layerZoomRequest, setLayerZoomRequest] = useState<{ layerId: string; requestId: number } | null>(null);
+  const [rasters, setRasters] = useState<RasterOverlay[]>([]);
+  const [activeRasterId, setActiveRasterId] = useState<string | null>(null);
   const [vectorOverlay, setVectorOverlay] = useState<VectorOverlay | null>(null);
   const [basemapStyle, setBasemapStyleState] = useState<BasemapLayerStyle>(defaultBasemapStyle);
   const [rasterStyle, setRasterStyleState] = useState<RasterLayerStyle>(defaultRasterStyle);
   const [vectorOverlayStyle, setVectorOverlayStyleState] = useState<VectorOverlayStyle>(defaultVectorOverlayStyle);
   const [uploadedLayerStyles, setUploadedLayerStyles] = useState<Record<string, UploadedLayerStyle>>({});
   const [layerVisibility, setLayerVisibilityState] = useState<LayerVisibility>(defaultLayerVisibility);
+  const [rasterLayerVisibility, setRasterLayerVisibilityState] = useState<Record<string, boolean>>({});
   const [uploadedLayerVisibility, setUploadedLayerVisibilityState] = useState<Record<string, boolean>>({});
   const [layerOrder, setLayerOrder] = useState<LayerOrderId[]>(defaultLayerOrder);
   const [toolsReady, setToolsReady] = useState(false);
@@ -311,6 +348,25 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     () => layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null,
     [activeLayerId, layers],
   );
+  const raster = useMemo(
+    () => rasters.find((item) => item.id === activeRasterId) ?? rasters[0] ?? null,
+    [activeRasterId, rasters],
+  );
+
+  const setRaster = useCallback((nextRaster: RasterOverlay | null) => {
+    if (!nextRaster) {
+      setRasters([]);
+      setActiveRasterId(null);
+      setRasterLayerVisibilityState({});
+      setLayerOrder((current) => current.filter((id) => id !== 'raster' && !id.startsWith('raster:')));
+      return;
+    }
+
+    setRasters((current) => [nextRaster, ...current.filter((item) => item.id !== nextRaster.id)]);
+    setActiveRasterId(nextRaster.id);
+    setRasterLayerVisibilityState((current) => ({ ...current, [nextRaster.id]: true }));
+    setLayerOrder((current) => [`raster:${nextRaster.id}`, ...current.filter((id) => id !== 'raster' && id !== `raster:${nextRaster.id}`)]);
+  }, []);
 
   const setLayerVisibility = useCallback((id: LayerVisibilityId, visible: boolean) => {
     setLayerVisibilityState((current) => ({ ...current, [id]: visible }));
@@ -320,12 +376,19 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setUploadedLayerVisibilityState((current) => ({ ...current, [id]: visible }));
   }, []);
 
+  const setRasterLayerVisibility = useCallback((id: string, visible: boolean) => {
+    setRasterLayerVisibilityState((current) => ({ ...current, [id]: visible }));
+  }, []);
+
   const setAllLayerVisibility = useCallback((visible: boolean) => {
     setLayerVisibilityState({
       basemap: visible,
       raster: visible,
       vectorOverlay: visible,
     });
+    setRasterLayerVisibilityState((current) => (
+      Object.fromEntries(Object.keys(current).map((id) => [id, visible]))
+    ));
     setUploadedLayerVisibilityState((current) => (
       Object.fromEntries(Object.keys(current).map((id) => [id, visible]))
     ));
@@ -376,6 +439,17 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
   const setActiveLayer = useCallback((id: string) => {
     setActiveLayerId(id);
+  }, []);
+
+  const setActiveRaster = useCallback((id: string) => {
+    setActiveRasterId(id);
+  }, []);
+
+  const zoomToLayer = useCallback((layerId: string) => {
+    setLayerZoomRequest((current) => ({
+      layerId,
+      requestId: (current?.requestId ?? 0) + 1,
+    }));
   }, []);
 
   const addGeoJsonLayer = useCallback((fileName: string, geojson: GeoJsonFeatureCollection, formatLabel: string) => {
@@ -453,7 +527,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
           setUploadedLayerVisibilityState(draft.uploadedLayerVisibility ?? {});
           setUploadedLayerStyles(draft.uploadedLayerStyles ?? {});
           setLayerOrder([
-            ...draft.layerOrder.filter((id) => id === 'basemap' || id === 'raster' || id === 'vectorOverlay' || layerIds.has(id.slice('uploaded:'.length))),
+            ...draft.layerOrder.filter((id) => id === 'basemap' || id === 'vectorOverlay' || layerIds.has(id.slice('uploaded:'.length))),
             ...nextLayers
               .map((item) => `uploaded:${item.id}` as const)
               .filter((id) => !draft.layerOrder.includes(id)),
@@ -506,7 +580,6 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const uploadShapefileZip = useCallback(async (file: File) => {
     try {
       setMessage('正在读取 Shapefile 压缩包');
-      setRaster(null);
       setVectorOverlay(null);
 
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -549,7 +622,6 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const uploadGeoJson = useCallback(async (file: File) => {
     try {
       setMessage('正在读取 GeoJSON');
-      setRaster(null);
       setVectorOverlay(null);
 
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -564,7 +636,6 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const uploadGeoParquetFile = useCallback(async (file: File) => {
     try {
       setMessage('正在读取 GeoParquet');
-      setRaster(null);
       setVectorOverlay(null);
 
       const { readGeoParquetFile } = await import('./geoParquet');
@@ -586,7 +657,6 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       }
 
       setMessage('正在读取远程 GeoParquet');
-      setRaster(null);
       setVectorOverlay(null);
 
       const { readGeoParquetUrl } = await import('./geoParquet');
@@ -601,7 +671,6 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const uploadGeoPackage = useCallback(async (file: File) => {
     try {
       setMessage('正在读取 GeoPackage');
-      setRaster(null);
       setVectorOverlay(null);
 
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -628,7 +697,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         raster: true,
         vectorOverlay: true,
       }));
-      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`已加载 GeoTIFF：${file.name}（${nextRaster.width} x ${nextRaster.height}）`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -665,7 +734,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         raster: true,
         vectorOverlay: true,
       }));
-      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`已加载远程 COG/GeoTIFF：${inputName}（${nextRaster.width} x ${nextRaster.height}）`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -744,14 +813,16 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   }, [layer, layers]);
 
   const saveGeoJsonLayer = useCallback(async (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => {
-    const targetLayer = findLayer(layers, layerId) ?? layer;
+    const targetLayer: { id: string; fileName: string; geojson: GeoJsonFeatureCollection } | null = layerId === 'vectorOverlay'
+      ? (vectorOverlay ? { id: 'vectorOverlay', fileName: vectorOverlay.name, geojson: vectorOverlay.geojson } : null)
+      : (findLayer(layers, layerId) ?? layer ?? null);
 
     if (!targetLayer) {
       setMessage('没有可保存的 GeoJSON 图层。');
       return;
     }
 
-    const fileName = ensureGeoJsonName((options?.fileName || targetLayer.fileName || 'layer.geojson').trim() || 'layer.geojson');
+    const fileName = ensureGeoJsonName(displayLayerName((options?.fileName || targetLayer.fileName || 'layer').trim() || 'layer'));
     const blob = geoJsonBlob(targetLayer.geojson);
 
     try {
@@ -774,7 +845,46 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       setMessage(errorMessage(error));
     }
-  }, [layer, layers]);
+  }, [layer, layers, vectorOverlay]);
+
+  const saveGeoPackageLayer = useCallback(async (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => {
+    const targetLayer: { id: string; fileName: string; geojson: GeoJsonFeatureCollection } | null = layerId === 'vectorOverlay'
+      ? (vectorOverlay ? { id: 'vectorOverlay', fileName: vectorOverlay.name, geojson: vectorOverlay.geojson } : null)
+      : (findLayer(layers, layerId) ?? layer ?? null);
+
+    if (!targetLayer) {
+      setMessage('娌℃湁鍙繚瀛樼殑 GeoPackage 鍥惧眰銆?');
+      return;
+    }
+
+    const baseName = displayLayerName((options?.fileName || targetLayer.fileName || 'layer').trim() || 'layer');
+    const fileName = ensureGeoPackageName(baseName);
+    const handleKey = `${targetLayer.id}:geopackage`;
+
+    try {
+      const outputBytes = await geoPackageBlob(targetLayer.geojson, baseName);
+      const blob = new Blob([outputBytes], { type: 'application/geopackage+sqlite3' });
+
+      if (!options?.saveAs && fileHandlesRef.current[handleKey]) {
+        await writeFileHandle(fileHandlesRef.current[handleKey], blob);
+      } else if (options?.saveAs) {
+        const handle = await pickSaveFile(fileName, 'geopackage');
+
+        if (handle) {
+          await writeFileHandle(handle, blob);
+          fileHandlesRef.current[handleKey] = handle;
+        } else {
+          downloadBlob(blob, fileName);
+        }
+      } else {
+        downloadBlob(blob, fileName);
+      }
+
+      setMessage(`宸蹭繚瀛?GeoPackage锛?{fileName}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, [layer, layers, vectorOverlay]);
 
   const updateUploadedLayerGeoJson = useCallback((layerId: string, nextGeoJson: GeoJsonFeatureCollection) => {
     const geojson = normalizeGeoJson(nextGeoJson);
@@ -927,22 +1037,43 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   }, [layer, layers, vectorOverlay]);
 
   const runIdwInterpolation = useCallback(async (params: IdwParameters) => {
+    const analysis = createAnalysisLogContext('idw_interpolation');
+    logAnalysisEvent(analysis, 'start', {
+      rawParams: { ...params },
+      activeLayer: summarizeUploadedLayerForAnalysis(layer),
+      candidateLayerId: params.layerId,
+    });
     if (!toolsReady) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
       setMessage('WASM 工具仍在加载，请稍后再运行。');
       return;
     }
 
-    if (!layer) {
+    const inputLayer = findLayer(layers, params.layerId) ?? layer;
+    logAnalysisEvent(analysis, 'validated', {
+      resolvedInputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
+    });
+
+    if (!inputLayer) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'input_layer_missing' });
       setMessage('请先在左侧上传点 Shapefile 压缩包或点 GeoJSON。');
       return;
     }
 
-    if (layer.points.features.length === 0) {
-      setMessage('反距离加权插值需要点图层。');
+    if (inputLayer.points.features.length === 0) {
+      logAnalysisEvent(analysis, 'blocked', {
+        reason: 'not_a_point_layer',
+        resolvedInputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
+      });
+      setMessage('反距离加权插值需要选择点图层。');
       return;
     }
 
-    if (layer.numericFields.length === 0) {
+    if (inputLayer.numericFields.length === 0) {
+      logAnalysisEvent(analysis, 'blocked', {
+        reason: 'no_numeric_field',
+        resolvedInputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
+      });
       setMessage('反距离加权插值需要至少一个数值字段。');
       return;
     }
@@ -950,61 +1081,113 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     try {
       setIsRunning(true);
       setMessage('正在浏览器 WASM 中运行反距离加权插值');
-      setRaster(null);
-
-      const cellSize = positiveNumber(params.cellSize, '输出像元大小');
+      const requestedCellSize = positiveNumber(params.cellSize, '输出像元大小');
       const weight = positiveNumber(params.weight, '幂');
-      const radius = nonNegativeNumber(params.radius || '0', '搜索半径');
+      const requestedRadius = nonNegativeNumber(params.radius || '0', '搜索半径');
       const minPoints = nonNegativeInteger(params.minPoints || '0', '点数');
       const outputName = ensureTifName(params.outputName || 'idw-interpolation.tif');
-      const field = params.field || layer.selectedField;
+      const field = params.field || inputLayer.selectedField;
+      const idwResolution = normalizeIdwResolution(requestedCellSize, requestedRadius, inputLayer);
+      const args = [
+        `--points=/work/${inputLayer.toolInput.inputName}`,
+        `--field_name=${field}`,
+        `--output=/work/${outputName}`,
+        `--cell_size=${idwResolution.cellSize}`,
+        `--weight=${weight}`,
+        `--radius=${idwResolution.radius}`,
+        `--min_points=${minPoints}`,
+        '--use_z=false',
+      ];
 
-      const result = await runTool('idw_interpolation', {
-        args: [
-          `--points=/work/${layer.toolInput.inputName}`,
-          `--field_name=${field}`,
-          `--output=/work/${outputName}`,
-          `--cell_size=${cellSize}`,
-          `--weight=${weight}`,
-          `--radius=${radius}`,
-          `--min_points=${minPoints}`,
-          '--use_z=false',
-        ],
-        input: layer.toolInput.files,
+      if (!inputLayer.numericFields.includes(field)) {
+        logAnalysisEvent(analysis, 'blocked', {
+          reason: 'field_not_numeric',
+          field,
+          numericFields: [...inputLayer.numericFields],
+          resolvedInputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
+        });
+        throw new Error('请选择输入点图层中的数值字段。');
+      }
+
+      logAnalysisEvent(analysis, 'invoke', {
+        normalizedParams: {
+          cellSize: idwResolution.cellSize,
+          requestedCellSize,
+          cellSizeUnit: idwResolution.cellSizeUnit,
+          weight,
+          radius: idwResolution.radius,
+          requestedRadius,
+          radiusUnit: idwResolution.radiusUnit,
+          minPoints,
+          outputName,
+          field,
+          inputBbox: idwResolution.inputBbox,
+          estimatedRasterSize: idwResolution.estimatedRasterSize,
+        },
+        inputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
+        wasmArgs: args,
+        wasmInput: summarizeShapefileInput(inputLayer.toolInput),
       });
 
+      const result = await runTool('idw_interpolation', {
+        args,
+        input: inputLayer.toolInput.files,
+      });
+
+      logAnalysisEvent(analysis, 'result', summarizeToolResultForAnalysis(result, outputName));
+
       if (result.exitCode !== 0) {
+        logAnalysisError(analysis, 'error', new Error(`tool exit code ${result.exitCode}`), summarizeToolResultForAnalysis(result, outputName));
         throw new Error(result.stdout.join('\n') || `工具运行失败，退出码 ${result.exitCode}`);
       }
 
       const tiffBytes = result.files[outputName];
 
       if (!tiffBytes) {
+        logAnalysisError(analysis, 'error', new Error('missing expected GeoTIFF output'), summarizeToolResultForAnalysis(result, outputName));
         throw new Error(`没有获得 GeoTIFF 输出。工具输出：${result.stdout.join('\n')}`);
       }
 
       const nextRaster = readRasterOverlay(tiffBytes, outputName);
+      logAnalysisEvent(analysis, 'success', {
+        outputName,
+        raster: {
+          width: nextRaster.width,
+          height: nextRaster.height,
+          epsg: nextRaster.epsg ?? null,
+          min: nextRaster.min,
+          max: nextRaster.max,
+        },
+      });
       setRaster(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
-      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setLayers((current) => current.map((item) => (
-        item.id === layer.id ? { ...item, selectedField: field } : item
+        item.id === inputLayer.id ? { ...item, selectedField: field } : item
       )));
-      setMessage(`插值完成：${nextRaster.width} x ${nextRaster.height}`);
+      setActiveLayerId(inputLayer.id);
+      setMessage(`插值完成：${nextRaster.width} x ${nextRaster.height}${idwResolution.note ? `（${idwResolution.note}）` : ''}`);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
       setIsRunning(false);
     }
-  }, [layer, toolsReady]);
+  }, [layer, layers, toolsReady]);
 
   const runBufferAnalysis = useCallback(async (params: BufferParameters) => {
+    const analysis = createAnalysisLogContext('buffer_vector');
+    logAnalysisEvent(analysis, 'start', {
+      rawParams: { ...params },
+      activeLayer: summarizeUploadedLayerForAnalysis(layer),
+    });
     if (!toolsReady) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
       setMessage('WASM 工具仍在加载，请稍后再运行。');
       return;
     }
 
     if (!layer) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'input_layer_missing' });
       setMessage('请先在左侧上传 Shapefile 压缩包或 GeoJSON。');
       return;
     }
@@ -1016,20 +1199,37 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
       const distance = positiveNumber(params.distance, '缓冲距离');
       const quadrantSegments = positiveInteger(params.quadrantSegments || '8', '圆弧段数');
-      const outputName = ensureGeoJsonName(params.outputName || 'buffer.geojson');
+      const outputName = ensureGeoJsonName(params.outputName || 'buffer');
+      const args = [
+        `--input=/work/${layer.toolInput.inputName}`,
+        `--output=/work/${outputName}`,
+        `--distance=${distance}`,
+        `--quadrant_segments=${quadrantSegments}`,
+        `--cap_style=${params.capStyle || 'round'}`,
+        `--join_style=${params.joinStyle || 'round'}`,
+        `--dissolve=${params.dissolve}`,
+      ];
+
+      logAnalysisEvent(analysis, 'invoke', {
+        normalizedParams: {
+          distance,
+          quadrantSegments,
+          outputName,
+          capStyle: params.capStyle || 'round',
+          joinStyle: params.joinStyle || 'round',
+          dissolve: params.dissolve,
+        },
+        inputLayer: summarizeUploadedLayerForAnalysis(layer),
+        wasmArgs: args,
+        wasmInput: summarizeShapefileInput(layer.toolInput),
+      });
 
       const result = await runTool('buffer_vector', {
-        args: [
-          `--input=/work/${layer.toolInput.inputName}`,
-          `--output=/work/${outputName}`,
-          `--distance=${distance}`,
-          `--quadrant_segments=${quadrantSegments}`,
-          `--cap_style=${params.capStyle || 'round'}`,
-          `--join_style=${params.joinStyle || 'round'}`,
-          `--dissolve=${params.dissolve}`,
-        ],
+        args,
         input: layer.toolInput.files,
       });
+
+      logAnalysisEvent(analysis, 'result', summarizeToolResultForAnalysis(result, outputName));
 
       if (result.exitCode !== 0) {
         throw new Error(result.stdout.join('\n') || `工具运行失败，退出码 ${result.exitCode}`);
@@ -1038,15 +1238,21 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const outputBytes = result.files[outputName];
 
       if (!outputBytes) {
+        logAnalysisError(analysis, 'error', new Error('missing expected GeoJSON output'), summarizeToolResultForAnalysis(result, outputName));
         throw new Error(`没有获得缓冲区输出。工具输出：${result.stdout.join('\n')}`);
       }
 
       const geojson = JSON.parse(new TextDecoder().decode(outputBytes));
 
       if (!isFeatureCollectionLike(geojson)) {
+        logAnalysisError(analysis, 'error', new Error('invalid GeoJSON FeatureCollection output'), summarizeToolResultForAnalysis(result, outputName));
         throw new Error('缓冲区输出不是有效的 GeoJSON FeatureCollection。');
       }
 
+      logAnalysisEvent(analysis, 'success', {
+        outputName,
+        geojson: summarizeGeoJsonForAnalysis(geojson),
+      });
       setVectorOverlay({ name: outputName, geojson });
       setLayerVisibilityState((current) => ({ ...current, vectorOverlay: true }));
       setLayerOrder((current) => ['vectorOverlay', ...current.filter((id) => id !== 'vectorOverlay')]);
@@ -1057,6 +1263,129 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setIsRunning(false);
     }
   }, [layer, toolsReady]);
+
+  const runOverlayAnalysis = useCallback(async (tool: OverlayToolId, params: OverlayParameters) => {
+    const analysis = createAnalysisLogContext(tool);
+    logAnalysisEvent(analysis, 'start', {
+      rawParams: { ...params },
+      activeLayer: summarizeUploadedLayerForAnalysis(layer),
+      vectorOverlay: vectorOverlay ? {
+        name: vectorOverlay.name,
+        featureCount: vectorOverlay.geojson.features.length,
+      } : null,
+    });
+    if (!toolsReady) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
+      setMessage('WASM 工具仍在加载，请稍后再运行。');
+      return;
+    }
+
+    const inputLayer = findVectorToolInput(layers, vectorOverlay, params.inputLayerId)
+      ?? (layer ? { id: layer.id, name: layer.fileName, toolInput: layer.toolInput } : null);
+    const overlayLayer = findVectorToolInput(layers, vectorOverlay, params.overlayLayerId);
+    logAnalysisEvent(analysis, 'validated', {
+      inputLayer: summarizeVectorSelectionForAnalysis(inputLayer, layers, vectorOverlay),
+      overlayLayer: summarizeVectorSelectionForAnalysis(overlayLayer, layers, vectorOverlay),
+    });
+
+    if (!inputLayer) {
+      setMessage('请选择输入矢量图层。');
+      return;
+    }
+
+    if (!overlayLayer) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'overlay_layer_missing' });
+      setMessage('请选择叠加矢量图层。');
+      return;
+    }
+
+    if (!isOverlayPolygonLayerAvailable(layers, vectorOverlay, params.inputLayerId)
+      || !isOverlayPolygonLayerAvailable(layers, vectorOverlay, params.overlayLayerId)) {
+      logAnalysisEvent(analysis, 'blocked', {
+        reason: 'non_polygon_layer',
+        inputLayerId: params.inputLayerId,
+        overlayLayerId: params.overlayLayerId,
+      });
+      setMessage('相交、联合、擦除只支持面图层，请选择 Polygon 或 MultiPolygon 图层。');
+      return;
+    }
+
+    if (inputLayer.id === overlayLayer.id) {
+      logAnalysisEvent(analysis, 'blocked', {
+        reason: 'same_input_and_overlay_layer',
+        inputLayerId: inputLayer.id,
+      });
+      setMessage('输入图层和叠加图层不能相同。');
+      return;
+    }
+
+    try {
+      setIsRunning(true);
+      setMessage(`正在浏览器 WASM 中运行${overlayToolLabel(tool)}`);
+      setVectorOverlay(null);
+
+      const inputToolInput = namespaceVectorToolInput(inputLayer.toolInput, 'input');
+      const overlayToolInput = namespaceVectorToolInput(overlayLayer.toolInput, 'overlay');
+      const outputName = ensureGeoJsonName(params.outputName || `${tool}.geojson`);
+      const args = [
+        `--input=/work/${inputToolInput.inputName}`,
+        `--overlay=/work/${overlayToolInput.inputName}`,
+        `--output=/work/${outputName}`,
+      ];
+
+      if (params.snapTolerance.trim()) {
+        args.push(`--snap_tolerance=${nonNegativeNumber(params.snapTolerance, '捕捉容差')}`);
+      }
+
+      logAnalysisEvent(analysis, 'invoke', {
+        normalizedParams: {
+          outputName,
+          snapTolerance: params.snapTolerance.trim() || '',
+        },
+        inputLayer: summarizeVectorSelectionForAnalysis(inputLayer, layers, vectorOverlay),
+        overlayLayer: summarizeVectorSelectionForAnalysis(overlayLayer, layers, vectorOverlay),
+        wasmArgs: args,
+        wasmInputs: {
+          input: summarizeVectorToolInputForAnalysis(inputToolInput),
+          overlay: summarizeVectorToolInputForAnalysis(overlayToolInput),
+        },
+      });
+      const result = await runToolInWorker(tool, {
+        args,
+        input: {
+          ...inputToolInput.files,
+          ...overlayToolInput.files,
+        },
+      });
+
+      logAnalysisEvent(analysis, 'result', summarizeToolResultForAnalysis(result, outputName));
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stdout.join('\n') || `工具运行失败，退出码 ${result.exitCode}`);
+      }
+
+      const outputBytes = result.files[outputName];
+
+      if (!outputBytes) {
+        throw new Error(`没有获得${overlayToolLabel(tool)}输出。工具输出：${result.stdout.join('\n')}`);
+      }
+
+      const geojson = normalizeGeoJson(JSON.parse(new TextDecoder().decode(outputBytes)));
+
+      logAnalysisEvent(analysis, 'success', {
+        outputName,
+        geojson: summarizeGeoJsonForAnalysis(geojson),
+      });
+      setVectorOverlay({ name: outputName, geojson });
+      setLayerVisibilityState((current) => ({ ...current, vectorOverlay: true }));
+      setLayerOrder((current) => ['vectorOverlay', ...current.filter((id) => id !== 'vectorOverlay')]);
+      setMessage(`${overlayToolLabel(tool)}完成：${geojson.features.length} 个要素`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [layer, layers, toolsReady, vectorOverlay]);
 
   const runTerrainAnalysis = useCallback(async (tool: TerrainToolId, params: TerrainParameters) => {
     if (!toolsReady) {
@@ -1109,7 +1438,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
       setRaster(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
-      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`${terrainToolLabel(tool)}完成：${nextRaster.width} x ${nextRaster.height}`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -1117,6 +1446,65 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setIsRunning(false);
     }
   }, [raster, toolsReady]);
+
+  const runExtractByMask = useCallback(async (params: ExtractByMaskParameters) => {
+    if (!toolsReady) {
+      setMessage('WASM 工具仍在加载，请稍后再运行。');
+      return;
+    }
+
+    if (!raster) {
+      setMessage('请先添加一个 GeoTIFF 栅格图层。');
+      return;
+    }
+
+    const maskLayer = findRasterMaskInput(layers, vectorOverlay, params.maskLayerId);
+
+    if (!maskLayer) {
+      setMessage('请选择一个面图层作为掩膜。');
+      return;
+    }
+
+    try {
+      setIsRunning(true);
+      setMessage('正在使用 GeoLibre/Whitebox 按掩膜提取栅格');
+      const outputName = ensureTifName(params.outputName || extractByMaskName(raster.name));
+
+      const result = await runTool('clip_raster_to_polygon', {
+        args: [
+          `--input=/work/${raster.toolInput.inputName}`,
+          `--polygons=/work/${maskLayer.toolInput.inputName}`,
+          `--output=/work/${outputName}`,
+          `--maintain_dimensions=${params.maintainDimensions}`,
+        ],
+        input: {
+          ...raster.toolInput.files,
+          ...maskLayer.toolInput.files,
+        },
+      });
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stdout.join('\n') || `工具运行失败，退出码 ${result.exitCode}`);
+      }
+
+      const outputBytes = result.files[outputName];
+
+      if (!outputBytes) {
+        throw new Error(`没有获得按掩膜提取输出。工具输出：${result.stdout.join('\n')}`);
+      }
+
+      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+
+      setRaster(nextRaster);
+      setLayerVisibilityState((current) => ({ ...current, raster: true }));
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
+      setMessage(`按掩膜提取完成：${nextRaster.width} x ${nextRaster.height}`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [layers, raster, toolsReady, vectorOverlay]);
 
   const editRasterByAoi = useCallback(async (params: RasterEditParameters) => {
     if (!raster) {
@@ -1165,7 +1553,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
       setRaster(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
-      setLayerOrder((current) => ['raster', ...current.filter((id) => id !== 'raster')]);
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`栅格编辑完成：已更新 ${editedCount} 个像元，可导出 GeoTIFF。`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -1196,13 +1584,17 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     layer,
     layers,
     activeLayerId,
+    layerZoomRequest,
     raster,
+    rasters,
+    activeRasterId,
     vectorOverlay,
     basemapStyle,
     rasterStyle,
     vectorOverlayStyle,
     uploadedLayerStyles,
     layerVisibility,
+    rasterLayerVisibility,
     uploadedLayerVisibility,
     layerOrder,
     toolsReady,
@@ -1218,6 +1610,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     createBlankGeoJsonLayer,
     deleteUploadedLayer,
     saveGeoJsonLayer,
+    saveGeoPackageLayer,
     updateUploadedLayerGeoJson,
     setLayerVisibility,
     setUploadedLayerVisibility,
@@ -1228,17 +1621,22 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setUploadedLayerStyle,
     moveLayerOrder,
     setActiveLayer,
+    setActiveRaster,
+    zoomToLayer,
     setSelectedField,
     setLayerSelection,
+    setRasterLayerVisibility,
     clearSelection,
     selectByValue,
     selectByLocation,
     runIdwInterpolation,
     runBufferAnalysis,
+    runOverlayAnalysis,
     runTerrainAnalysis,
+    runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layers, message, moveLayerOrder, raster, rasterStyle, runBufferAnalysis, runIdwInterpolation, runTerrainAnalysis, saveGeoJsonLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasters, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, zoomToLayer]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -1251,6 +1649,50 @@ export function useGis() {
   }
 
   return value;
+}
+
+type ToolWorkerResponse = {
+  id: number;
+  ok: true;
+  result: ToolResult;
+} | {
+  id: number;
+  ok: false;
+  message: string;
+};
+
+let nextToolWorkerRequestId = 0;
+
+function runToolInWorker(tool: string, options: RunToolOptions): Promise<ToolResult> {
+  const id = nextToolWorkerRequestId + 1;
+
+  nextToolWorkerRequestId = id;
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./gisToolWorker.ts', import.meta.url), { type: 'module' });
+    const cleanup = () => worker.terminate();
+
+    worker.addEventListener('message', (event: MessageEvent<ToolWorkerResponse>) => {
+      const message = event.data;
+
+      if (message.id !== id) {
+        return;
+      }
+
+      cleanup();
+
+      if (message.ok) {
+        resolve(message.result);
+      } else {
+        reject(new Error(message.message));
+      }
+    });
+    worker.addEventListener('error', (event) => {
+      cleanup();
+      reject(new Error(event.message || 'WASM Worker 运行失败。'));
+    });
+    worker.postMessage({ id, tool, options });
+  });
 }
 
 type LocalWritableFile = {
@@ -1304,11 +1746,268 @@ function createGeoJsonToolInput(inputName: string, geojson: GeoJsonFeatureCollec
   };
 }
 
+function namespaceVectorToolInput(toolInput: ShapefileInput, prefix: 'input' | 'overlay'): ShapefileInput {
+  const inputExtension = extensionOf(toolInput.inputName);
+  const sourceBase = toolInput.inputName.replace(/\.[^.]+$/i, '');
+  const targetBase = `${prefix}-${sourceBase.replace(/[^a-z0-9_-]+/gi, '-') || 'layer'}`;
+  const files = Object.fromEntries(Object.entries(toolInput.files).map(([fileName, bytes]) => {
+    const extension = extensionOf(fileName);
+    const base = fileName.replace(/\.[^.]+$/i, '');
+    const nextName = base === sourceBase && extension
+      ? `${targetBase}.${extension}`
+      : `${prefix}-${fileName}`;
+
+    return [nextName, bytes];
+  }));
+
+  return {
+    inputName: `${targetBase}.${inputExtension || 'geojson'}`,
+    files,
+  };
+}
+
+type AnalysisLogTool = 'idw_interpolation' | 'buffer_vector' | OverlayToolId;
+type AnalysisLogPhase = 'start' | 'validated' | 'invoke' | 'result' | 'success' | 'blocked' | 'error';
+
+type AnalysisLogContext = {
+  runId: string;
+  tool: AnalysisLogTool;
+  label: string;
+  startedAt: string;
+};
+
+let nextAnalysisRunId = 0;
+
+function createAnalysisLogContext(tool: AnalysisLogTool) {
+  const runId = `${tool}-${Date.now().toString(36)}-${(nextAnalysisRunId += 1).toString(36)}`;
+
+  return {
+    runId,
+    tool,
+    label: analysisToolLabel(tool),
+    startedAt: new Date().toISOString(),
+  };
+}
+
+function logAnalysisEvent(context: AnalysisLogContext, phase: AnalysisLogPhase, details: Record<string, unknown> = {}) {
+  console.info('[CTEarth analysis]', {
+    timestamp: new Date().toISOString(),
+    runId: context.runId,
+    tool: context.tool,
+    label: context.label,
+    phase,
+    ...details,
+  });
+}
+
+function logAnalysisError(context: AnalysisLogContext, phase: AnalysisLogPhase, error: unknown, details: Record<string, unknown> = {}) {
+  console.error('[CTEarth analysis]', {
+    timestamp: new Date().toISOString(),
+    runId: context.runId,
+    tool: context.tool,
+    label: context.label,
+    phase,
+    error: errorMessage(error),
+    stack: error instanceof Error ? error.stack : undefined,
+    ...details,
+  });
+}
+
+function analysisToolLabel(tool: AnalysisLogTool) {
+  if (tool === 'idw_interpolation') {
+    return '反距离加权';
+  }
+
+  if (tool === 'buffer_vector') {
+    return '缓冲区';
+  }
+
+  return overlayToolLabel(tool);
+}
+
+function summarizeUploadedLayerForAnalysis(layer: UploadedLayer | null | undefined) {
+  if (!layer) {
+    return null;
+  }
+
+  const geojson = summarizeGeoJsonForAnalysis(layer.geojson);
+
+  return {
+    id: layer.id,
+    name: layer.fileName,
+    geometryType: layer.geometryType ?? null,
+    geojson,
+    pointFeatureCount: layer.points.features.length,
+    fields: [...layer.fields],
+    numericFields: [...layer.numericFields],
+    selectedField: layer.selectedField,
+    selectedFeatureIndexCount: layer.selectedFeatureIndexes.length,
+    toolInput: summarizeShapefileInput(layer.toolInput),
+  };
+}
+
+function summarizeVectorToolInputForAnalysis(toolInput: ShapefileInput) {
+  return {
+    inputName: toolInput.inputName,
+    fileCount: Object.keys(toolInput.files).length,
+    fileNames: Object.keys(toolInput.files),
+  };
+}
+
+function summarizeGeoJsonForAnalysis(geojson: GeoJsonFeatureCollection) {
+  const geometryTypes = new Map<string, number>();
+  let bbox: [number, number, number, number] | null = null;
+
+  for (const feature of geojson.features) {
+    const geometry = featureGeometry(feature);
+
+    if (!geometry) {
+      continue;
+    }
+
+    geometryTypes.set(geometry.type, (geometryTypes.get(geometry.type) ?? 0) + 1);
+    bbox = mergeBbox(bbox, geometryBbox(geometry));
+  }
+
+  return {
+    featureCount: geojson.features.length,
+    geometryTypes: Object.fromEntries(geometryTypes),
+    bbox,
+  };
+}
+
+function summarizeToolResultForAnalysis(result: ToolResult, outputName?: string) {
+  const outputFiles = Object.keys(result.files);
+
+  return {
+    exitCode: result.exitCode,
+    stdoutLineCount: result.stdout.length,
+    stdoutPreview: result.stdout.slice(0, 20),
+    outputFiles,
+    expectedOutputName: outputName,
+    expectedOutputPresent: outputName ? Boolean(result.files[outputName]) : undefined,
+    expectedOutputBytes: outputName ? result.files[outputName]?.byteLength ?? 0 : undefined,
+  };
+}
+
+function summarizeShapefileInput(toolInput: ShapefileInput) {
+  return {
+    inputName: toolInput.inputName,
+    fileCount: Object.keys(toolInput.files).length,
+    fileNames: Object.keys(toolInput.files),
+  };
+}
+
+function summarizeVectorSelectionForAnalysis(
+  selection: { id: string; name: string; toolInput: ShapefileInput } | null,
+  layers: UploadedLayer[],
+  vectorOverlay: VectorOverlay | null,
+) {
+  if (!selection) {
+    return null;
+  }
+
+  const sourceLayer = selection.id === 'vectorOverlay'
+    ? null
+    : layers.find((item) => item.id === selection.id) ?? null;
+
+  return {
+    id: selection.id,
+    name: selection.name,
+    geometryType: sourceLayer?.geometryType ?? null,
+    geojson: selection.id === 'vectorOverlay'
+      ? summarizeGeoJsonForAnalysis(vectorOverlay?.geojson ?? { type: 'FeatureCollection', features: [] })
+      : sourceLayer
+        ? summarizeGeoJsonForAnalysis(sourceLayer.geojson)
+        : null,
+    toolInput: summarizeShapefileInput(selection.toolInput),
+  };
+}
+
+function mergeBbox(
+  left: [number, number, number, number] | null,
+  right: [number, number, number, number] | null,
+) {
+  if (!left) {
+    return right;
+  }
+
+  if (!right) {
+    return left;
+  }
+
+  return [
+    Math.min(left[0], right[0]),
+    Math.min(left[1], right[1]),
+    Math.max(left[2], right[2]),
+    Math.max(left[3], right[3]),
+  ] as [number, number, number, number];
+}
+
 function geoJsonBlob(geojson: GeoJsonFeatureCollection) {
   return new Blob([`${JSON.stringify(geojson, null, 2)}\n`], { type: 'application/geo+json;charset=utf-8' });
 }
 
-async function pickSaveFile(suggestedName: string) {
+async function geoPackageBlob(geojson: GeoJsonFeatureCollection, tableBaseName: string) {
+  const { GeoPackageAPI, setSqljsWasmLocateFile } = await import('@ngageoint/geopackage');
+  setSqljsWasmLocateFile(() => geoPackageSqlWasmUrl);
+
+  const geoPackage = await GeoPackageAPI.create();
+  const featureTableName = sanitizeGeoPackageTableName(tableBaseName);
+  const features = geojson.features as Feature[];
+  const columns = buildGeoPackageFeatureColumns(features, 'ctearthid');
+
+  try {
+    geoPackage.createFeatureTable(featureTableName, undefined, columns);
+    await geoPackage.addGeoJSONFeaturesToGeoPackage(features, featureTableName, false);
+    return new Uint8Array(await geoPackage.export());
+  } finally {
+    geoPackage.close();
+  }
+}
+
+function buildGeoPackageFeatureColumns(features: Feature[], primaryKeyName: string) {
+  const keys = new Set<string>();
+
+  for (const feature of features) {
+    Object.keys(feature.properties ?? {}).forEach((key) => keys.add(key));
+  }
+
+  const columns = [
+    FeatureColumn.createPrimaryKeyColumn(0, primaryKeyName),
+    FeatureColumn.createGeometryColumn(1, 'geometry', GeometryType.GEOMETRY, false),
+  ];
+
+  [...keys].sort().forEach((name, index) => {
+    columns.push(FeatureColumn.createColumn(
+      index + 2,
+      name,
+      GeoPackageDataType.fromName(inferGeoPackageDataType(features.map((feature) => feature.properties?.[name]))),
+    ));
+  });
+
+  return columns;
+}
+
+function inferGeoPackageDataType(values: unknown[]) {
+  const nonEmptyValues = values.filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
+
+  if (nonEmptyValues.length === 0) {
+    return 'TEXT';
+  }
+
+  if (nonEmptyValues.every((value) => typeof value === 'boolean')) {
+    return 'BOOLEAN';
+  }
+
+  if (nonEmptyValues.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    return nonEmptyValues.every((value) => Number.isInteger(value)) ? 'INTEGER' : 'DOUBLE';
+  }
+
+  return 'TEXT';
+}
+
+async function pickSaveFile(suggestedName: string, format: VectorExportFormat = 'geojson') {
   const picker = (window as SaveFilePickerWindow).showSaveFilePicker;
 
   if (!picker) {
@@ -1317,15 +2016,19 @@ async function pickSaveFile(suggestedName: string) {
 
   return picker({
     suggestedName,
-    types: [
-      {
-        description: 'GeoJSON',
-        accept: {
-          'application/geo+json': ['.geojson'],
-          'application/json': ['.json'],
-        },
+    types: format === 'geopackage' ? [{
+      description: 'GeoPackage',
+      accept: {
+        'application/geopackage+sqlite3': ['.gpkg'],
+        'application/octet-stream': ['.gpkg'],
       },
-    ],
+    }] : [{
+      description: 'GeoJSON',
+      accept: {
+        'application/geo+json': ['.geojson'],
+        'application/json': ['.json'],
+      },
+    }],
   });
 }
 
@@ -1518,6 +2221,7 @@ function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name
   };
 
   return {
+    id: createLayerId(name),
     name,
     toolInput: {
       inputName,
@@ -1827,6 +2531,10 @@ function editedRasterName(name: string) {
   return ensureTifName(name.replace(/\.tiff?$/i, '') + '-edited.tif');
 }
 
+function extractByMaskName(name: string) {
+  return ensureTifName(name.replace(/\.tiff?$/i, '') + '-extract-mask.tif');
+}
+
 function rasterToCanvas(raster: {
   width: number;
   height: number;
@@ -1977,6 +2685,16 @@ function isPointFeature(value: unknown): value is PointFeature {
   );
 }
 
+function hasPolygonOverlayFeatures(features: unknown[]) {
+  return features.some((feature) => {
+    if (!isRecord(feature) || !isRecord(feature.geometry)) {
+      return false;
+    }
+
+    return feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon';
+  });
+}
+
 function getFields(features: unknown[]) {
   const fields = new Set<string>();
 
@@ -2023,6 +2741,76 @@ function findSpatialReference(
   const layer = layers.find((item) => item.id === referenceLayerId);
 
   return layer ? { id: layer.id, name: layer.fileName, geojson: layer.geojson } : null;
+}
+
+function findRasterMaskInput(
+  layers: UploadedLayer[],
+  vectorOverlay: VectorOverlay | null,
+  maskLayerId: string,
+): { id: string; name: string; toolInput: ShapefileInput } | null {
+  if (!maskLayerId) {
+    return null;
+  }
+
+  if (maskLayerId === 'vectorOverlay' && vectorOverlay) {
+    return {
+      id: 'vectorOverlay',
+      name: vectorOverlay.name,
+      toolInput: createGeoJsonToolInput(vectorOverlay.name || 'mask.geojson', vectorOverlay.geojson),
+    };
+  }
+
+  const layer = layers.find((item) => item.id === maskLayerId);
+
+  return layer ? { id: layer.id, name: layer.fileName, toolInput: layer.toolInput } : null;
+}
+
+function findVectorToolInput(
+  layers: UploadedLayer[],
+  vectorOverlay: VectorOverlay | null,
+  layerId: string,
+): { id: string; name: string; toolInput: ShapefileInput } | null {
+  if (!layerId) {
+    return null;
+  }
+
+  if (layerId === 'vectorOverlay' && vectorOverlay) {
+    return {
+      id: 'vectorOverlay',
+      name: vectorOverlay.name,
+      toolInput: createGeoJsonToolInput(vectorOverlay.name || 'vector-overlay.geojson', vectorOverlay.geojson),
+    };
+  }
+
+  const layer = layers.find((item) => item.id === layerId);
+
+  return layer ? { id: layer.id, name: layer.fileName, toolInput: layer.toolInput } : null;
+}
+
+function isOverlayPolygonLayerAvailable(
+  layers: UploadedLayer[],
+  vectorOverlay: VectorOverlay | null,
+  layerId: string,
+) {
+  if (!layerId) {
+    return false;
+  }
+
+  if (layerId === 'vectorOverlay') {
+    if (!vectorOverlay) {
+      return false;
+    }
+
+    return hasPolygonOverlayFeatures(vectorOverlay.geojson.features);
+  }
+
+  const layer = layers.find((item) => item.id === layerId);
+
+  if (!layer) {
+    return false;
+  }
+
+  return hasPolygonOverlayFeatures(layer.geojson.features);
 }
 
 function applySelectionMode(currentIndexes: number[], matchedIndexes: number[], mode: SelectionMode) {
@@ -2467,6 +3255,20 @@ function basename(value: string) {
   return value.replace(/\\/g, '/').split('/').pop() ?? value;
 }
 
+export function displayLayerName(fileName: string) {
+  let name = basename(fileName || 'layer').trim() || 'layer';
+
+  while (true) {
+    const next = name.replace(/\.(zip|geojson|json|shp|gpkg|geopackage|geoparquet|tif|tiff|geotiff)$/i, '');
+
+    if (next === name) {
+      return name;
+    }
+
+    name = next || 'layer';
+  }
+}
+
 function createLayerId(fileName: string) {
   const safeName = fileName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'layer';
   return `${safeName}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2483,6 +3285,18 @@ function ensureTifName(value: string) {
 
 function ensureGeoJsonName(value: string) {
   return /\.geojson$/i.test(value) ? value : `${value}.geojson`;
+}
+
+function ensureGeoPackageName(value: string) {
+  return /\.gpkg$/i.test(value) ? value : `${value}.gpkg`;
+}
+
+function sanitizeGeoPackageTableName(value: string) {
+  return value
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}_]+/gu, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase() || 'layer';
 }
 
 function geoJsonToolInputName(fileName: string) {
@@ -2529,6 +3343,130 @@ function terrainToolLabel(tool: TerrainToolId) {
   }
 
   return '坡向';
+}
+
+function overlayToolLabel(tool: OverlayToolId) {
+  if (tool === 'intersect') {
+    return '相交';
+  }
+
+  if (tool === 'union') {
+    return '联合';
+  }
+
+  return '擦除';
+}
+
+type IdwResolution = {
+  cellSize: number;
+  radius: number;
+  cellSizeUnit: 'degrees' | 'meters' | 'map_units';
+  radiusUnit: 'degrees' | 'meters' | 'map_units';
+  inputBbox: [number, number, number, number] | null;
+  estimatedRasterSize: { width: number; height: number; cells: number } | null;
+  note: string;
+};
+
+function normalizeIdwResolution(
+  requestedCellSize: number,
+  requestedRadius: number,
+  inputLayer: UploadedLayer,
+): IdwResolution {
+  const inputBbox = pointCollectionBbox(inputLayer.points);
+  const geographic = Boolean(inputBbox && isLikelyLonLatBbox(inputBbox));
+  const shouldConvertCellSize = geographic && inputBbox ? shouldTreatIdwValueAsMeters(requestedCellSize, inputBbox) : false;
+  const shouldConvertRadius = geographic && inputBbox && requestedRadius > 0
+    ? shouldTreatIdwValueAsMeters(requestedRadius, inputBbox)
+    : false;
+  const cellSize = shouldConvertCellSize && inputBbox
+    ? metersToApproxDegrees(requestedCellSize, inputBbox)
+    : requestedCellSize;
+  const radius = shouldConvertRadius && inputBbox
+    ? metersToApproxDegrees(requestedRadius, inputBbox)
+    : requestedRadius;
+  const estimatedRasterSize = inputBbox ? estimateRasterSize(inputBbox, cellSize) : null;
+
+  if (estimatedRasterSize && estimatedRasterSize.cells > maxIdwOutputCells) {
+    throw new Error(
+      `IDW 输出栅格预计为 ${estimatedRasterSize.width} x ${estimatedRasterSize.height}，像元过多。请调大输出像元大小。`,
+    );
+  }
+
+  const note = shouldConvertCellSize
+    ? `${requestedCellSize} 米约 ${formatIdwNumber(cellSize)} 度`
+    : '';
+
+  return {
+    cellSize,
+    radius,
+    cellSizeUnit: geographic ? (shouldConvertCellSize ? 'meters' : 'degrees') : 'map_units',
+    radiusUnit: geographic ? (shouldConvertRadius ? 'meters' : 'degrees') : 'map_units',
+    inputBbox,
+    estimatedRasterSize,
+    note,
+  };
+}
+
+function pointCollectionBbox(points: PointCollection): [number, number, number, number] | null {
+  if (points.features.length === 0) {
+    return null;
+  }
+
+  return points.features.reduce(
+    (bounds, feature) => {
+      const [x, y] = feature.geometry.coordinates;
+
+      return [
+        Math.min(bounds[0], x),
+        Math.min(bounds[1], y),
+        Math.max(bounds[2], x),
+        Math.max(bounds[3], y),
+      ] as [number, number, number, number];
+    },
+    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
+  );
+}
+
+function isLikelyLonLatBbox(bbox: [number, number, number, number]) {
+  return bbox[0] >= -180
+    && bbox[2] <= 180
+    && bbox[1] >= -90
+    && bbox[3] <= 90
+    && bbox[0] <= bbox[2]
+    && bbox[1] <= bbox[3];
+}
+
+function shouldTreatIdwValueAsMeters(value: number, bbox: [number, number, number, number]) {
+  const degreeExtent = Math.max(Math.abs(bbox[2] - bbox[0]), Math.abs(bbox[3] - bbox[1]));
+
+  return value > degreeExtent;
+}
+
+function metersToApproxDegrees(meters: number, bbox: [number, number, number, number]) {
+  const centerLatitude = (bbox[1] + bbox[3]) / 2;
+  const metersPerLatitudeDegree = 111_320;
+  const metersPerLongitudeDegree = Math.max(
+    metersPerLatitudeDegree * Math.cos(centerLatitude * Math.PI / 180),
+    1,
+  );
+  const metersPerDegree = Math.sqrt(metersPerLatitudeDegree * metersPerLongitudeDegree);
+
+  return meters / metersPerDegree;
+}
+
+function estimateRasterSize(bbox: [number, number, number, number], cellSize: number) {
+  const width = Math.max(1, Math.ceil(Math.abs(bbox[2] - bbox[0]) / cellSize));
+  const height = Math.max(1, Math.ceil(Math.abs(bbox[3] - bbox[1]) / cellSize));
+
+  return {
+    width,
+    height,
+    cells: width * height,
+  };
+}
+
+function formatIdwNumber(value: number) {
+  return Number.isFinite(value) ? Number(value.toPrecision(6)).toString() : String(value);
 }
 
 function positiveNumber(value: string, name: string) {

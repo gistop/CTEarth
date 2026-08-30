@@ -54,6 +54,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
+import { CoordinateSystemControls as MapCoordinateSystemControls } from './components/map/CoordinateSystemControls';
 import type { OpenLayersProjectionMapHandle } from './components/map/OpenLayersProjectionMap';
 import {
   AttributeTableProvider,
@@ -76,6 +77,7 @@ import {
   type MapViewMode,
   useMapCommands,
 } from './components/map/MapCommandContext';
+import { MapIdentifyProvider, useMapIdentify } from './components/map/MapIdentifyContext';
 import { MapSelectionProvider, useMapSelection } from './components/map/MapSelectionContext';
 import {
   LayoutElementControls,
@@ -92,11 +94,15 @@ import {
   GisProvider,
   type BufferParameters as BufferRunParameters,
   type EditableGeometryType,
+  type ExtractByMaskParameters as ExtractByMaskRunParameters,
   type IdwParameters as IdwRunParameters,
+  type OverlayParameters as OverlayRunParameters,
+  type OverlayToolId,
   type SelectByLocationParameters as SelectByLocationRunParameters,
   type SelectByValueParameters as SelectByValueRunParameters,
   type TerrainParameters as TerrainRunParameters,
   type TerrainToolId,
+  displayLayerName,
   useGis,
 } from './gisStore';
 
@@ -275,18 +281,28 @@ const baseRibbonGroups: RibbonGroup[] = [
 ];
 
 function createMapRibbonGroups({
+  activateMapPanel,
+  activateProjectionMapPanel,
   clearSelection,
   activeTab,
   hasLayers,
+  identifyActive,
   selectionActive,
+  setIdentifyActive,
   setSelectionActive,
+  toggleIdentifyActive,
   toggleSelectionActive,
 }: {
+  activateMapPanel: () => void;
+  activateProjectionMapPanel: () => void;
   clearSelection: ReturnType<typeof useGis>['clearSelection'];
   activeTab: RibbonTab;
   hasLayers: boolean;
+  identifyActive: boolean;
   selectionActive: boolean;
+  setIdentifyActive: (active: boolean) => void;
   setSelectionActive: (active: boolean) => void;
+  toggleIdentifyActive: () => void;
   toggleSelectionActive: () => void;
 }): RibbonGroup[] {
   const groups = baseRibbonGroups.map((group, groupIndex) => {
@@ -295,7 +311,14 @@ function createMapRibbonGroups({
         ...group,
         tools: group.tools.map((tool, toolIndex) => (
           toolIndex === 0
-            ? { ...tool, active: !selectionActive, onClick: () => setSelectionActive(false) }
+            ? {
+              ...tool,
+              active: !selectionActive && !identifyActive,
+              onClick: () => {
+                setSelectionActive(false);
+                setIdentifyActive(false);
+              },
+            }
             : tool
         )),
       };
@@ -311,7 +334,10 @@ function createMapRibbonGroups({
               active: selectionActive,
               disabled: !hasLayers,
               muted: !hasLayers,
-              onClick: toggleSelectionActive,
+              onClick: () => {
+                setIdentifyActive(false);
+                toggleSelectionActive();
+              },
             };
           }
 
@@ -351,52 +377,38 @@ function createMapRibbonGroups({
     return group;
   });
 
+  groups[4] = {
+    ...groups[4],
+    tools: [
+      {
+        label: '识别',
+        icon: Tags,
+        active: identifyActive,
+        disabled: !hasLayers,
+        muted: !hasLayers,
+        onClick: () => {
+          setSelectionActive(false);
+          toggleIdentifyActive();
+        },
+      },
+      ...groups[4].tools,
+    ],
+  };
+
   return [
     ...groups.slice(0, 2),
     {
       title: '坐标系',
       tools: [],
-      accessory: <CoordinateSystemControls />,
+      accessory: (
+        <MapCoordinateSystemControls
+          activateMapPanel={activateMapPanel}
+          activateProjectionMapPanel={activateProjectionMapPanel}
+        />
+      ),
     },
     ...groups.slice(2),
   ];
-}
-
-const displayCrsOptions: { id: DisplayCrsId; label: string; title: string }[] = [
-  { id: 'webMercator', label: 'Web Mercator', title: 'EPSG:3857，使用 MapLibre 显示' },
-  { id: 'wgs84', label: 'WGS84', title: 'EPSG:4326，使用 OpenLayers 显示' },
-  { id: 'epsg32651', label: 'EPSG:32651', title: 'WGS 84 / UTM zone 51N，使用 OpenLayers 显示' },
-];
-
-function CoordinateSystemControls() {
-  const { hasMapCommands, mapCommandState, setDisplayCrs } = useMapCommands();
-  const { activateMapPanel, activateProjectionMapPanel } = useDockPanelActions();
-
-  return (
-    <div className="ribbon-crs-switcher" role="radiogroup" aria-label="显示坐标系">
-      {displayCrsOptions.map((option) => (
-        <button
-          key={option.id}
-          className={mapCommandState.displayCrs === option.id ? 'is-selected' : undefined}
-          type="button"
-          role="radio"
-          title={option.title}
-          aria-checked={mapCommandState.displayCrs === option.id}
-          disabled={!hasMapCommands || mapCommandState.mapMode === 'globe'}
-          onClick={() => {
-            setDisplayCrs(option.id);
-            if (option.id === 'webMercator') {
-              activateMapPanel();
-            } else {
-              activateProjectionMapPanel();
-            }
-          }}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 const layoutRibbonGroups: RibbonGroup[] = [
@@ -532,7 +544,7 @@ function createEditRibbonGroups({
             {layers.length === 0 ? <option value="">无可编辑图层</option> : null}
             {layers.map((layer) => (
               <option key={layer.id} value={layer.id}>
-                {layer.fileName}
+                {displayLayerName(layer.fileName)}
               </option>
             ))}
           </select>
@@ -609,7 +621,7 @@ function RasterEditControls() {
         <Layers size={18} strokeWidth={1.7} />
         <select value={raster ? 'raster' : ''} disabled={!raster} aria-label="当前栅格图层">
           {raster ? (
-            <option value="raster">{raster.name}</option>
+            <option value="raster">{displayLayerName(raster.name)}</option>
           ) : (
             <option value="">无栅格图层</option>
           )}
@@ -744,6 +756,8 @@ function Ribbon({
 }) {
   const digitize = useDigitize();
   const { activeLayerId, clearSelection, createBlankGeoJsonLayer, layers, saveGeoJsonLayer, setActiveLayer } = useGis();
+  const { activateMapPanel, activateProjectionMapPanel } = useDockPanelActions();
+  const { identifyActive, setIdentifyActive, toggleIdentifyActive } = useMapIdentify();
   const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
   const activeEditLayer = layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null;
 
@@ -777,11 +791,16 @@ function Ribbon({
         };
       })
       : createMapRibbonGroups({
+        activateMapPanel,
+        activateProjectionMapPanel,
         activeTab,
         clearSelection,
         hasLayers: layers.length > 0,
+        identifyActive,
         selectionActive,
+        setIdentifyActive,
         setSelectionActive,
+        toggleIdentifyActive,
         toggleSelectionActive,
       });
 
@@ -893,9 +912,9 @@ function ContentsPanel() {
         {layer ? (
           <>
             <div className="tree-row selected">
-              <input type="checkbox" defaultChecked aria-label={`${layer.fileName} 图层`} />
+              <input type="checkbox" defaultChecked aria-label={`${displayLayerName(layer.fileName)} 图层`} />
               <span className="layer-swatch point" />
-              <span>{layer.fileName}</span>
+              <span>{displayLayerName(layer.fileName)}</span>
             </div>
             <div className="layer-note">
               {layer.geojson.features.length} 个要素
@@ -919,13 +938,15 @@ function isGeoTiffFile(fileName: string) {
 type InspectorTabId = 'statistics' | 'mask' | 'annotation' | 'tools';
 type ToolView = 'tree' | 'detail';
 type ToolDetailTab = 'parameters' | 'environment';
-type AnalysisTool = 'idw' | 'buffer' | 'selectByValue' | 'selectByLocation' | TerrainToolId;
+type AnalysisTool = 'idw' | 'buffer' | 'extractByMask' | 'selectByValue' | 'selectByLocation' | TerrainToolId | OverlayToolId;
 type ToolNode = {
   id: string;
   label: string;
   children?: ToolNode[];
   tool?: AnalysisTool;
 };
+
+const overlayToolIds = ['intersect', 'union', 'erase'] as const;
 
 const inspectorTabs: {
   id: InspectorTabId;
@@ -953,8 +974,22 @@ const toolTree: ToolNode[] = [{
       children: [{ id: 'general-proximity-buffer', label: '缓冲区', tool: 'buffer' }],
     },
     {
+      id: 'general-overlay',
+      label: '叠加',
+      children: [
+        { id: 'general-overlay-intersect', label: '相交', tool: 'intersect' },
+        { id: 'general-overlay-union', label: '联合', tool: 'union' },
+        { id: 'general-overlay-erase', label: '擦除', tool: 'erase' },
+      ],
+    },
+    {
+      id: 'general-extraction',
+      label: '提取',
+      children: [{ id: 'general-extraction-mask', label: '按掩膜提取', tool: 'extractByMask' }],
+    },
+    {
       id: 'general-selection',
-      label: '选择工具箱',
+      label: '选择',
       children: [
         { id: 'general-selection-value', label: '按属性选择', tool: 'selectByValue' },
         { id: 'general-selection-location', label: '按位置选择', tool: 'selectByLocation' },
@@ -962,7 +997,7 @@ const toolTree: ToolNode[] = [{
     },
     {
       id: 'general-terrain',
-      label: '地形工具箱',
+      label: '地形',
       children: [
         { id: 'general-terrain-hillshade', label: '山体阴影', tool: 'hillshade' },
         { id: 'general-terrain-slope', label: '坡度', tool: 'slope' },
@@ -983,8 +1018,12 @@ const toolTree: ToolNode[] = [{
 const toolTitles: Record<AnalysisTool, string> = {
   idw: '反距离加权',
   buffer: '缓冲区',
+  extractByMask: '按掩膜提取',
   selectByValue: '按属性选择',
   selectByLocation: '按位置选择',
+  intersect: '相交',
+  union: '联合',
+  erase: '擦除',
   hillshade: '山体阴影',
   slope: '坡度',
   aspect: '坡向',
@@ -1046,7 +1085,7 @@ function StatisticsTab() {
         <dt>图层数</dt>
         <dd>{layers.length}</dd>
         <dt>当前图层</dt>
-        <dd>{layer?.fileName ?? '无'}</dd>
+        <dd>{displayLayerName(layer?.fileName ?? '') || '无'}</dd>
         <dt>要素数</dt>
         <dd>{layer?.geojson.features.length ?? 0}</dd>
         <dt>已选择</dt>
@@ -1058,7 +1097,7 @@ function StatisticsTab() {
         <dt>栅格结果</dt>
         <dd>{raster ? `${raster.width} x ${raster.height}` : '无'}</dd>
         <dt>矢量结果</dt>
-        <dd>{vectorOverlay ? vectorOverlay.name : '无'}</dd>
+        <dd>{vectorOverlay ? displayLayerName(vectorOverlay.name) : '无'}</dd>
         <dt>WASM</dt>
         <dd>{toolsReady ? '已就绪' : '加载中'}</dd>
         <dt>任务状态</dt>
@@ -1091,7 +1130,7 @@ function ToolsTab() {
   const [view, setView] = useState<ToolView>('tree');
   const [detailTab, setDetailTab] = useState<ToolDetailTab>('parameters');
   const [activeTool, setActiveTool] = useState<AnalysisTool>('idw');
-  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(() => new Set(['general', 'general-interpolation', 'general-proximity', 'general-selection', 'general-terrain', 'industry']));
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(() => new Set());
   const trimmedQuery = query.trim();
   const normalizedQuery = trimmedQuery.toLowerCase();
   const visibleNodes = useMemo(() => filterToolTree(toolTree, normalizedQuery), [normalizedQuery]);
@@ -1319,7 +1358,9 @@ function ToolDetailView({
     layers,
     raster,
     runBufferAnalysis,
+    runExtractByMask,
     runIdwInterpolation,
+    runOverlayAnalysis,
     runTerrainAnalysis,
     selectByLocation,
     selectByValue,
@@ -1327,6 +1368,7 @@ function ToolDetailView({
     vectorOverlay,
   } = useGis();
   const [idwParams, setIdwParams] = useState<IdwRunParameters>({
+    layerId: defaultIdwLayerId(layers, layer),
     field: layer?.selectedField ?? '',
     outputName: 'idw-interpolation.tif',
     cellSize: '0.001',
@@ -1335,12 +1377,37 @@ function ToolDetailView({
     minPoints: '0',
   });
   const [bufferParams, setBufferParams] = useState<BufferRunParameters>({
-    outputName: 'buffer.geojson',
+    outputName: 'buffer',
     distance: '0.01',
     quadrantSegments: '8',
     capStyle: 'round',
     joinStyle: 'round',
     dissolve: false,
+  });
+  const [overlayParamsByTool, setOverlayParamsByTool] = useState<Record<OverlayToolId, OverlayRunParameters>>({
+    intersect: {
+      inputLayerId: defaultOverlayInputLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+      overlayLayerId: defaultOverlayLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+      outputName: 'intersect.geojson',
+      snapTolerance: '',
+    },
+    union: {
+      inputLayerId: defaultOverlayInputLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+      overlayLayerId: defaultOverlayLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+      outputName: 'union.geojson',
+      snapTolerance: '',
+    },
+    erase: {
+      inputLayerId: defaultOverlayInputLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+      overlayLayerId: defaultOverlayLayerId(layers, layer?.id, Boolean(vectorOverlay)),
+      outputName: 'erase.geojson',
+      snapTolerance: '',
+    },
+  });
+  const [extractByMaskParams, setExtractByMaskParams] = useState<ExtractByMaskRunParameters>({
+    maskLayerId: defaultMaskLayerId(layers, Boolean(vectorOverlay)),
+    outputName: 'extract-by-mask.tif',
+    maintainDimensions: true,
   });
   const [selectValueParams, setSelectValueParams] = useState<SelectByValueRunParameters>({
     field: layer?.fields[0] ?? '',
@@ -1379,25 +1446,45 @@ function ToolDetailView({
   });
   const title = toolTitles[tool];
   const terrainTool = isTerrainTool(tool) ? tool : null;
+  const overlayTool = isOverlayTool(tool) ? tool : null;
   const terrainParams = terrainTool ? terrainParamsByTool[terrainTool] : terrainParamsByTool.hillshade;
-  const requiresWasm = tool === 'idw' || tool === 'buffer' || Boolean(terrainTool);
+  const overlayParams = overlayTool ? overlayParamsByTool[overlayTool] : overlayParamsByTool.intersect;
+  const requiresWasm = tool === 'idw' || tool === 'buffer' || tool === 'extractByMask' || Boolean(terrainTool) || Boolean(overlayTool);
   const requiresLayer = tool === 'idw' || tool === 'buffer' || tool === 'selectByValue' || tool === 'selectByLocation';
-  const requiresRaster = Boolean(terrainTool);
+  const requiresRaster = tool === 'extractByMask' || Boolean(terrainTool);
+  const requiresPointLayer = tool === 'idw';
+  const requiresMaskLayer = tool === 'extractByMask';
+  const requiresOverlayLayers = Boolean(overlayTool);
+  const hasPointLayer = isIdwLayerAvailable(layers, idwParams.layerId);
+  const hasMaskLayer = isMaskLayerAvailable(layers, vectorOverlay, extractByMaskParams.maskLayerId);
+  const hasOverlayLayers = isOverlayLayerAvailable(layers, vectorOverlay, overlayParams.inputLayerId)
+    && isOverlayLayerAvailable(layers, vectorOverlay, overlayParams.overlayLayerId)
+    && overlayParams.inputLayerId !== overlayParams.overlayLayerId;
 
   useEffect(() => {
+    const idwLayerId = defaultIdwLayerId(layers, layer);
+    setIdwParams((current) => {
+      const nextLayerId = isIdwLayerAvailable(layers, current.layerId) ? current.layerId : idwLayerId;
+      const selectedIdwLayer = layers.find((item) => item.id === nextLayerId) ?? null;
+
+      return {
+        ...current,
+        layerId: nextLayerId,
+        field: selectedIdwLayer && (!current.field || !selectedIdwLayer.numericFields.includes(current.field))
+          ? selectedIdwLayer.selectedField
+          : current.field,
+      };
+    });
+
     if (!layer) {
       return;
     }
 
-    setIdwParams((current) => ({
-      ...current,
-      field: current.field || layer.selectedField,
-    }));
     setSelectValueParams((current) => ({
       ...current,
       field: current.field && layer.fields.includes(current.field) ? current.field : layer.fields[0] ?? '',
     }));
-  }, [layer]);
+  }, [layer, layers]);
 
   useEffect(() => {
     const referenceLayerId = defaultReferenceLayerId(layers, layer?.id, Boolean(vectorOverlay));
@@ -1406,13 +1493,48 @@ function ToolDetailView({
       ...current,
       referenceLayerId: current.referenceLayerId || referenceLayerId,
     }));
+
+    setOverlayParamsByTool((current) => {
+      const next = {
+        intersect: normalizeOverlayParams(current.intersect, layers, layer?.id, Boolean(vectorOverlay)),
+        union: normalizeOverlayParams(current.union, layers, layer?.id, Boolean(vectorOverlay)),
+        erase: normalizeOverlayParams(current.erase, layers, layer?.id, Boolean(vectorOverlay)),
+      };
+
+      return overlayToolIds.every((id) => sameOverlayParams(current[id], next[id])) ? current : next;
+    });
   }, [layer?.id, layers, vectorOverlay]);
+
+  useEffect(() => {
+    const maskLayerId = defaultMaskLayerId(layers, Boolean(vectorOverlay));
+
+    setExtractByMaskParams((current) => ({
+      ...current,
+      maskLayerId: isMaskLayerAvailable(layers, vectorOverlay, current.maskLayerId) ? current.maskLayerId : maskLayerId,
+    }));
+  }, [layers, vectorOverlay]);
 
   const updateIdwParam = (name: keyof IdwRunParameters, value: string) => {
     setIdwParams((current) => ({ ...current, [name]: value }));
   };
   const updateBufferParam = (name: keyof BufferRunParameters, value: string | boolean) => {
     setBufferParams((current) => ({ ...current, [name]: value }));
+  };
+  const updateOverlayParam = (name: keyof OverlayRunParameters, value: string) => {
+    if (!overlayTool) {
+      return;
+    }
+
+    setOverlayParamsByTool((current) => ({
+      ...current,
+      [overlayTool]: {
+        ...current[overlayTool],
+        [name]: value,
+      },
+    }));
+  };
+  const updateExtractByMaskParam = (name: keyof ExtractByMaskRunParameters, value: string | boolean) => {
+    setExtractByMaskParams((current) => ({ ...current, [name]: value }));
   };
   const updateSelectValueParam = (name: keyof SelectByValueRunParameters, value: string | boolean) => {
     setSelectValueParams((current) => ({ ...current, [name]: value }));
@@ -1441,6 +1563,16 @@ function ToolDetailView({
 
     if (tool === 'buffer') {
       void runBufferAnalysis(bufferParams);
+      return;
+    }
+
+    if (overlayTool) {
+      void runOverlayAnalysis(overlayTool, overlayParams);
+      return;
+    }
+
+    if (tool === 'extractByMask') {
+      void runExtractByMask(extractByMaskParams);
       return;
     }
 
@@ -1497,6 +1629,12 @@ function ToolDetailView({
         ) : (
           null
         )}
+        {activeTab === 'parameters' && overlayTool ? (
+          <OverlayParameters tool={overlayTool} params={overlayParams} onChange={updateOverlayParam} />
+        ) : null}
+        {activeTab === 'parameters' && tool === 'extractByMask' ? (
+          <ExtractByMaskParameters params={extractByMaskParams} onChange={updateExtractByMaskParam} />
+        ) : null}
         {activeTab === 'parameters' && tool === 'selectByValue' ? (
           <SelectByValueParameters params={selectValueParams} onChange={updateSelectValueParam} />
         ) : null}
@@ -1513,7 +1651,7 @@ function ToolDetailView({
         <button
           className="primary"
           type="button"
-          disabled={(requiresWasm && !toolsReady) || (requiresLayer && !layer) || (requiresRaster && !raster) || isRunning}
+          disabled={(requiresWasm && !toolsReady) || (requiresLayer && !layer) || (requiresRaster && !raster) || (requiresPointLayer && !hasPointLayer) || (requiresMaskLayer && !hasMaskLayer) || (requiresOverlayLayers && !hasOverlayLayers) || isRunning}
           onClick={runActiveTool}
         >
           <Play size={15} />
@@ -1531,21 +1669,44 @@ function IdwParameters({
   params: IdwRunParameters;
   onChange: (name: keyof IdwRunParameters, value: string) => void;
 }) {
-  const { layer, setSelectedField } = useGis();
-  const fieldOptions = layer?.numericFields ?? [];
-  const inputName = layer?.fileName ?? '';
+  const { layer, layers, setActiveLayer, setSelectedField } = useGis();
+  const pointLayerOptions = layers.filter((item) => item.points.features.length > 0);
+  const selectedLayer = pointLayerOptions.find((item) => item.id === params.layerId)
+    ?? (layer && layer.points.features.length > 0 ? layer : null)
+    ?? pointLayerOptions[0]
+    ?? null;
+  const fieldOptions = selectedLayer?.numericFields ?? [];
 
   return (
     <form className="tool-form">
       <ToolField label="输入点要素" required action="folder">
-        <input value={inputName} readOnly placeholder="请先在左侧上传 Shapefile ZIP" />
+        <select
+          value={selectedLayer?.id ?? ''}
+          onChange={(event) => {
+            const nextLayer = pointLayerOptions.find((item) => item.id === event.target.value);
+
+            onChange('layerId', event.target.value);
+            onChange('field', nextLayer?.selectedField ?? nextLayer?.numericFields[0] ?? '');
+
+            if (nextLayer) {
+              setActiveLayer(nextLayer.id);
+            }
+          }}
+        >
+          <option value="" disabled>选择点图层</option>
+          {pointLayerOptions.map((item) => (
+            <option key={item.id} value={item.id}>{idwLayerDisplayName(item.fileName)}</option>
+          ))}
+        </select>
       </ToolField>
       <ToolField label="Z 值字段" required action="settings">
         <select
           value={params.field}
           onChange={(event) => {
             onChange('field', event.target.value);
-            setSelectedField(event.target.value);
+            if (selectedLayer?.id === layer?.id) {
+              setSelectedField(event.target.value);
+            }
           }}
         >
           <option value="" disabled>选择字段</option>
@@ -1619,6 +1780,117 @@ function BufferParameters({
       </ToolField>
       <ToolField label="融合结果">
         <input checked={params.dissolve} type="checkbox" onChange={(event) => onChange('dissolve', event.target.checked)} />
+      </ToolField>
+    </form>
+  );
+}
+
+function OverlayParameters({
+  tool,
+  params,
+  onChange,
+}: {
+  tool: OverlayToolId;
+  params: OverlayRunParameters;
+  onChange: (name: keyof OverlayRunParameters, value: string) => void;
+}) {
+  const { layers, vectorOverlay } = useGis();
+  const polygonLayers = layers.filter(isPolygonOverlaySource);
+  const polygonVectorOverlay = vectorOverlay && hasPolygonOverlayFeatures(vectorOverlay.geojson.features)
+    ? vectorOverlay
+    : null;
+  const layerOptions = [
+    ...polygonLayers.map((item) => ({ id: item.id, label: displayLayerName(item.fileName) })),
+    ...(vectorOverlay ? [{ id: 'vectorOverlay', label: `${displayLayerName(vectorOverlay.name)}（叠加结果）` }] : []),
+  ];
+  const overlayLayerOptions = layerOptions.filter((option) => option.id !== 'vectorOverlay' || Boolean(polygonVectorOverlay));
+  const overlayOptions = overlayLayerOptions.filter((option) => option.id !== params.inputLayerId);
+
+  return (
+    <form className="tool-form">
+      <ToolField label="输入要素" required action="folder">
+        <select
+          value={params.inputLayerId}
+          onChange={(event) => {
+            const inputLayerId = event.target.value;
+            const nextOverlayLayerId = params.overlayLayerId === inputLayerId
+              ? layerOptions.find((option) => option.id !== inputLayerId)?.id ?? ''
+              : params.overlayLayerId;
+
+            onChange('inputLayerId', inputLayerId);
+            onChange('overlayLayerId', nextOverlayLayerId);
+          }}
+        >
+          <option value="" disabled>选择输入图层</option>
+          {overlayLayerOptions.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
+      </ToolField>
+      <ToolField label="叠加要素" required action="folder">
+        <select value={params.overlayLayerId} onChange={(event) => onChange('overlayLayerId', event.target.value)}>
+          <option value="" disabled>选择叠加图层</option>
+          {overlayOptions.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
+      </ToolField>
+      <ToolField label="输出要素" required action="folder">
+        <input value={params.outputName} onChange={(event) => onChange('outputName', event.target.value)} />
+      </ToolField>
+      <ToolField label="捕捉容差">
+        <input
+          value={params.snapTolerance}
+          type="number"
+          min="0"
+          step="any"
+          placeholder="默认"
+          onChange={(event) => onChange('snapTolerance', event.target.value)}
+        />
+      </ToolField>
+      <ToolField label="叠加类型">
+        <input value={toolTitles[tool]} readOnly />
+      </ToolField>
+    </form>
+  );
+}
+
+function ExtractByMaskParameters({
+  params,
+  onChange,
+}: {
+  params: ExtractByMaskRunParameters;
+  onChange: (name: keyof ExtractByMaskRunParameters, value: string | boolean) => void;
+}) {
+  const { layers, raster, vectorOverlay } = useGis();
+  const inputName = raster?.name ?? '';
+  const maskOptions = [
+    ...layers.map((item) => ({ id: item.id, label: displayLayerName(item.fileName) })),
+    ...(vectorOverlay ? [{ id: 'vectorOverlay', label: displayLayerName(vectorOverlay.name) }] : []),
+  ];
+
+  return (
+    <form className="tool-form">
+      <ToolField label="输入栅格" required action="folder">
+        <input value={inputName} readOnly placeholder="请先添加 GeoTIFF 栅格" />
+      </ToolField>
+      <ToolField label="输入掩膜数据" required action="folder">
+        <select value={params.maskLayerId} onChange={(event) => onChange('maskLayerId', event.target.value)}>
+          <option value="" disabled>选择面图层或缓冲区结果</option>
+          {maskOptions.map((option) => (
+            <option key={option.id} value={option.id}>{option.label}</option>
+          ))}
+        </select>
+      </ToolField>
+      <ToolField label="输出栅格" required action="folder">
+        <input value={params.outputName} onChange={(event) => onChange('outputName', event.target.value)} />
+      </ToolField>
+      <ToolField label="保持输入栅格尺寸">
+        <input
+          checked={params.maintainDimensions}
+          type="checkbox"
+          onChange={(event) => onChange('maintainDimensions', event.target.checked)}
+        />
       </ToolField>
     </form>
   );
@@ -1702,8 +1974,8 @@ function SelectByLocationParameters({
   const referenceOptions = [
     ...layers
       .filter((item) => item.id !== layer?.id)
-      .map((item) => ({ id: item.id, label: item.fileName })),
-    ...(vectorOverlay ? [{ id: 'vectorOverlay', label: vectorOverlay.name }] : []),
+      .map((item) => ({ id: item.id, label: displayLayerName(item.fileName) })),
+    ...(vectorOverlay ? [{ id: 'vectorOverlay', label: displayLayerName(vectorOverlay.name) }] : []),
   ];
 
   return (
@@ -1788,8 +2060,123 @@ function defaultReferenceLayerId(layers: { id: string }[], activeLayerId: string
   return layers.find((item) => item.id !== activeLayerId)?.id ?? (hasVectorOverlay ? 'vectorOverlay' : '');
 }
 
+function defaultIdwLayerId(
+  layers: Array<{ id: string; points: { features: unknown[] } }>,
+  activeLayer: { id: string; points: { features: unknown[] } } | null,
+) {
+  if (activeLayer && activeLayer.points.features.length > 0) {
+    return activeLayer.id;
+  }
+
+  return layers.find((item) => item.points.features.length > 0)?.id ?? '';
+}
+
+function idwLayerDisplayName(fileName: string) {
+  return /\.geojson$/i.test(fileName) ? fileName : `${fileName}.geojson`;
+}
+
+function isIdwLayerAvailable(layers: Array<{ id: string; points: { features: unknown[] } }>, layerId: string) {
+  return Boolean(layerId) && layers.some((item) => item.id === layerId && item.points.features.length > 0);
+}
+
+function defaultMaskLayerId(layers: { id: string }[], hasVectorOverlay: boolean) {
+  return layers[0]?.id ?? (hasVectorOverlay ? 'vectorOverlay' : '');
+}
+
+function isMaskLayerAvailable(layers: { id: string }[], vectorOverlay: unknown, maskLayerId: string) {
+  if (!maskLayerId) {
+    return false;
+  }
+
+  return layers.some((item) => item.id === maskLayerId) || (maskLayerId === 'vectorOverlay' && Boolean(vectorOverlay));
+}
+
+function defaultOverlayInputLayerId(layers: { id: string }[], activeLayerId: string | undefined, hasVectorOverlay: boolean) {
+  const polygonLayers = layers.filter(isPolygonOverlaySource);
+
+  if (activeLayerId && polygonLayers.some((item) => item.id === activeLayerId)) {
+    return activeLayerId;
+  }
+
+  return polygonLayers[0]?.id ?? (hasVectorOverlay ? 'vectorOverlay' : '');
+}
+
+function defaultOverlayLayerId(layers: { id: string }[], inputLayerId: string | undefined, hasVectorOverlay: boolean) {
+  const polygonLayers = layers.filter(isPolygonOverlaySource).filter((item) => item.id !== inputLayerId);
+
+  return polygonLayers[0]?.id ?? (hasVectorOverlay && inputLayerId !== 'vectorOverlay' ? 'vectorOverlay' : '');
+}
+
+function isOverlayLayerAvailable(layers: { id: string }[], vectorOverlay: unknown, layerId: string) {
+  if (!layerId) {
+    return false;
+  }
+
+  return layers.some((item) => item.id === layerId && isPolygonOverlaySource(item))
+    || (layerId === 'vectorOverlay' && isPolygonOverlayVectorOverlay(vectorOverlay));
+}
+
+function normalizeOverlayParams(
+  params: OverlayRunParameters,
+  layers: { id: string }[],
+  activeLayerId: string | undefined,
+  hasVectorOverlay: boolean,
+): OverlayRunParameters {
+  const inputLayerId = isOverlayLayerAvailable(layers, hasVectorOverlay, params.inputLayerId)
+    ? params.inputLayerId
+    : defaultOverlayInputLayerId(layers, activeLayerId, hasVectorOverlay);
+  const overlayLayerId = isOverlayLayerAvailable(layers, hasVectorOverlay, params.overlayLayerId) && params.overlayLayerId !== inputLayerId
+    ? params.overlayLayerId
+    : defaultOverlayLayerId(layers, inputLayerId, hasVectorOverlay);
+
+  return {
+    ...params,
+    inputLayerId,
+    overlayLayerId,
+  };
+}
+
+function sameOverlayParams(left: OverlayRunParameters, right: OverlayRunParameters) {
+  return left.inputLayerId === right.inputLayerId
+    && left.overlayLayerId === right.overlayLayerId
+    && left.outputName === right.outputName
+    && left.snapTolerance === right.snapTolerance;
+}
+
 function isTerrainTool(tool: AnalysisTool): tool is TerrainToolId {
   return tool === 'hillshade' || tool === 'slope' || tool === 'aspect';
+}
+
+function isOverlayTool(tool: AnalysisTool): tool is OverlayToolId {
+  return (overlayToolIds as readonly AnalysisTool[]).includes(tool);
+}
+
+function isPolygonOverlaySource(layer: { id: string; geojson?: { features: unknown[] } }) {
+  return hasPolygonOverlayFeatures(layer.geojson?.features ?? []);
+}
+
+function isPolygonOverlayVectorOverlay(vectorOverlay: unknown) {
+  if (!vectorOverlay || typeof vectorOverlay !== 'object' || !('geojson' in vectorOverlay)) {
+    return false;
+  }
+
+  const geojson = (vectorOverlay as { geojson?: { features?: unknown[] } }).geojson;
+
+  return hasPolygonOverlayFeatures(geojson?.features ?? []);
+}
+
+function hasPolygonOverlayFeatures(features: unknown[]) {
+  return features.some(isPolygonFeature);
+}
+
+function isPolygonFeature(feature: unknown) {
+  if (!feature || typeof feature !== 'object') {
+    return false;
+  }
+
+  const geometry = (feature as { geometry?: { type?: unknown } }).geometry;
+
+  return geometry?.type === 'Polygon' || geometry?.type === 'MultiPolygon';
 }
 
 function AnalysisEnvironment() {
@@ -1898,6 +2285,7 @@ function AttributeChartDockPanel(props: IDockviewPanelProps<{ layerId?: string; 
 function ProjectionMapDockPanel() {
   const { mapCommandState } = useMapCommands();
   const { registerProjectionMapCommands } = useDockPanelActions();
+  const { identifyActive } = useMapIdentify();
   const [coords, setCoords] = useState('');
   const projectionMapRef = useRef<OpenLayersProjectionMapHandle | null>(null);
 
@@ -1931,6 +2319,7 @@ function ProjectionMapDockPanel() {
           key={mapCommandState.displayCrs}
           onCoordinateChange={setCoords}
           ref={projectionMapRef}
+          identifyActive={identifyActive}
           visible
         />
       </Suspense>
@@ -2023,9 +2412,12 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
         onMouseDown={(event) => event.stopPropagation()}
         onPointerDown={(event) => event.stopPropagation()}
       >
-        <div className="attribute-header-title" title={layer?.fileName ?? activePanel?.title ?? '属性表'}>
+        <div
+          className="attribute-header-title"
+          title={displayLayerName(layer?.fileName ?? '') || (activePanel?.title ?? '属性表')}
+        >
           <TableProperties size={15} />
-          <span>{layer?.fileName ?? '属性表'}</span>
+          <span>{displayLayerName(layer?.fileName ?? '') || '属性表'}</span>
         </div>
         <div className="attribute-header-search">
           <Search size={14} />
@@ -2070,7 +2462,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
           disabled={!layer || layer.fields.length === 0}
           onClick={() => {
             if (layer) {
-              openAttributeChart(layer.id, layer.fileName, tableState.sort?.field ?? undefined);
+              openAttributeChart(layer.id, displayLayerName(layer.fileName), tableState.sort?.field ?? undefined);
             }
           }}
         >
@@ -2566,6 +2958,7 @@ export default function App() {
     <GisProvider>
       <MapCommandProvider>
         <MapSelectionProvider>
+        <MapIdentifyProvider>
         <DigitizeProvider>
           <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
             <LayoutProvider>
@@ -2599,6 +2992,7 @@ export default function App() {
             </LayoutProvider>
           </AttributeTableProvider>
         </DigitizeProvider>
+        </MapIdentifyProvider>
         </MapSelectionProvider>
       </MapCommandProvider>
     </GisProvider>

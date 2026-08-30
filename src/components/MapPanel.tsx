@@ -3,8 +3,10 @@ import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
 import { defaultUploadedLayerStyle, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
 import { useDigitize } from './digitize/DigitizeContext';
 import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeMap';
+import { MapFeatureIdentify } from './map/MapFeatureIdentify';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
+import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
@@ -49,6 +51,9 @@ type CesiumNamespace = {
   Viewer: new (container: HTMLElement, options: Record<string, unknown>) => CesiumViewer;
   ImageryLayer: new (provider: unknown) => unknown;
   OpenStreetMapImageryProvider: new (options: { url: string }) => unknown;
+  Rectangle: {
+    fromDegrees: (west: number, south: number, east: number, north: number) => unknown;
+  };
   Cartesian3: {
     fromDegrees: (longitude: number, latitude: number, height: number) => unknown;
   };
@@ -168,6 +173,23 @@ function flyCesiumToChina(viewer: CesiumViewer, Cesium: CesiumNamespace, duratio
   });
 }
 
+function flyCesiumToLayer(
+  viewer: CesiumViewer,
+  Cesium: CesiumNamespace,
+  bounds: [number, number, number, number],
+) {
+  const [west, south, east, north] = bounds;
+
+  if (![west, south, east, north].every(Number.isFinite)) {
+    return;
+  }
+
+  viewer.camera.flyTo({
+    destination: Cesium.Rectangle.fromDegrees(west, south, east, north),
+    duration: 0.8,
+  });
+}
+
 function getCesiumZoomStep(viewer: CesiumViewer) {
   return Math.max(viewer.camera.positionCartographic.height * 0.22, 1_000);
 }
@@ -277,15 +299,18 @@ export function MapPanel() {
   const digitizeMapVisibleRef = useRef(false);
   const { editingActive, status: digitizeStatus } = useDigitize();
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
+  const { identifyActive } = useMapIdentify();
   const { selectionActive } = useMapSelection();
   const {
     layer,
     layers,
+    layerZoomRequest,
     layerOrder,
     layerVisibility,
     uploadedLayerVisibility,
     basemapStyle,
     raster,
+    rasterLayerVisibility,
     rasterStyle,
     vectorOverlay,
     vectorOverlayStyle,
@@ -295,7 +320,8 @@ export function MapPanel() {
   const [status, setStatus] = useState('正在初始化在线地图');
   const [hasLoadedDigitizeMap, setHasLoadedDigitizeMap] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-  const featureSelectionActive = selectionActive && !editingActive && mapCommandState.mapMode !== 'globe';
+  const featureIdentifyActive = identifyActive && !editingActive && mapCommandState.mapMode !== 'globe';
+  const featureSelectionActive = selectionActive && !featureIdentifyActive && !editingActive && mapCommandState.mapMode !== 'globe';
   const selectionStatus = selectionActive
     ? mapCommandState.mapMode === 'globe'
       ? '选择工具暂不支持三维视图'
@@ -422,6 +448,46 @@ export function MapPanel() {
   }, [mapCommandState.mapMode, mapReady]);
 
   useEffect(() => {
+    if (!layerZoomRequest) {
+      return;
+    }
+
+    const targetLayer = layers.find((item) => item.id === layerZoomRequest.layerId);
+
+    if (!targetLayer) {
+      return;
+    }
+
+    const bounds = targetLayer.points.features.length > 0
+      ? getPointBounds(targetLayer.points.features)
+      : getGeoJsonBounds(targetLayer.geojson);
+
+    if (!bounds) {
+      return;
+    }
+
+    if (mapCommandState.mapMode === 'globe') {
+      const cesium = cesiumRef.current;
+
+      if (cesium) {
+        flyCesiumToLayer(cesium.viewer, cesium.Cesium, bounds);
+      }
+
+      return;
+    }
+
+    const map = mapRef.current;
+
+    if (!mapReady || !map) {
+      return;
+    }
+
+    if (!fitValidBounds(map, bounds, 0.14, 80, 700)) {
+      setStatus('图层坐标超出经纬度范围，已跳过自动定位');
+    }
+  }, [layerZoomRequest, layers, mapCommandState.mapMode, mapReady]);
+
+  useEffect(() => {
     if (mapCommandState.mapMode !== 'globe') {
       return;
     }
@@ -474,9 +540,9 @@ export function MapPanel() {
 
     setBasemapVisibility(map, mapCommandState.basemap, layerVisibility.basemap);
     setBasemapOpacity(map, basemapStyle.opacity);
-    setLayersVisibility(map, rasterLayerIds, layerVisibility.raster);
+    setLayersVisibility(map, rasterLayerIds, Boolean(raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster)));
     setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
-  }, [basemapStyle, layerVisibility, mapCommandState.basemap, mapReady]);
+  }, [basemapStyle, layerVisibility, mapCommandState.basemap, mapReady, raster, rasterLayerVisibility]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -503,7 +569,7 @@ export function MapPanel() {
       setLayersVisibility(map, uploadedLayerIds(item.id), uploadedLayerVisibility[item.id] ?? true);
     });
 
-    applyLayerOrder(map, layerOrder, layers, Boolean(raster), Boolean(vectorOverlay));
+    applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, Boolean(vectorOverlay));
 
     if (layer && lastLayerNameRef.current !== layer.id) {
       const bounds = layer.points.features.length > 0
@@ -553,10 +619,10 @@ export function MapPanel() {
         },
       },
     );
-    setLayersVisibility(map, rasterLayerIds, layerVisibility.raster);
-    applyLayerOrder(map, layerOrder, layers, true, Boolean(vectorOverlay));
+    setLayersVisibility(map, rasterLayerIds, rasterLayerVisibility[raster.id] ?? layerVisibility.raster);
+    applyLayerOrder(map, layerOrder, layers, raster.id, Boolean(vectorOverlay));
     fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
-  }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
+  }, [layerOrder, layerVisibility.raster, layers, mapReady, raster, rasterLayerVisibility, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -618,7 +684,7 @@ export function MapPanel() {
       },
     );
     setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
-    applyLayerOrder(map, layerOrder, layers, Boolean(raster), true);
+    applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, true);
 
     const bounds = getGeoJsonBounds(vectorOverlay.geojson);
 
@@ -644,7 +710,7 @@ export function MapPanel() {
       return;
     }
 
-    applyLayerOrder(map, layerOrder, layers, Boolean(raster), Boolean(vectorOverlay));
+    applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, Boolean(vectorOverlay));
   }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
   const zoomIn = useCallback(() => {
@@ -796,6 +862,7 @@ export function MapPanel() {
   return (
     <section className="map-panel">
       <div className={`map-canvas${mapCommandState.mapMode === 'globe' ? ' is-hidden' : ''}`} ref={containerRef} />
+      <MapFeatureIdentify active={featureIdentifyActive} map={mapRef.current} mapReady={mapReady} />
       <MapFeatureSelection active={featureSelectionActive} map={mapRef.current} mapReady={mapReady} />
       {hasLoadedDigitizeMap ? (
         <Suspense fallback={<div className="openlayers-digitize-map is-visible" />}>
@@ -1006,16 +1073,17 @@ function applyLayerOrder(
   map: maplibregl.Map,
   layerOrder: string[],
   uploadedLayers: { id: string }[],
-  hasRaster: boolean,
+  rasterId: string | null,
   hasVectorOverlay: boolean,
 ) {
   const uploadedIds = new Set(uploadedLayers.map((item) => item.id));
+  const rasterOrderId = rasterId ? `raster:${rasterId}` : null;
   const normalizedOrder = [
     ...layerOrder,
     ...uploadedLayers.map((item) => `uploaded:${item.id}`),
-    'basemap',
-    ...(hasRaster ? ['raster'] : []),
     ...(hasVectorOverlay ? ['vectorOverlay'] : []),
+    ...(rasterOrderId ? [rasterOrderId] : []),
+    'basemap',
   ];
   const seen = new Set<string>();
   const layerGroups = normalizedOrder
@@ -1027,7 +1095,7 @@ function applyLayerOrder(
       seen.add(id);
       return true;
     })
-    .map((id) => layerGroupIds(id, uploadedIds, hasRaster, hasVectorOverlay))
+    .map((id) => layerGroupIds(id, uploadedIds, rasterId, hasVectorOverlay))
     .filter((ids) => ids.length > 0);
 
   [...layerGroups].reverse().forEach((groupIds) => {
@@ -1039,13 +1107,13 @@ function applyLayerOrder(
   });
 }
 
-function layerGroupIds(id: string, uploadedIds: Set<string>, hasRaster: boolean, hasVectorOverlay: boolean) {
+function layerGroupIds(id: string, uploadedIds: Set<string>, rasterId: string | null, hasVectorOverlay: boolean) {
   if (id === 'basemap') {
     return Object.values(basemapLayers).flat();
   }
 
-  if (id === 'raster') {
-    return hasRaster ? rasterLayerIds : [];
+  if (id === 'raster' || id === `raster:${rasterId}`) {
+    return rasterId ? rasterLayerIds : [];
   }
 
   if (id === 'vectorOverlay') {

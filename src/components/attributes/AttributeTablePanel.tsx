@@ -8,7 +8,7 @@ import { flexRender } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { type IDockviewPanelProps } from 'dockview-react';
 import { TableProperties } from 'lucide-react';
-import { useGis, type UploadedLayer } from '../../gisStore';
+import { displayLayerName, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
 import { useAttributeTable, type AttributeSort } from './AttributeTableContext';
 
 type AttributeTableRow = {
@@ -20,16 +20,33 @@ type AttributeTablePanelParams = {
   layerId?: string;
 };
 
+type AttributeLayer = {
+  id: string;
+  fileName: string;
+  geojson: GeoJsonFeatureCollection;
+  fields: string[];
+  selectedFeatureIndexes: number[];
+};
+
 export function AttributeTablePanel({ params }: IDockviewPanelProps<AttributeTablePanelParams>) {
   const layerId = params.layerId ?? null;
   const { getTableState, updateTableState } = useAttributeTable();
-  const { layers, setLayerSelection } = useGis();
+  const { layers, setLayerSelection, vectorOverlay } = useGis();
   const tableState = getTableState(layerId);
   const { query, showSelectedOnly, sort } = tableState;
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const layer = useMemo(
-    () => layers.find((item) => item.id === layerId) ?? null,
-    [layerId, layers],
+  const vectorOverlayLayer = useMemo<AttributeLayer | null>(() => (
+    layerId === 'vectorOverlay' && vectorOverlay ? {
+      id: 'vectorOverlay',
+      fileName: vectorOverlay.name,
+      geojson: vectorOverlay.geojson,
+      fields: getFields(vectorOverlay.geojson.features),
+      selectedFeatureIndexes: [],
+    } : null
+  ), [layerId, vectorOverlay]);
+  const layer = useMemo<AttributeLayer | null>(
+    () => layers.find((item) => item.id === layerId) ?? vectorOverlayLayer,
+    [layerId, layers, vectorOverlayLayer],
   );
   const fields = layer?.fields ?? [];
   const selectedIndexes = useMemo(() => new Set(layer?.selectedFeatureIndexes ?? []), [layer]);
@@ -84,6 +101,10 @@ export function AttributeTablePanel({ params }: IDockviewPanelProps<AttributeTab
   }
 
   const selectRow = (event: MouseEvent, featureIndex: number) => {
+    if (layerId === 'vectorOverlay' || !layer) {
+      return;
+    }
+
     if (event.ctrlKey || event.metaKey) {
       const next = new Set(selectedIndexes);
 
@@ -101,7 +122,7 @@ export function AttributeTablePanel({ params }: IDockviewPanelProps<AttributeTab
   };
 
   return (
-    <section className="attribute-table-panel" aria-label={`${layer.fileName} 属性表`}>
+    <section className="attribute-table-panel" aria-label={`${displayLayerName(layer.fileName)} 属性表`}>
       <div className="attribute-table-grid" ref={scrollRef}>
         <div className="attribute-table-header">
           {table.getHeaderGroups().map((headerGroup) => (
@@ -159,7 +180,7 @@ export function AttributeTablePanel({ params }: IDockviewPanelProps<AttributeTab
 }
 
 function buildRows(
-  layer: UploadedLayer | null,
+  layer: AttributeLayer | null,
   query: string,
   showSelectedOnly: boolean,
   selectedIndexes: Set<number>,
@@ -193,6 +214,18 @@ function buildRows(
 
     return sort.direction === 'asc' ? comparison : -comparison;
   });
+}
+
+function getFields(features: unknown[]) {
+  const fields = new Set<string>();
+
+  for (const feature of features) {
+    const properties = isRecord(feature) && isRecord(feature.properties) ? feature.properties : {};
+
+    Object.keys(properties).forEach((key) => fields.add(key));
+  }
+
+  return [...fields].sort();
 }
 
 function nextSort(current: AttributeSort | null, field: string): AttributeSort | null {

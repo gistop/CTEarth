@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import Feature from 'ol/Feature.js';
 import type { FeatureLike } from 'ol/Feature.js';
 import Map from 'ol/Map.js';
@@ -18,6 +18,7 @@ import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style.js';
 import type { Coordinate } from 'ol/coordinate.js';
 import type { BasemapId, DisplayCrsId } from './MapCommandContext';
 import { defaultUploadedLayerStyle, useGis } from '../../gisStore';
+import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
 const CHINA_ZOOM = 3.6;
@@ -26,6 +27,7 @@ const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 type OpenLayersProjectionMapProps = {
   basemap: BasemapId;
   displayCrs: DisplayCrsId;
+  identifyActive: boolean;
   onCoordinateChange: (coordinate: string) => void;
   visible: boolean;
 };
@@ -38,9 +40,10 @@ export type OpenLayersProjectionMapHandle = {
 };
 
 export const OpenLayersProjectionMap = forwardRef<OpenLayersProjectionMapHandle, OpenLayersProjectionMapProps>(
-function OpenLayersProjectionMap({ basemap, displayCrs, onCoordinateChange, visible }, ref) {
+function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordinateChange, visible }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
+  const [mapInstance, setMapInstance] = useState<Map | null>(null);
   const uploadedSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const vectorOverlaySourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
@@ -130,10 +133,12 @@ function OpenLayersProjectionMap({ basemap, displayCrs, onCoordinateChange, visi
     baseLayersRef.current = baseLayers;
     rasterLayerRef.current = rasterLayer;
     mapRef.current = map;
+    setMapInstance(map);
 
     return () => {
       map.setTarget(undefined);
       mapRef.current = null;
+      setMapInstance(null);
       baseLayersRef.current = null;
       rasterLayerRef.current = null;
     };
@@ -238,11 +243,14 @@ function OpenLayersProjectionMap({ basemap, displayCrs, onCoordinateChange, visi
   }, [layerVisibility.vectorOverlay, projectionCode, vectorOverlay, vectorOverlayStyle]);
 
   return (
-    <div
-      className={`openlayers-projection-map${visible ? ' is-visible' : ''}`}
-      ref={containerRef}
-      aria-hidden={!visible}
-    />
+    <>
+      <div
+        className={`openlayers-projection-map${visible ? ' is-visible' : ''}`}
+        ref={containerRef}
+        aria-hidden={!visible}
+      />
+      <OpenLayersFeatureIdentify active={identifyActive && visible} map={mapInstance} />
+    </>
   );
 });
 
