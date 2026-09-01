@@ -47,6 +47,8 @@ Developer notes live in `docs/`.
 
 - `docs/map-projection.md`: language index for map engines, CRS conventions,
   supported projections, projection conversion rules, and development caveats.
+- `docs/data-storage.md`: language index for vector import persistence, GeoJSON
+  normalization, IndexedDB storage, and local restore behavior.
 
 ## Build
 

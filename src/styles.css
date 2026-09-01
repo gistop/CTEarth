@@ -567,6 +567,11 @@ button {
   font-weight: 600;
 }
 
+.ribbon-crs-menu-item.is-current {
+  color: #0b547f;
+  font-weight: 600;
+}
+
 .ribbon-crs-menu-item:hover .ribbon-crs-submenu-icon,
 .ribbon-crs-menu-item.is-active .ribbon-crs-submenu-icon {
   color: #0f5d8e;
@@ -1590,6 +1595,56 @@ button {
   font-weight: 600;
 }
 
+.tree-row.map-group-row {
+  grid-template-columns: 16px 20px 20px minmax(0, 1fr) 26px;
+}
+
+.map-group-section {
+  min-width: 0;
+}
+
+.map-group-section + .map-group-section {
+  margin-top: 6px;
+}
+
+.map-group-layers {
+  margin-left: 15px;
+  padding-left: 7px;
+  border-left: 1px solid #d6e1ea;
+}
+
+.map-group-current-button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #8b9aaa;
+  cursor: pointer;
+}
+
+.map-group-current-button:hover,
+.map-group-current-button.is-current {
+  border-color: #b6d8ec;
+  background: #eff8fd;
+  color: #0f5d8e;
+}
+
+.map-group-current-button.is-current {
+  border-color: #0f5d8e;
+  background: #0f5d8e;
+  color: #ffffff;
+}
+
+.map-group-current-button.is-current:hover {
+  border-color: #0b547f;
+  background: #0b547f;
+  color: #ffffff;
+}
+
 .tree-drag-handle,
 .tree-drag-spacer {
   width: 15px;
@@ -1773,9 +1828,21 @@ button {
 }
 
 .layer-swatch {
-  width: 18px;
+  width: 22px;
   height: 18px;
   border: 1px solid #9da8b3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #233447;
+  overflow: hidden;
+}
+
+.layer-swatch svg {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
 }
 
 .layer-swatch.terrain {
@@ -1787,9 +1854,27 @@ button {
 }
 
 .layer-swatch.point {
-  border-radius: 50%;
-  background: #f6c445;
-  box-shadow: inset 0 0 0 3px #17202a;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.layer-swatch.line {
+  border-color: transparent;
+  background: transparent;
+}
+
+.layer-swatch.polygon {
+  border-color: transparent;
+  background: transparent;
+}
+
+.layer-swatch.mixed {
+  border-radius: 4px;
+}
+
+.layer-swatch.empty {
+  border-radius: 4px;
 }
 
 .layer-swatch.basemap {

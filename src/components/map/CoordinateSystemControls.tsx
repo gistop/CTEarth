@@ -1,26 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { ChevronDown, Search } from 'lucide-react';
 import { type DisplayCrsId, useMapCommands } from './MapCommandContext';
 import {
   type CoordinateSystemLeaf,
+  type CoordinateSystemNode,
   defaultCoordinateSystemPath,
   findMatchingCrs,
-  formatCrsLabel,
   getCrsById,
   getMenuColumns,
   getPathForCrs,
 } from './coordinateSystems';
+import { CoordinateSystemMenuItem } from './CoordinateSystemMenuItem';
 
-type CoordinateSystemControlsProps = {
-  activateMapPanel: () => void;
-  activateProjectionMapPanel: () => void;
-};
-
-export function CoordinateSystemControls({
-  activateMapPanel,
-  activateProjectionMapPanel,
-}: CoordinateSystemControlsProps) {
-  const { hasMapCommands, mapCommandState, setDisplayCrs } = useMapCommands();
+export function CoordinateSystemControls() {
+  const { mapCommandState, setDisplayCrs } = useMapCommands();
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [pendingCrsId, setPendingCrsId] = useState<DisplayCrsId>(mapCommandState.displayCrs);
@@ -28,7 +21,7 @@ export function CoordinateSystemControls({
   const [highlightedCrsId, setHighlightedCrsId] = useState<DisplayCrsId | null>(null);
 
   const selectedCrs = useMemo(() => getCrsById(pendingCrsId), [pendingCrsId]);
-  const isDisabled = !hasMapCommands || mapCommandState.mapMode === 'globe';
+  const isDisabled = mapCommandState.mapMode === 'globe';
   const hasPendingChange = pendingCrsId !== mapCommandState.displayCrs;
   const menuColumns = getMenuColumns(activePath);
 
@@ -43,13 +36,6 @@ export function CoordinateSystemControls({
     }
 
     setDisplayCrs(pendingCrsId);
-
-    if (pendingCrsId === 'webMercator') {
-      activateMapPanel();
-    } else {
-      activateProjectionMapPanel();
-    }
-
     setIsOpen(false);
   }
 
@@ -84,27 +70,19 @@ export function CoordinateSystemControls({
         }
       }}
     >
-      <label className="ribbon-crs-search">
-        <Search size={13} strokeWidth={1.8} />
-        <input
-          type="search"
-          value={searchTerm}
-          placeholder="搜索 EPSG / 名称"
-          disabled={isDisabled}
-          onChange={(event) => locateSearchResult(event.target.value)}
-          onFocus={() => setIsOpen(true)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              const match = findMatchingCrs(searchTerm);
+      <CoordinateSystemSearch
+        disabled={isDisabled}
+        searchTerm={searchTerm}
+        onEnter={() => {
+          const match = findMatchingCrs(searchTerm);
 
-              if (match) {
-                event.preventDefault();
-                selectCrs(match.crs);
-              }
-            }
-          }}
-        />
-      </label>
+          if (match) {
+            selectCrs(match.crs);
+          }
+        }}
+        onOpen={() => setIsOpen(true)}
+        onSearchTermChange={locateSearchResult}
+      />
 
       <div className="ribbon-crs-selector">
         <button
@@ -122,52 +100,17 @@ export function CoordinateSystemControls({
         {isOpen ? (
           <div className="ribbon-crs-menu" role="menu" aria-label="显示坐标系">
             {menuColumns.map((column, columnIndex) => (
-              <div className="ribbon-crs-menu-column" key={`${column.parentId}-${columnIndex}`}>
-                {column.nodes.map((node) => {
-                  if (node.kind === 'group') {
-                    const isActive = activePath[columnIndex] === node.id;
-
-                    return (
-                      <button
-                        key={node.id}
-                        className={`ribbon-crs-menu-item is-group${isActive ? ' is-active' : ''}`}
-                        type="button"
-                        role="menuitem"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onMouseEnter={() => setActivePath(activePath.slice(0, columnIndex).concat(node.id))}
-                        onFocus={() => setActivePath(activePath.slice(0, columnIndex).concat(node.id))}
-                      >
-                        <span>{node.label}</span>
-                        <ChevronRight className="ribbon-crs-submenu-icon" size={13} strokeWidth={1.8} />
-                      </button>
-                    );
-                  }
-
-                  const isSelected = node.id === pendingCrsId;
-                  const isCurrent = node.id === mapCommandState.displayCrs;
-                  const isHighlighted = node.id === highlightedCrsId;
-
-                  return (
-                    <button
-                      key={node.id}
-                      className={[
-                        'ribbon-crs-menu-item',
-                        isSelected ? 'is-selected' : '',
-                        isHighlighted ? 'is-highlighted' : '',
-                      ].filter(Boolean).join(' ')}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={isSelected}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => selectCrs(node)}
-                    >
-                      <Check className="ribbon-crs-check-icon" size={13} strokeWidth={2} aria-hidden={!isSelected} />
-                      <span>{formatCrsLabel(node)}</span>
-                      {isCurrent ? <small>当前</small> : null}
-                    </button>
-                  );
-                })}
-              </div>
+              <CoordinateSystemMenuColumn
+                key={`${column.parentId}-${columnIndex}`}
+                activePath={activePath}
+                columnIndex={columnIndex}
+                highlightedCrsId={highlightedCrsId}
+                nodes={column.nodes}
+                pendingCrsId={pendingCrsId}
+                currentCrsId={mapCommandState.displayCrs}
+                onActivateGroup={(groupId) => setActivePath(activePath.slice(0, columnIndex).concat(groupId))}
+                onSelectCrs={selectCrs}
+              />
             ))}
           </div>
         ) : null}
@@ -182,7 +125,82 @@ export function CoordinateSystemControls({
       >
         应用
       </button>
-
     </div>
   );
+}
+
+function CoordinateSystemSearch({
+  disabled,
+  searchTerm,
+  onEnter,
+  onOpen,
+  onSearchTermChange,
+}: {
+  disabled: boolean;
+  searchTerm: string;
+  onEnter: () => void;
+  onOpen: () => void;
+  onSearchTermChange: (value: string) => void;
+}) {
+  return (
+    <label className="ribbon-crs-search">
+      <Search size={13} strokeWidth={1.8} />
+      <input
+        type="search"
+        value={searchTerm}
+        placeholder="搜索 EPSG / 名称"
+        disabled={disabled}
+        onChange={(event) => onSearchTermChange(event.target.value)}
+        onFocus={onOpen}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            onEnter();
+          }
+        }}
+      />
+    </label>
+  );
+}
+
+function CoordinateSystemMenuColumn({
+  activePath,
+  columnIndex,
+  currentCrsId,
+  highlightedCrsId,
+  nodes,
+  onActivateGroup,
+  onSelectCrs,
+  pendingCrsId,
+}: {
+  activePath: string[];
+  columnIndex: number;
+  currentCrsId: DisplayCrsId;
+  highlightedCrsId: DisplayCrsId | null;
+  nodes: CoordinateSystemNode[];
+  onActivateGroup: (groupId: string) => void;
+  onSelectCrs: (crs: CoordinateSystemLeaf) => void;
+  pendingCrsId: DisplayCrsId;
+}) {
+  return (
+    <div className="ribbon-crs-menu-column">
+      {nodes.map((node) => (
+        <CoordinateSystemMenuItem
+          key={node.id}
+          activePath={activePath}
+          columnIndex={columnIndex}
+          currentCrsId={currentCrsId}
+          highlightedCrsId={highlightedCrsId}
+          node={node}
+          onActivateGroup={onActivateGroup}
+          onSelectCrs={onSelectCrs}
+          pendingCrsId={pendingCrsId}
+        />
+      ))}
+    </div>
+  );
+}
+
+function formatCrsLabel(crs: CoordinateSystemLeaf) {
+  return `${crs.code} (${crs.name})`;
 }

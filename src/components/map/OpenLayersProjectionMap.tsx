@@ -9,7 +9,7 @@ import type Geometry from 'ol/geom/Geometry.js';
 import ImageLayer from 'ol/layer/Image.js';
 import TileLayer from 'ol/layer/Tile.js';
 import VectorLayer from 'ol/layer/Vector.js';
-import { transform } from 'ol/proj.js';
+import { transform, transformExtent } from 'ol/proj.js';
 import ImageStatic from 'ol/source/ImageStatic.js';
 import OSM from 'ol/source/OSM.js';
 import VectorSource from 'ol/source/Vector.js';
@@ -19,6 +19,7 @@ import type { Coordinate } from 'ol/coordinate.js';
 import type { BasemapId, DisplayCrsId } from './MapCommandContext';
 import { defaultUploadedLayerStyle, useGis } from '../../gisStore';
 import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
+import { useMapViewport } from './MapViewportContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
 const CHINA_ZOOM = 3.6;
@@ -48,6 +49,8 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   const vectorOverlaySourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
   const baseLayersRef = useRef<Record<BasemapId, TileLayer<OSM | XYZ>> | null>(null);
+  const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
+  const initialViewportBoundsRef = useRef(viewportBounds4326);
   const {
     basemapStyle,
     layerVisibility,
@@ -125,10 +128,31 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       }),
     });
 
+    map.on('moveend', () => {
+      const bounds = openLayersMapToLonLatExtent(map, projectionCode);
+
+      if (bounds) {
+        setViewportBounds4326(bounds);
+      }
+    });
     map.on('pointermove', (event) => {
       const coordinate = event.coordinate as Coordinate;
       onCoordinateChange(formatProjectionCoordinate(coordinate, displayCrs));
     });
+
+    const initialViewportBounds = initialViewportBoundsRef.current;
+
+    if (initialViewportBounds) {
+      requestAnimationFrame(() => {
+        if (fitOpenLayersToViewportBounds(map, initialViewportBounds, projectionCode)) {
+          const bounds = openLayersMapToLonLatExtent(map, projectionCode);
+
+          if (bounds) {
+            setViewportBounds4326(bounds);
+          }
+        }
+      });
+    }
 
     baseLayersRef.current = baseLayers;
     rasterLayerRef.current = rasterLayer;
@@ -136,13 +160,19 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     setMapInstance(map);
 
     return () => {
+      const bounds = openLayersMapToLonLatExtent(map, projectionCode);
+
+      if (bounds) {
+        setViewportBounds4326(bounds);
+      }
+
       map.setTarget(undefined);
       mapRef.current = null;
       setMapInstance(null);
       baseLayersRef.current = null;
       rasterLayerRef.current = null;
     };
-  }, [displayCrs, initialCenter, onCoordinateChange, projectionCode]);
+  }, [displayCrs, initialCenter, onCoordinateChange, projectionCode, setViewportBounds4326]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -312,6 +342,52 @@ function rasterExtent(
     Math.max(...xs),
     Math.max(...ys),
   ];
+}
+
+function openLayersMapToLonLatExtent(map: Map, projectionCode: string): [number, number, number, number] | null {
+  const size = map.getSize();
+
+  if (!size) {
+    return null;
+  }
+
+  const extent = transformExtent(
+    map.getView().calculateExtent(size),
+    projectionCode,
+    'EPSG:4326',
+  );
+
+  if (!extent.every(Number.isFinite)) {
+    return null;
+  }
+
+  return extent as [number, number, number, number];
+}
+
+function fitOpenLayersToViewportBounds(
+  map: Map,
+  bounds: [number, number, number, number],
+  projectionCode: string,
+) {
+  if (!bounds.every(Number.isFinite) || bounds[0] > bounds[2] || bounds[1] > bounds[3]) {
+    return false;
+  }
+
+  const size = map.getSize();
+  const extent = transformExtent(bounds, 'EPSG:4326', projectionCode);
+
+  if (!extent.every(Number.isFinite)) {
+    return false;
+  }
+
+  map.getView().fit(extent, {
+    nearest: false,
+    padding: [48, 48, 48, 48],
+    size,
+  });
+  map.getView().setRotation(0);
+
+  return true;
 }
 
 function projectionCodeForDisplayCrs(displayCrs: DisplayCrsId) {

@@ -8,6 +8,7 @@ import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
+import { useMapViewport } from './map/MapViewportContext';
 
 const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
 const CHINA_ZOOM = 3.6;
@@ -301,6 +302,8 @@ export function MapPanel() {
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
   const { identifyActive } = useMapIdentify();
   const { selectionActive } = useMapSelection();
+  const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
+  const skipInitialAutoFitRef = useRef(Boolean(viewportBounds4326));
   const {
     layer,
     layers,
@@ -377,13 +380,21 @@ export function MapPanel() {
       updateMapCommandState({ basemap: DEFAULT_BASEMAP, dragRotateEnabled: map.dragRotate.isEnabled() });
 
       map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+      map.on('moveend', () => {
+        setViewportBounds4326(mapBoundsToLonLatExtent(map));
+      });
       map.on('error', (event) => {
         setStatus(event.error?.message ?? '在线地图加载错误');
       });
       map.once('load', () => {
         map.resize();
-        map.jumpTo({ center: CHINA_CENTER, zoom: CHINA_ZOOM, pitch: 0, bearing: 0 });
-    setMapReady(true);
+        if (viewportBounds4326 && fitMapLibreToViewportBounds(map, viewportBounds4326)) {
+          setViewportBounds4326(mapBoundsToLonLatExtent(map));
+        } else {
+          map.jumpTo({ center: CHINA_CENTER, zoom: CHINA_ZOOM, pitch: 0, bearing: 0 });
+          setViewportBounds4326(mapBoundsToLonLatExtent(map));
+        }
+        setMapReady(true);
         setStatus('');
       });
       map.on('mousemove', (event) => {
@@ -403,6 +414,12 @@ export function MapPanel() {
     resizeObserver.observe(container);
 
     return () => {
+      const map = mapRef.current;
+
+      if (map) {
+        setViewportBounds4326(mapBoundsToLonLatExtent(map));
+      }
+
       cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       mapRef.current?.remove();
@@ -570,6 +587,14 @@ export function MapPanel() {
     });
 
     applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, Boolean(vectorOverlay));
+
+    if (skipInitialAutoFitRef.current) {
+      if (layer) {
+        lastLayerNameRef.current = layer.id;
+      }
+      skipInitialAutoFitRef.current = false;
+      return;
+    }
 
     if (layer && lastLayerNameRef.current !== layer.id) {
       const bounds = layer.points.features.length > 0
@@ -813,9 +838,18 @@ export function MapPanel() {
     updateMapCommandState({ mapMode });
   }, [updateMapCommandState]);
 
+  const syncViewport = useCallback(() => {
+    const map = mapRef.current;
+
+    if (map) {
+      setViewportBounds4326(mapBoundsToLonLatExtent(map));
+    }
+  }, [setViewportBounds4326]);
+
   const setDisplayCrs = useCallback((displayCrs: DisplayCrsId) => {
+    syncViewport();
     updateMapCommandState({ displayCrs, mapMode: displayCrs !== 'webMercator' ? 'planar' : mapModeRef.current });
-  }, [updateMapCommandState]);
+  }, [syncViewport, updateMapCommandState]);
 
   const locate = useCallback(() => {
     if (mapModeRef.current === 'globe') {
@@ -851,10 +885,11 @@ export function MapPanel() {
       setBasemap,
       setDisplayCrs,
       setMapMode,
+      syncViewport,
       toggleDragRotate,
       locate,
     }),
-    [locate, resetNorth, setBasemap, setDisplayCrs, setMapMode, toggleDragRotate, zoomIn, zoomOut],
+    [locate, resetNorth, setBasemap, setDisplayCrs, setMapMode, syncViewport, toggleDragRotate, zoomIn, zoomOut],
   );
 
   useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
@@ -1206,6 +1241,39 @@ function boundsFromCoordinates(
     [bounds[0], bounds[1]],
     [bounds[2], bounds[3]],
   ];
+}
+
+function mapBoundsToLonLatExtent(map: maplibregl.Map): [number, number, number, number] {
+  const bounds = map.getBounds();
+
+  return [
+    bounds.getWest(),
+    bounds.getSouth(),
+    bounds.getEast(),
+    bounds.getNorth(),
+  ];
+}
+
+function fitMapLibreToViewportBounds(map: maplibregl.Map, bounds: [number, number, number, number]) {
+  const fitBounds: [[number, number], [number, number]] = [
+    [bounds[0], bounds[1]],
+    [bounds[2], bounds[3]],
+  ];
+
+  if (!isValidLngLatBounds(fitBounds)) {
+    return false;
+  }
+
+  try {
+    map.fitBounds(fitBounds, {
+      duration: 0,
+      padding: 48,
+    });
+    map.jumpTo({ pitch: 0, bearing: 0 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function formatNumber(value: number) {

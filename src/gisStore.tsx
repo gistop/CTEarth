@@ -271,6 +271,7 @@ type GisContextValue = {
   setRasterStyle: (patch: Partial<RasterLayerStyle>) => void;
   setVectorOverlayStyle: (patch: Partial<VectorOverlayStyle>) => void;
   setUploadedLayerStyle: (id: string, patch: Partial<UploadedLayerStyle>) => void;
+  setLayerDrawOrder: (order: LayerOrderId[]) => void;
   moveLayerOrder: (draggedId: LayerOrderId, targetId: LayerOrderId) => void;
   setActiveLayer: (id: string) => void;
   setActiveRaster: (id: string) => void;
@@ -414,6 +415,14 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         ...patch,
       },
     }));
+  }, []);
+
+  const setLayerDrawOrder = useCallback((order: LayerOrderId[]) => {
+    setLayerOrder((current) => {
+      const nextOrder = uniqueLayerOrder(order);
+
+      return areLayerOrdersEqual(current, nextOrder) ? current : nextOrder;
+    });
   }, []);
 
   const moveLayerOrder = useCallback((draggedId: LayerOrderId, targetId: LayerOrderId) => {
@@ -1619,6 +1628,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setRasterStyle,
     setVectorOverlayStyle,
     setUploadedLayerStyle,
+    setLayerDrawOrder,
     moveLayerOrder,
     setActiveLayer,
     setActiveRaster,
@@ -1636,7 +1646,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasters, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, zoomToLayer]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasters, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, zoomToLayer]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -1649,6 +1659,24 @@ export function useGis() {
   }
 
   return value;
+}
+
+function uniqueLayerOrder(order: LayerOrderId[]) {
+  const seen = new Set<LayerOrderId>();
+  const uniqueOrder: LayerOrderId[] = [];
+
+  order.forEach((id) => {
+    if (!seen.has(id)) {
+      seen.add(id);
+      uniqueOrder.push(id);
+    }
+  });
+
+  return uniqueOrder;
+}
+
+function areLayerOrdersEqual(left: LayerOrderId[], right: LayerOrderId[]) {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 type ToolWorkerResponse = {

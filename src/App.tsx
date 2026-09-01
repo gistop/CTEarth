@@ -79,6 +79,7 @@ import {
 } from './components/map/MapCommandContext';
 import { MapIdentifyProvider, useMapIdentify } from './components/map/MapIdentifyContext';
 import { MapSelectionProvider, useMapSelection } from './components/map/MapSelectionContext';
+import { MapViewportProvider } from './components/map/MapViewportContext';
 import {
   LayoutElementControls,
   LayoutAlignSplitButton,
@@ -150,7 +151,6 @@ const dockColumnRatio = {
 const aiAssistantPanelId = 'ai-assistant-panel';
 const attributeChartPanelIdPrefix = 'attribute-chart:';
 const attributeTablePanelIdPrefix = 'attribute-table:';
-const projectionMapPanelId = 'projection-map';
 type ProjectionMapCommand = Extract<MapCommand, 'zoomIn' | 'zoomOut' | 'resetNorth' | 'locate'>;
 type ProjectionMapCommands = Pick<OpenLayersProjectionMapHandle, ProjectionMapCommand>;
 
@@ -159,16 +159,12 @@ function isProjectionMapCommand(command: MapCommand): command is ProjectionMapCo
 }
 
 type DockPanelActionsValue = {
-  activateMapPanel: () => void;
-  activateProjectionMapPanel: () => void;
   hasProjectionMapCommands: boolean;
   registerProjectionMapCommands: (commands: ProjectionMapCommands) => () => void;
   runProjectionMapCommand: (command: ProjectionMapCommand) => void;
 };
 
 const DockPanelActionsContext = createContext<DockPanelActionsValue>({
-  activateMapPanel: () => undefined,
-  activateProjectionMapPanel: () => undefined,
   hasProjectionMapCommands: false,
   registerProjectionMapCommands: () => () => undefined,
   runProjectionMapCommand: () => undefined,
@@ -281,8 +277,6 @@ const baseRibbonGroups: RibbonGroup[] = [
 ];
 
 function createMapRibbonGroups({
-  activateMapPanel,
-  activateProjectionMapPanel,
   clearSelection,
   activeTab,
   hasLayers,
@@ -293,8 +287,6 @@ function createMapRibbonGroups({
   toggleIdentifyActive,
   toggleSelectionActive,
 }: {
-  activateMapPanel: () => void;
-  activateProjectionMapPanel: () => void;
   clearSelection: ReturnType<typeof useGis>['clearSelection'];
   activeTab: RibbonTab;
   hasLayers: boolean;
@@ -401,10 +393,8 @@ function createMapRibbonGroups({
       title: '坐标系',
       tools: [],
       accessory: (
-        <MapCoordinateSystemControls
-          activateMapPanel={activateMapPanel}
-          activateProjectionMapPanel={activateProjectionMapPanel}
-        />
+              <MapCoordinateSystemControls
+              />
       ),
     },
     ...groups.slice(2),
@@ -756,7 +746,6 @@ function Ribbon({
 }) {
   const digitize = useDigitize();
   const { activeLayerId, clearSelection, createBlankGeoJsonLayer, layers, saveGeoJsonLayer, setActiveLayer } = useGis();
-  const { activateMapPanel, activateProjectionMapPanel } = useDockPanelActions();
   const { identifyActive, setIdentifyActive, toggleIdentifyActive } = useMapIdentify();
   const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
   const activeEditLayer = layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null;
@@ -791,8 +780,6 @@ function Ribbon({
         };
       })
       : createMapRibbonGroups({
-        activateMapPanel,
-        activateProjectionMapPanel,
         activeTab,
         clearSelection,
         hasLayers: layers.length > 0,
@@ -2329,6 +2316,16 @@ function ProjectionMapDockPanel() {
   );
 }
 
+function MapSurfaceDockPanel() {
+  const { mapCommandState } = useMapCommands();
+
+  if (mapCommandState.displayCrs === 'webMercator') {
+    return <MapPanel />;
+  }
+
+  return <ProjectionMapDockPanel />;
+}
+
 function displayCrsTitle(displayCrs: DisplayCrsId) {
   if (displayCrs === 'epsg32651') {
     return 'EPSG:32651 / WGS 84 UTM Zone 51N';
@@ -2397,8 +2394,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
   const [isBasemapMenuOpen, setIsBasemapMenuOpen] = useState(false);
   const [isMapModeSwitcherOpen, setIsMapModeSwitcherOpen] = useState(false);
   const attributeLayerId = getLayerIdFromAttributeTablePanelId(activePanel?.id);
-  const projectionPanelActive = activePanel?.id === projectionMapPanelId;
-  const projectionDisplayActive = projectionPanelActive && mapCommandState.displayCrs !== 'webMercator';
+  const projectionDisplayActive = mapCommandState.displayCrs !== 'webMercator';
 
   if (attributeLayerId) {
     const layer = layers.find((item) => item.id === attributeLayerId) ?? null;
@@ -2477,7 +2473,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
     return <LayoutHeaderActions />;
   }
 
-  if (activePanel?.id !== 'map' && activePanel?.id !== projectionMapPanelId) {
+  if (activePanel?.id !== 'map') {
     return null;
   }
 
@@ -2490,8 +2486,8 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
         const Icon = tool.icon;
         const isActive = tool.active?.(mapCommandState) ?? false;
         const isProjectionCommand = isProjectionMapCommand(tool.command);
-        const isDisabled = projectionPanelActive
-          ? !projectionDisplayActive || !hasProjectionMapCommands || !isProjectionCommand
+        const isDisabled = projectionDisplayActive
+          ? !hasProjectionMapCommands || !isProjectionCommand
           : !hasMapCommands;
 
         return (
@@ -2529,7 +2525,6 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
                   aria-label={currentMapMode.title}
                   aria-expanded={isMapModeSwitcherOpen}
                   data-tooltip={currentMapMode.title}
-                  disabled={!hasMapCommands || projectionPanelActive}
                   onClick={(event) => {
                     event.stopPropagation();
                     setIsBasemapMenuOpen(false);
@@ -2552,7 +2547,6 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
                           aria-label={option.title}
                           aria-pressed={isSelected}
                           data-tooltip={option.title}
-                          disabled={!hasMapCommands}
                           onClick={(event) => {
                             event.stopPropagation();
                             setMapMode(option.id);
@@ -2577,7 +2571,6 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
           title="图层"
           aria-label="图层"
           aria-expanded={isBasemapMenuOpen}
-          disabled={!hasMapCommands}
           onClick={(event) => {
             event.stopPropagation();
             setIsMapModeSwitcherOpen(false);
@@ -2641,8 +2634,7 @@ export default function App() {
       attributeTable: AttributeTableDockPanel,
       contents: EmbeddedContentsPanel,
       layout: LayoutPanel,
-      map: MapPanel,
-      projectionMap: ProjectionMapDockPanel,
+      map: MapSurfaceDockPanel,
       inspector: InspectorPanel,
       python: PythonPanel,
       placeholder: PlaceholderPanel,
@@ -2653,44 +2645,6 @@ export default function App() {
   const changeRibbonTab = useCallback((tab: RibbonTab) => {
     setActiveRibbonTab(tab);
   }, []);
-
-  const ensureProjectionMapPanel = useCallback((api: DockviewApi) => {
-    const existingPanel = api.getPanel(projectionMapPanelId);
-
-    if (existingPanel) {
-      return existingPanel;
-    }
-
-    const mapPanel = api.getPanel('map');
-
-    return api.addPanel({
-      id: projectionMapPanelId,
-      component: 'projectionMap',
-      title: '投影视图',
-      inactive: true,
-      position: mapPanel ? {
-        direction: 'within',
-        referencePanel: mapPanel,
-        index: mapPanel.group.panels.length,
-      } : undefined,
-      minimumWidth: 280,
-      minimumHeight: 180,
-    });
-  }, []);
-
-  const activateMapPanel = useCallback(() => {
-    dockviewApiRef.current?.getPanel('map')?.api.setActive();
-  }, []);
-
-  const activateProjectionMapPanel = useCallback(() => {
-    const api = dockviewApiRef.current;
-
-    if (!api) {
-      return;
-    }
-
-    ensureProjectionMapPanel(api).api.setActive();
-  }, [ensureProjectionMapPanel]);
 
   const registerProjectionMapCommands = useCallback((commands: ProjectionMapCommands) => {
     projectionMapCommandsRef.current = commands;
@@ -2710,19 +2664,11 @@ export default function App() {
 
   const dockPanelActions = useMemo(
     () => ({
-      activateMapPanel,
-      activateProjectionMapPanel,
       hasProjectionMapCommands,
       registerProjectionMapCommands,
       runProjectionMapCommand,
     }),
-    [
-      activateMapPanel,
-      activateProjectionMapPanel,
-      hasProjectionMapCommands,
-      registerProjectionMapCommands,
-      runProjectionMapCommand,
-    ],
+    [hasProjectionMapCommands, registerProjectionMapCommands, runProjectionMapCommand],
   );
 
   const addAiAssistantPanel = useCallback((api: DockviewApi) => {
@@ -2889,15 +2835,6 @@ export default function App() {
       minimumHeight: 180,
     });
 
-    event.api.addPanel({
-      id: projectionMapPanelId,
-      component: 'projectionMap',
-      title: '投影视图',
-      inactive: true,
-      position: { direction: 'within', referencePanel: map, index: 1 },
-      minimumWidth: 280,
-      minimumHeight: 180,
-    });
 
     event.api.addPanel({
       id: 'layout',
@@ -2956,45 +2893,47 @@ export default function App() {
 
   return (
     <GisProvider>
-      <MapCommandProvider>
-        <MapSelectionProvider>
-        <MapIdentifyProvider>
-        <DigitizeProvider>
-          <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
-            <LayoutProvider>
-            <DockPanelActionsContext.Provider value={dockPanelActions}>
-              <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
-              <QuickAccessBar
-                isAiAssistantPanelVisible={isAiAssistantPanelVisible}
-                isRibbonCollapsed={isRibbonCollapsed}
-                onToggleAiAssistantPanel={toggleAiAssistantPanel}
-                onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
-              />
-              <Ribbon
-                activeTab={activeRibbonTab}
-                collapsed={isRibbonCollapsed}
-                onChangeTab={changeRibbonTab}
-              />
-              <main className="workspace">
-                <DockviewReact
-                  className="dockview-theme-light cte-dockview"
-                  components={components}
-                  disableTabsOverflowList={false}
-                  floatingGroupBounds="boundedWithinViewport"
-                  onReady={onReady}
-                  prefixHeaderActionsComponent={MapHeaderPrefixActions}
-                  rightHeaderActionsComponent={MapHeaderActions}
+      <MapViewportProvider>
+        <MapCommandProvider>
+          <MapSelectionProvider>
+          <MapIdentifyProvider>
+          <DigitizeProvider>
+            <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
+              <LayoutProvider>
+              <DockPanelActionsContext.Provider value={dockPanelActions}>
+                <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
+                <QuickAccessBar
+                  isAiAssistantPanelVisible={isAiAssistantPanelVisible}
+                  isRibbonCollapsed={isRibbonCollapsed}
+                  onToggleAiAssistantPanel={toggleAiAssistantPanel}
+                  onToggleRibbon={() => setIsRibbonCollapsed((value) => !value)}
                 />
-              </main>
-              <StatusFooter />
-              </div>
-            </DockPanelActionsContext.Provider>
-            </LayoutProvider>
-          </AttributeTableProvider>
-        </DigitizeProvider>
-        </MapIdentifyProvider>
-        </MapSelectionProvider>
-      </MapCommandProvider>
+                <Ribbon
+                  activeTab={activeRibbonTab}
+                  collapsed={isRibbonCollapsed}
+                  onChangeTab={changeRibbonTab}
+                />
+                <main className="workspace">
+                  <DockviewReact
+                    className="dockview-theme-light cte-dockview"
+                    components={components}
+                    disableTabsOverflowList={false}
+                    floatingGroupBounds="boundedWithinViewport"
+                    onReady={onReady}
+                    prefixHeaderActionsComponent={MapHeaderPrefixActions}
+                    rightHeaderActionsComponent={MapHeaderActions}
+                  />
+                </main>
+                <StatusFooter />
+                </div>
+              </DockPanelActionsContext.Provider>
+              </LayoutProvider>
+            </AttributeTableProvider>
+          </DigitizeProvider>
+          </MapIdentifyProvider>
+          </MapSelectionProvider>
+        </MapCommandProvider>
+      </MapViewportProvider>
     </GisProvider>
   );
 }

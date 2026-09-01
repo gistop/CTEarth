@@ -10,6 +10,7 @@ export type MapCommands = Record<MapCommand, () => void> & {
   setBasemap: (basemap: BasemapId) => void;
   setDisplayCrs: (displayCrs: DisplayCrsId) => void;
   setMapMode: (mode: MapViewMode) => void;
+  syncViewport: () => void;
 };
 
 export type MapCommandState = {
@@ -51,7 +52,6 @@ export function MapCommandProvider({ children }: { children: ReactNode }) {
       if (commandsRef.current === commands) {
         commandsRef.current = null;
         setHasMapCommands(false);
-        setMapCommandState(defaultMapCommandState);
       }
     };
   }, []);
@@ -61,14 +61,22 @@ export function MapCommandProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setBasemap = useCallback((basemap: BasemapId) => {
+    setMapCommandState((current) => ({ ...current, basemap }));
     commandsRef.current?.setBasemap(basemap);
   }, []);
 
   const setDisplayCrs = useCallback((displayCrs: DisplayCrsId) => {
+    commandsRef.current?.syncViewport();
+    setMapCommandState((current) => ({
+      ...current,
+      displayCrs,
+      mapMode: displayCrs !== 'webMercator' ? 'planar' : current.mapMode,
+    }));
     commandsRef.current?.setDisplayCrs(displayCrs);
   }, []);
 
   const setMapMode = useCallback((mode: MapViewMode) => {
+    setMapCommandState((current) => ({ ...current, mapMode: mode }));
     commandsRef.current?.setMapMode(mode);
   }, []);
 
