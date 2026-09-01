@@ -77,6 +77,7 @@ export function LayerTree() {
   const [expandedStyleId, setExpandedStyleId] = useState<string | null>(null);
   const [mapGroups, setMapGroups] = useState<MapGroup[]>(defaultMapGroups);
   const [currentMapGroupId, setCurrentMapGroupId] = useState(defaultMapGroupId);
+  const [collapsedMapGroupIds, setCollapsedMapGroupIds] = useState<Set<string>>(() => new Set());
   const {
     layers,
     activeLayerId,
@@ -273,6 +274,21 @@ export function LayerTree() {
     setExpandedStyleId(null);
   };
 
+  const handleToggleMapGroupExpanded = (groupId: string) => {
+    setCollapsedMapGroupIds((current) => {
+      const next = new Set(current);
+
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+
+      return next;
+    });
+    setExpandedStyleId(null);
+  };
+
   const handleLayerItemVisibilityChange = (groupId: string, groupItem: MapGroupLayerItem, visible: boolean) => {
     setMapGroupLayerItemVisibility(groupId, groupItem.instanceId, visible);
   };
@@ -450,6 +466,7 @@ export function LayerTree() {
             key={group.id}
             allVisible={allVisible}
             group={group}
+            isExpanded={!collapsedMapGroupIds.has(group.id)}
             isDropTarget={isSameDropTarget(dropTarget, { groupId: group.id, index: null })}
             isCurrent={group.id === currentMapGroupId}
             someVisible={someVisible}
@@ -460,6 +477,7 @@ export function LayerTree() {
               }
             }}
             onDrop={() => handleDrop({ groupId: group.id, index: null })}
+            onToggleExpanded={() => handleToggleMapGroupExpanded(group.id)}
             onVisibilityChange={(visible) => handleMapGroupVisibilityChange(group.id, visible)}
           >
             {rows.map(({ groupItem, item }, itemIndex) => {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Map as MapIcon, Square, SquareCheckBig } from 'lucide-react';
+import { ChevronDown, ChevronRight, Map as MapIcon, Square, SquareCheckBig } from 'lucide-react';
 import type { LayerOrderId } from '../../gisStore';
 
 export type MapGroupLayerItemId = Exclude<LayerOrderId, 'raster'>;
@@ -20,12 +20,14 @@ type MapGroupSectionProps = {
   allVisible: boolean;
   children: ReactNode;
   group: MapGroup;
+  isExpanded: boolean;
   isDropTarget?: boolean;
   isCurrent: boolean;
   someVisible: boolean;
   onActivate: () => void;
   onDragEnter?: () => void;
   onDrop?: () => void;
+  onToggleExpanded: () => void;
   onVisibilityChange: (visible: boolean) => void;
 };
 
@@ -33,12 +35,14 @@ export function MapGroupSection({
   allVisible,
   children,
   group,
+  isExpanded,
   isDropTarget,
   isCurrent,
   someVisible,
   onActivate,
   onDragEnter,
   onDrop,
+  onToggleExpanded,
   onVisibilityChange,
 }: MapGroupSectionProps) {
   const checkboxRef = useRef<HTMLInputElement | null>(null);
@@ -55,6 +59,7 @@ export function MapGroupSection({
         className={isDropTarget ? 'tree-row root map-group-row is-drop-target' : 'tree-row root map-group-row'}
         role="button"
         tabIndex={0}
+        aria-expanded={isExpanded}
         onClick={onActivate}
         onDragEnter={(event) => {
           event.preventDefault();
@@ -72,7 +77,19 @@ export function MapGroupSection({
           }
         }}
       >
-        <span className="tree-drag-spacer" />
+        <button
+          className="map-group-expand-button"
+          type="button"
+          title={isExpanded ? '收拢地图组' : '展开地图组'}
+          aria-label={isExpanded ? `收拢 ${group.name}` : `展开 ${group.name}`}
+          aria-expanded={isExpanded}
+          onClick={(event) => {
+            event.stopPropagation();
+            onToggleExpanded();
+          }}
+        >
+          {isExpanded ? <ChevronDown size={15} strokeWidth={2.2} /> : <ChevronRight size={15} strokeWidth={2.2} />}
+        </button>
         <input
           ref={checkboxRef}
           type="checkbox"
@@ -97,7 +114,7 @@ export function MapGroupSection({
           {isCurrent ? <SquareCheckBig size={15} strokeWidth={2.4} /> : <Square size={15} strokeWidth={2} />}
         </button>
       </div>
-      <div className="map-group-layers">{children}</div>
+      {isExpanded ? <div className="map-group-layers">{children}</div> : null}
     </section>
   );
 }

@@ -1613,6 +1613,25 @@ button {
   border-left: 1px solid #d6e1ea;
 }
 
+.map-group-expand-button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #647484;
+  cursor: pointer;
+}
+
+.map-group-expand-button:hover {
+  border-color: #bdd7e8;
+  background: #eff8fd;
+  color: #0f5d8e;
+}
+
 .map-group-current-button {
   display: grid;
   place-items: center;
