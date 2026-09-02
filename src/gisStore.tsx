@@ -271,6 +271,9 @@ type GisContextValue = {
   setRasterStyle: (patch: Partial<RasterLayerStyle>) => void;
   setVectorOverlayStyle: (patch: Partial<VectorOverlayStyle>) => void;
   setUploadedLayerStyle: (id: string, patch: Partial<UploadedLayerStyle>) => void;
+  renameUploadedLayer: (id: string, name: string) => void;
+  renameRasterLayer: (id: string, name: string) => void;
+  renameVectorOverlay: (name: string) => void;
   setLayerDrawOrder: (order: LayerOrderId[]) => void;
   moveLayerOrder: (draggedId: LayerOrderId, targetId: LayerOrderId) => void;
   setActiveLayer: (id: string) => void;
@@ -415,6 +418,22 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         ...patch,
       },
     }));
+  }, []);
+
+  const renameUploadedLayer = useCallback((id: string, name: string) => {
+    setLayers((current) => current.map((item) => (
+      item.id === id ? { ...item, fileName: name } : item
+    )));
+  }, []);
+
+  const renameRasterLayer = useCallback((id: string, name: string) => {
+    setRasters((current) => current.map((item) => (
+      item.id === id ? { ...item, name } : item
+    )));
+  }, []);
+
+  const renameVectorOverlay = useCallback((name: string) => {
+    setVectorOverlay((current) => (current ? { ...current, name } : current));
   }, []);
 
   const setLayerDrawOrder = useCallback((order: LayerOrderId[]) => {
@@ -1628,6 +1647,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setRasterStyle,
     setVectorOverlayStyle,
     setUploadedLayerStyle,
+    renameUploadedLayer,
+    renameRasterLayer,
+    renameVectorOverlay,
     setLayerDrawOrder,
     moveLayerOrder,
     setActiveLayer,
@@ -1646,7 +1668,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasters, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, zoomToLayer]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, zoomToLayer]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }

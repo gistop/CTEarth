@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Map as MapIcon, Square, SquareCheckBig } from 'lucide-react';
+import { ChevronDown, ChevronRight, Settings, Square, SquareCheckBig } from 'lucide-react';
 import type { LayerOrderId } from '../../gisStore';
 
 export type MapGroupLayerItemId = Exclude<LayerOrderId, 'raster'>;
@@ -19,14 +19,18 @@ export type MapGroup = {
 type MapGroupSectionProps = {
   allVisible: boolean;
   children: ReactNode;
+  panel?: ReactNode;
   group: MapGroup;
   isExpanded: boolean;
   isDropTarget?: boolean;
   isCurrent: boolean;
+  isEditOpen?: boolean;
+  nameNode: ReactNode;
   someVisible: boolean;
   onActivate: () => void;
   onDragEnter?: () => void;
   onDrop?: () => void;
+  onEdit?: () => void;
   onToggleExpanded: () => void;
   onVisibilityChange: (visible: boolean) => void;
 };
@@ -34,14 +38,18 @@ type MapGroupSectionProps = {
 export function MapGroupSection({
   allVisible,
   children,
+  panel,
   group,
   isExpanded,
   isDropTarget,
   isCurrent,
+  isEditOpen,
+  nameNode,
   someVisible,
   onActivate,
   onDragEnter,
   onDrop,
+  onEdit,
   onToggleExpanded,
   onVisibilityChange,
 }: MapGroupSectionProps) {
@@ -80,8 +88,8 @@ export function MapGroupSection({
         <button
           className="map-group-expand-button"
           type="button"
-          title={isExpanded ? '收拢地图组' : '展开地图组'}
-          aria-label={isExpanded ? `收拢 ${group.name}` : `展开 ${group.name}`}
+          title={isExpanded ? '收起地图组' : '展开地图组'}
+          aria-label={isExpanded ? `收起 ${group.name}` : `展开 ${group.name}`}
           aria-expanded={isExpanded}
           onClick={(event) => {
             event.stopPropagation();
@@ -98,8 +106,6 @@ export function MapGroupSection({
           onClick={(event) => event.stopPropagation()}
           onChange={(event) => onVisibilityChange(event.target.checked)}
         />
-        <MapIcon size={16} />
-        <span>{group.name}</span>
         <button
           className={isCurrent ? 'map-group-current-button is-current' : 'map-group-current-button'}
           type="button"
@@ -113,7 +119,22 @@ export function MapGroupSection({
         >
           {isCurrent ? <SquareCheckBig size={15} strokeWidth={2.4} /> : <Square size={15} strokeWidth={2} />}
         </button>
+        {nameNode}
+        <button
+          className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
+          type="button"
+          title="编辑"
+          aria-label={`编辑 ${group.name}`}
+          aria-expanded={isEditOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit?.();
+          }}
+        >
+          <Settings size={15} strokeWidth={1.8} />
+        </button>
       </div>
+      {panel}
       {isExpanded ? <div className="map-group-layers">{children}</div> : null}
     </section>
   );

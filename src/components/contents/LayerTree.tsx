@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+﻿import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   Database,
   GripVertical,
@@ -20,6 +20,8 @@ import {
 } from 'lucide-react';
 import { useAttributeTable } from '../attributes/AttributeTableContext';
 import { AddDataSplitButton } from './AddDataSplitButton';
+import { InlineRenameLabel } from './InlineRenameLabel';
+import { MapGroupEditPanel } from './MapGroupEditPanel';
 import { MapGroupSection, type MapGroup, type MapGroupLayerItem, type MapGroupLayerItemId } from './MapGroupSection';
 import { SaveAsSplitButton } from './SaveAsSplitButton';
 import {
@@ -67,6 +69,9 @@ type LayerDropTarget = {
   groupId: string;
   index: number | null;
 };
+type EditTarget =
+  | { kind: 'group'; groupId: string }
+  | { kind: 'layer'; groupId: string; layerInstanceKey: string; itemId: string; layerKind: Exclude<LayerListItem['kind'], 'basemap'> };
 
 const defaultMapGroupId = 'map-1';
 const defaultMapGroups: MapGroup[] = [{ id: defaultMapGroupId, name: '地图', layerItems: [createMapGroupLayerItem('basemap')] }];
@@ -74,7 +79,7 @@ const defaultMapGroups: MapGroup[] = [{ id: defaultMapGroupId, name: '地图', l
 export function LayerTree() {
   const [draggingItem, setDraggingItem] = useState<LayerDragState | null>(null);
   const [dropTarget, setDropTarget] = useState<LayerDropTarget | null>(null);
-  const [expandedStyleId, setExpandedStyleId] = useState<string | null>(null);
+  const [expandedEditTarget, setExpandedEditTarget] = useState<EditTarget | null>(null);
   const [mapGroups, setMapGroups] = useState<MapGroup[]>(defaultMapGroups);
   const [currentMapGroupId, setCurrentMapGroupId] = useState(defaultMapGroupId);
   const [collapsedMapGroupIds, setCollapsedMapGroupIds] = useState<Set<string>>(() => new Set());
@@ -105,12 +110,20 @@ export function LayerTree() {
     setRasterStyle,
     setVectorOverlayStyle,
     setUploadedLayerStyle,
+    renameUploadedLayer,
+    renameRasterLayer,
+    renameVectorOverlay,
     setActiveLayer,
     setActiveRaster,
     zoomToLayer,
   } = useGis();
   const { openAttributeTable } = useAttributeTable();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const renameTarget = expandedEditTarget;
+  const renameValue = editValue;
+  const setRenameValue = setEditValue;
+  const setRenameTarget = setExpandedEditTarget;
 
   const layerItems = useMemo(
     () => buildLayerItems({
@@ -238,6 +251,143 @@ export function LayerTree() {
     setLayerDrawOrder(mapGroups.flatMap((group) => group.layerItems.map((item) => item.layerId)));
   }, [mapGroups, setLayerDrawOrder]);
 
+  const getLayerEditValue = (item: LayerListItem) => {
+    if (item.kind === 'uploaded') {
+      return displayLayerName(item.layer.fileName);
+    }
+
+    if (item.kind === 'raster') {
+      return displayLayerName(item.raster.name);
+    }
+
+    if (item.kind === 'vectorOverlay') {
+      return displayLayerName(vectorOverlay?.name ?? '');
+    }
+
+    return item.label;
+  };
+
+  const cancelRename = () => {
+    setRenameTarget(null);
+    setRenameValue('');
+  };
+
+  const commitRename = () => {
+    if (!renameTarget) {
+      return true;
+    }
+
+    if (renameTarget.kind === 'group') {
+      const nextName = renameValue.trim();
+      const targetGroup = mapGroups.find((group) => group.id === renameTarget.groupId);
+
+      if (!targetGroup) {
+        cancelRename();
+        return true;
+      }
+
+      if (!nextName) {
+        window.alert('地图名称不能为空。');
+        return false;
+      }
+
+      if (
+        mapGroups.some((group) => group.id !== targetGroup.id && normalizeMapGroupName(group.name) === normalizeMapGroupName(nextName))
+      ) {
+        window.alert('地图名称不能重复。');
+        return false;
+      }
+
+      if (normalizeMapGroupName(targetGroup.name) !== normalizeMapGroupName(nextName)) {
+        setMapGroups((current) => current.map((group) => (
+          group.id === targetGroup.id
+            ? { ...group, name: nextName }
+            : group
+        )));
+      }
+
+      setEditValue(nextName);
+      return true;
+    }
+
+    const targetItem = layerItems.find((item) => item.id === renameTarget.itemId);
+
+    if (!targetItem) {
+      cancelRename();
+      return true;
+    }
+
+    const nextName = renameValue.trim();
+
+    if (!nextName) {
+      window.alert('图层名称不能为空。');
+      return false;
+    }
+
+    if (targetItem.kind === 'uploaded') {
+      if (displayLayerName(targetItem.layer.fileName) !== nextName) {
+        renameUploadedLayer(targetItem.layer.id, nextName);
+      }
+    } else if (targetItem.kind === 'raster') {
+      if (displayLayerName(targetItem.raster.name) !== nextName) {
+        renameRasterLayer(targetItem.raster.id, nextName);
+      }
+    } else if (targetItem.kind === 'vectorOverlay' && vectorOverlay) {
+      if (displayLayerName(vectorOverlay.name) !== nextName) {
+        renameVectorOverlay(nextName);
+      }
+    }
+
+    setEditValue(nextName);
+    return true;
+  };
+
+  const closeEditPanel = () => {
+    setExpandedEditTarget(null);
+    setEditValue('');
+  };
+
+  const openGroupEdit = (group: MapGroup) => {
+    if (expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id) {
+      closeEditPanel();
+      return;
+    }
+
+    handleCurrentMapGroupChange(group.id);
+    setExpandedEditTarget({ kind: 'group', groupId: group.id });
+    setEditValue(group.name);
+  };
+
+  const openLayerEdit = (groupId: string, layerInstanceKey: string, item: LayerListItem) => {
+    if (expandedEditTarget?.kind === 'layer' && expandedEditTarget.layerInstanceKey === layerInstanceKey) {
+      closeEditPanel();
+      return;
+    }
+
+    handleCurrentMapGroupChange(groupId);
+
+    if (item.kind === 'uploaded') {
+      setSelectedItemId(item.id);
+      setActiveLayer(item.layer.id);
+    } else if (item.kind === 'raster') {
+      setSelectedItemId(item.id);
+      setActiveRaster(item.raster.id);
+    } else if (item.kind === 'vectorOverlay') {
+      setSelectedItemId(item.id);
+    }
+
+    setExpandedEditTarget({
+      kind: 'layer',
+      groupId,
+      layerInstanceKey,
+      itemId: item.id,
+      layerKind: item.kind as Exclude<LayerListItem['kind'], 'basemap'>,
+    });
+    setEditValue(getLayerEditValue(item));
+  };
+
+  const commitEditPanel = () => commitRename();
+
   const handleCreateBlankLayer = () => {
     const fileName = window.prompt('GeoJSON layer name', 'polygon-layer.geojson');
 
@@ -261,7 +411,7 @@ export function LayerTree() {
     setMapGroups((current) => [...current, nextGroup]);
     setCurrentMapGroupId(id);
     setSelectedItemId(null);
-    setExpandedStyleId(null);
+    closeEditPanel();
   };
 
   const handleCurrentMapGroupChange = (groupId: string) => {
@@ -271,7 +421,7 @@ export function LayerTree() {
 
     setCurrentMapGroupId(groupId);
     setSelectedItemId(null);
-    setExpandedStyleId(null);
+    closeEditPanel();
   };
 
   const handleToggleMapGroupExpanded = (groupId: string) => {
@@ -286,7 +436,7 @@ export function LayerTree() {
 
       return next;
     });
-    setExpandedStyleId(null);
+    closeEditPanel();
   };
 
   const handleLayerItemVisibilityChange = (groupId: string, groupItem: MapGroupLayerItem, visible: boolean) => {
@@ -324,7 +474,7 @@ export function LayerTree() {
     }
 
     deleteUploadedLayer(selectedUploadedLayer.id);
-    setExpandedStyleId(null);
+    closeEditPanel();
   };
 
   const handleZoomToSelectedLayer = () => {
@@ -350,7 +500,7 @@ export function LayerTree() {
     setMapGroups((current) => moveLayerItemInMapGroups(current, dragged, target));
     setCurrentMapGroupId(target.groupId);
     setSelectedItemId(dragged.layerId);
-    setExpandedStyleId(null);
+    closeEditPanel();
   };
 
   return (
@@ -443,7 +593,7 @@ export function LayerTree() {
         <button
           type="button"
           title="删除选中图层"
-          aria-label="删除鼠标选中的图层"
+          aria-label="删除选中图层"
           disabled={!selectedUploadedLayer}
           onClick={handleDeleteSelectedLayer}
         >
@@ -460,15 +610,34 @@ export function LayerTree() {
         </button>
       </div>
       <section className="layer-tree contents-layer-tree">
-        <h3>绘制顺序</h3>
         {mapGroupViews.map(({ group, rows, allVisible, someVisible }) => (
           <MapGroupSection
             key={group.id}
             allVisible={allVisible}
+            panel={
+              expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id ? (
+                <MapGroupEditPanel
+                  group={group}
+                  onClose={closeEditPanel}
+                />
+              ) : null
+            }
             group={group}
             isExpanded={!collapsedMapGroupIds.has(group.id)}
             isDropTarget={isSameDropTarget(dropTarget, { groupId: group.id, index: null })}
             isCurrent={group.id === currentMapGroupId}
+            isEditOpen={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id}
+            nameNode={
+              <InlineRenameLabel
+                value={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id ? editValue : group.name}
+                canEdit={false}
+                isEditing={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id}
+                onStartEdit={() => undefined}
+                onChange={setEditValue}
+                onCommit={commitEditPanel}
+                onCancel={closeEditPanel}
+              />
+            }
             someVisible={someVisible}
             onActivate={() => handleCurrentMapGroupChange(group.id)}
             onDragEnter={() => {
@@ -476,13 +645,14 @@ export function LayerTree() {
                 setDropTarget({ groupId: group.id, index: null });
               }
             }}
+            onEdit={() => openGroupEdit(group)}
             onDrop={() => handleDrop({ groupId: group.id, index: null })}
             onToggleExpanded={() => handleToggleMapGroupExpanded(group.id)}
             onVisibilityChange={(visible) => handleMapGroupVisibilityChange(group.id, visible)}
           >
             {rows.map(({ groupItem, item }, itemIndex) => {
               const layerInstanceKey = `${group.id}:${groupItem.instanceId}`;
-              const isStyleOpen = layerInstanceKey === expandedStyleId && group.id === currentMapGroupId;
+              const isEditOpen = expandedEditTarget?.kind === 'layer' && expandedEditTarget.layerInstanceKey === layerInstanceKey;
               const isDragging = isSameLayerDragState(draggingItem, { groupId: group.id, index: itemIndex });
               const isDropTarget = isSameDropTarget(dropTarget, { groupId: group.id, index: itemIndex });
 
@@ -498,8 +668,21 @@ export function LayerTree() {
                 checked={item.checked}
                 dragState={isDragging ? 'dragging' : isDropTarget ? 'target' : undefined}
                 isSelected={selectedItemId === item.id}
-                isStyleOpen={isStyleOpen}
+                isEditOpen={isEditOpen}
                 label={item.label}
+                nameNode={item.kind !== 'basemap' && isEditOpen ? (
+                  <InlineRenameLabel
+                    value={editValue}
+                    canEdit={false}
+                    isEditing
+                    onStartEdit={() => undefined}
+                    onChange={setEditValue}
+                    onCommit={commitEditPanel}
+                    onCancel={closeEditPanel}
+                  />
+                ) : (
+                  <span className="tree-row-label">{item.label}</span>
+                )}
                 orderId={item.id}
                 onChange={(checked) => handleLayerItemVisibilityChange(group.id, groupItem, checked)}
                 onDragEnd={() => {
@@ -513,6 +696,14 @@ export function LayerTree() {
                 }}
                 onDragStart={() => setDraggingItem({ groupId: group.id, index: itemIndex, instanceId: groupItem.instanceId, layerId: groupItem.layerId })}
                 onDrop={() => handleDrop({ groupId: group.id, index: itemIndex })}
+                onDoubleClick={item.kind === 'uploaded'
+                  ? () => {
+                    handleCurrentMapGroupChange(group.id);
+                    setSelectedItemId(item.id);
+                    setActiveLayer(item.layer.id);
+                    zoomToLayer(item.layer.id);
+                  }
+                  : undefined}
                 onSelect={item.kind === 'uploaded'
                   ? () => {
                     handleCurrentMapGroupChange(group.id);
@@ -531,28 +722,16 @@ export function LayerTree() {
                         setSelectedItemId(item.id);
                       }
                       : undefined}
-                onToggleStyle={() => {
-                  handleCurrentMapGroupChange(group.id);
-                  setExpandedStyleId((current) => (current === layerInstanceKey ? null : layerInstanceKey));
-                  if (item.kind === 'uploaded') {
-                    setSelectedItemId(item.id);
-                    setActiveLayer(item.layer.id);
-                  } else if (item.kind === 'raster') {
-                    setSelectedItemId(item.id);
-                    setActiveRaster(item.raster.id);
-                  } else if (item.kind === 'vectorOverlay') {
-                    setSelectedItemId(item.id);
-                  }
-                }}
+                onEdit={() => openLayerEdit(group.id, layerInstanceKey, item)}
               />
-              {isStyleOpen ? (
+              {isEditOpen ? (
                 <LayerStylePanel
                   item={item}
                   basemapStyle={basemapStyle}
                   rasterStyle={rasterStyle}
                   uploadedLayerStyles={uploadedLayerStyles}
                   vectorOverlayStyle={vectorOverlayStyle}
-                  onClose={() => setExpandedStyleId(null)}
+                  onClose={closeEditPanel}
                   onReset={() => {
                     if (item.kind === 'uploaded') {
                       setUploadedLayerStyle(item.layer.id, defaultUploadedLayerStyle);
@@ -590,31 +769,35 @@ function LayerRow({
   checked,
   dragState,
   isSelected,
-  isStyleOpen,
+  isEditOpen,
   label,
+  nameNode,
   orderId,
   onChange,
   onDragEnd,
   onDragEnter,
   onDragStart,
   onDrop,
+  onDoubleClick,
+  onEdit,
   onSelect,
-  onToggleStyle,
 }: {
   badge: ReactNode;
   checked: boolean;
   dragState?: 'dragging' | 'target';
   isSelected?: boolean;
-  isStyleOpen?: boolean;
+  isEditOpen?: boolean;
   label: string;
+  nameNode: ReactNode;
   orderId: LayerOrderId;
   onChange: (checked: boolean) => void;
   onDragEnd: () => void;
   onDragEnter: () => void;
   onDragStart?: () => void;
   onDrop: () => void;
+  onDoubleClick?: () => void;
+  onEdit: () => void;
   onSelect?: () => void;
-  onToggleStyle: () => void;
 }) {
   const className = [
     'tree-row',
@@ -649,6 +832,7 @@ function LayerRow({
         event.preventDefault();
         onDrop();
       }}
+      onDoubleClick={onDoubleClick}
       onKeyDown={(event) => {
         if (onSelect && (event.key === 'Enter' || event.key === ' ')) {
           event.preventDefault();
@@ -667,16 +851,16 @@ function LayerRow({
         onChange={(event) => onChange(event.target.checked)}
       />
       {badge}
-      <span>{label}</span>
+      {nameNode}
       <button
-        className={isStyleOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
+        className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
         type="button"
-        title="编辑样式"
-        aria-label={`编辑 ${label} 样式`}
-        aria-expanded={isStyleOpen}
+        title="编辑"
+        aria-label={`编辑 ${label}`}
+        aria-expanded={isEditOpen}
         onClick={(event) => {
           event.stopPropagation();
-          onToggleStyle();
+          onEdit();
         }}
       >
         <Settings size={15} strokeWidth={1.8} />
@@ -711,10 +895,10 @@ function LayerStylePanel({
   onUpdateVectorOverlay: (patch: Partial<VectorOverlayStyle>) => void;
 }) {
   return (
-    <section className="layer-style-panel" aria-label={`${item.label} 样式设置`} onClick={(event) => event.stopPropagation()}>
+    <section className="layer-style-panel" aria-label={`${item.label} 编辑面板`} onClick={(event) => event.stopPropagation()}>
       <div className="layer-style-header">
-        <h4>编辑样式</h4>
-        <button type="button" title="关闭" aria-label="关闭样式设置" onClick={onClose}>
+        <h4>编辑</h4>
+        <button type="button" title="关闭" aria-label="关闭编辑面板" onClick={onClose}>
           <X size={15} />
         </button>
       </div>
@@ -828,10 +1012,10 @@ function ColorControl({
 }) {
   return (
     <label className="layer-style-field">
-      <span>{label}</span>
+      <span className="tree-row-label">{label}</span>
       <div className="layer-color-control">
         <input type="color" value={value} onChange={(event) => onChange(event.target.value)} />
-        <input value={value} readOnly aria-label={`${label} 色值`} />
+        <input value={value} readOnly aria-label={`${label} 颜色`} />
       </div>
     </label>
   );

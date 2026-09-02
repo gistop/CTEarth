@@ -1566,7 +1566,47 @@ button {
   white-space: nowrap;
 }
 
-.tree-row input {
+.tree-row-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-inline-rename {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-inline-rename.is-editable {
+  cursor: text;
+}
+
+.tree-inline-rename-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  height: 24px;
+  margin: 0;
+  padding: 0 6px;
+  border: 1px solid #8fb4cf;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #173042;
+  font: inherit;
+}
+
+.tree-inline-rename-input:focus {
+  outline: none;
+  border-color: #1677b8;
+  box-shadow: 0 0 0 1px rgb(22 119 184 / 18%);
+}
+
+.tree-row > input[type="checkbox"] {
   width: 15px;
   height: 15px;
   margin: 0;
@@ -1635,8 +1675,8 @@ button {
 .map-group-current-button {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 4px;
