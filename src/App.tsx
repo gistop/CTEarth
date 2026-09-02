@@ -55,6 +55,8 @@ import {
 } from 'lucide-react';
 import { MapPanel } from './components/MapPanel';
 import { CoordinateSystemControls as MapCoordinateSystemControls } from './components/map/CoordinateSystemControls';
+import { GlobeLocateSearchButton } from './components/map/GlobeLocateSearchButton';
+import { MapLayerMenu } from './components/map/MapLayerMenu';
 import type { OpenLayersProjectionMapHandle } from './components/map/OpenLayersProjectionMap';
 import {
   AttributeTableProvider,
@@ -70,7 +72,6 @@ import {
 } from './components/digitize/DigitizeContext';
 import {
   MapCommandProvider,
-  type BasemapId,
   type DisplayCrsId,
   type MapCommand,
   type MapCommandState,
@@ -2380,18 +2381,11 @@ const mapModeOptions: {
   { id: 'globe', label: '三维', title: '三维模式', icon: Earth },
 ];
 
-const basemapOptions: { id: BasemapId; label: string }[] = [
-  { id: 'osm', label: 'OpenStreetMap' },
-  { id: 'tianditu', label: '天地图 WMTS' },
-  { id: 'esri', label: 'Esri World Imagery' },
-];
-
 function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
-  const { hasMapCommands, mapCommandState, runMapCommand, setBasemap, setMapMode } = useMapCommands();
+  const { hasMapCommands, mapCommandState, runMapCommand, setMapMode } = useMapCommands();
   const { hasProjectionMapCommands, runProjectionMapCommand } = useDockPanelActions();
   const { layers, clearSelection } = useGis();
   const { getTableState, openAttributeChart, updateTableState } = useAttributeTable();
-  const [isBasemapMenuOpen, setIsBasemapMenuOpen] = useState(false);
   const [isMapModeSwitcherOpen, setIsMapModeSwitcherOpen] = useState(false);
   const attributeLayerId = getLayerIdFromAttributeTablePanelId(activePanel?.id);
   const projectionDisplayActive = mapCommandState.displayCrs !== 'webMercator';
@@ -2482,6 +2476,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
 
   return (
     <div className="map-header-actions" aria-label="地图工具">
+      <GlobeLocateSearchButton />
       {mapHeaderTools.map((tool) => {
         const Icon = tool.icon;
         const isActive = tool.active?.(mapCommandState) ?? false;
@@ -2527,7 +2522,6 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
                   data-tooltip={currentMapMode.title}
                   onClick={(event) => {
                     event.stopPropagation();
-                    setIsBasemapMenuOpen(false);
                     setIsMapModeSwitcherOpen((isOpen) => !isOpen);
                   }}
                 >
@@ -2564,42 +2558,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
           </Fragment>
         );
       })}
-      <div className="map-layer-menu-wrapper">
-        <button
-          className={isBasemapMenuOpen ? 'is-active' : undefined}
-          type="button"
-          title="图层"
-          aria-label="图层"
-          aria-expanded={isBasemapMenuOpen}
-          onClick={(event) => {
-            event.stopPropagation();
-            setIsMapModeSwitcherOpen(false);
-            setIsBasemapMenuOpen((isOpen) => !isOpen);
-          }}
-        >
-          <Layers size={15} strokeWidth={1.8} />
-        </button>
-        {isBasemapMenuOpen ? (
-          <div className="map-layer-menu" role="menu" aria-label="底图">
-            {basemapOptions.map((option) => (
-              <button
-                key={option.id}
-                className={option.id === mapCommandState.basemap ? 'is-selected' : undefined}
-                type="button"
-                role="menuitemradio"
-                aria-checked={option.id === mapCommandState.basemap}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setBasemap(option.id);
-                  setIsBasemapMenuOpen(false);
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
+      <MapLayerMenu />
     </div>
   );
 }

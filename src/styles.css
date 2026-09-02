@@ -936,9 +936,37 @@ button {
   padding: 0 4px;
 }
 
+.map-locate-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.map-locate-panel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  width: min(308px, calc(100vw - 72px));
+  height: 24px;
+  padding: 0 2px 0 7px;
+  border: 1px solid #aeb8c2;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.map-locate-panel.is-error {
+  border-color: #c8808f;
+  box-shadow: 0 0 0 1px rgb(180 35 58 / 12%);
+}
+
 .map-header-actions > button,
 .map-layer-menu-wrapper > button,
-.map-mode-switcher > button {
+.map-mode-switcher > button,
+.map-header-actions .map-tooltip-trigger {
   display: grid;
   place-items: center;
   width: 24px;
@@ -954,14 +982,16 @@ button {
 
 .map-header-actions > button svg,
 .map-layer-menu-wrapper > button svg,
-.map-mode-switcher button svg {
+.map-mode-switcher button svg,
+.map-header-actions .map-tooltip-trigger svg {
   display: block;
 }
 
 .map-header-actions > button:hover,
 .map-layer-menu-wrapper > button:hover,
 .map-mode-switcher > button:hover,
-.map-mode-popover button:hover {
+.map-mode-popover button:hover,
+.map-header-actions .map-tooltip-trigger:hover {
   border-color: #b6d8ec;
   background: #e4f2fb;
   color: #0f5d8e;
@@ -970,7 +1000,8 @@ button {
 .map-header-actions > button.is-active,
 .map-layer-menu-wrapper > button.is-active,
 .map-mode-switcher > button.is-active,
-.map-mode-popover button.is-selected {
+.map-mode-popover button.is-selected,
+.map-header-actions .map-tooltip-trigger.is-active {
   border-color: #a8cce4;
   background: #dff0fb;
   color: #0f5d8e;
@@ -978,9 +1009,45 @@ button {
 
 .map-header-actions > button:disabled,
 .map-layer-menu-wrapper > button:disabled,
-.map-mode-switcher button:disabled {
+.map-mode-switcher button:disabled,
+.map-header-actions .map-tooltip-trigger:disabled,
+.map-locate-submit:disabled,
+.map-locate-close:disabled {
   cursor: default;
   opacity: 0.42;
+}
+
+.map-locate-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px 0 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #263849;
+  font-size: 12px;
+}
+
+.map-locate-submit,
+.map-locate-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #536273;
+  cursor: pointer;
+}
+
+.map-locate-submit:hover,
+.map-locate-close:hover {
+  border-color: #b6d8ec;
+  background: #e4f2fb;
+  color: #0f5d8e;
 }
 
 .attribute-header-actions {
@@ -1199,12 +1266,50 @@ button {
   top: 28px;
   right: 0;
   z-index: 20;
-  min-width: 168px;
-  padding: 4px;
+  display: grid;
+  gap: 4px;
+  min-width: 252px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 6px;
   border: 1px solid #cbd4dc;
   border-radius: 4px;
   background: #ffffff;
   box-shadow: 0 8px 18px rgb(23 32 42 / 16%);
+}
+
+.map-layer-menu-section {
+  display: grid;
+  gap: 4px;
+}
+
+.map-layer-menu-subsection {
+  display: grid;
+  gap: 2px;
+}
+
+.map-layer-menu-section-title {
+  padding: 0 6px;
+  color: #6b7785;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.map-layer-menu-subsection-title {
+  padding: 0 6px;
+  color: #8a97a5;
+  font-size: 10px;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.map-layer-menu-divider {
+  height: 1px;
+  margin: 0 2px;
+  background: #e0e6ec;
 }
 
 .map-layer-menu button {
@@ -1218,6 +1323,9 @@ button {
   color: #263544;
   text-align: left;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
 }
 

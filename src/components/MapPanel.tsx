@@ -6,6 +6,7 @@ import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeM
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
+import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumLayerNamespace, type CesiumTerrainId } from './map/cesiumLayerOptions';
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
@@ -35,6 +36,11 @@ type CesiumViewer = {
     zoomOut: (amount?: number) => void;
     flyTo: (options: { destination: unknown; duration?: number }) => void;
   };
+  imageryLayers: {
+    removeAll: (destroy?: boolean) => void;
+    addImageryProvider: (provider: unknown) => unknown;
+  };
+  terrainProvider: unknown;
   scene: {
     backgroundColor: unknown;
     globe: {
@@ -48,10 +54,10 @@ type CesiumViewer = {
   resize?: () => void;
 };
 
-type CesiumNamespace = {
+type CesiumNamespace = CesiumLayerNamespace & {
   Viewer: new (container: HTMLElement, options: Record<string, unknown>) => CesiumViewer;
   ImageryLayer: new (provider: unknown) => unknown;
-  OpenStreetMapImageryProvider: new (options: { url: string }) => unknown;
+  WebMapTileServiceImageryProvider: new (options: Record<string, unknown>) => unknown;
   Rectangle: {
     fromDegrees: (west: number, south: number, east: number, north: number) => unknown;
   };
@@ -62,6 +68,15 @@ type CesiumNamespace = {
     LIGHTGREY: unknown;
     SKYBLUE: unknown;
   };
+  Ion?: {
+    defaultAccessToken: string;
+  };
+};
+
+type NominatimSearchResult = {
+  boundingbox?: [string, string, string, string];
+  lat: string;
+  lon: string;
 };
 
 declare global {
@@ -156,15 +171,46 @@ function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
     sceneModePicker: false,
     selectionIndicator: false,
     timeline: false,
+    terrainProvider: new Cesium.EllipsoidTerrainProvider(),
   });
 
   viewer.scene.globe.enableLighting = true;
   viewer.scene.globe.show = true;
   viewer.scene.backgroundColor = Cesium.Color.SKYBLUE;
   viewer.scene.globe.baseColor = Cesium.Color.LIGHTGREY;
+  viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
   flyCesiumToChina(viewer, Cesium, 1.6);
 
   return viewer;
+}
+
+function configureCesiumIonToken(Cesium: CesiumNamespace) {
+  const token = (import.meta.env.VITE_CESIUM_ION_TOKEN ?? '').trim();
+
+  if (token && Cesium.Ion) {
+    Cesium.Ion.defaultAccessToken = token;
+  }
+}
+
+async function applyCesiumImagery(viewer: CesiumViewer, Cesium: CesiumNamespace, imagery: CesiumImageryId) {
+  const provider = await createCesiumImageryProvider(Cesium, imagery);
+
+  if (viewer.isDestroyed()) {
+    return;
+  }
+
+  viewer.imageryLayers.removeAll(true);
+  viewer.imageryLayers.addImageryProvider(provider);
+}
+
+async function applyCesiumTerrain(viewer: CesiumViewer, Cesium: CesiumNamespace, terrain: CesiumTerrainId) {
+  const provider = await createCesiumTerrainProvider(Cesium, terrain);
+
+  if (viewer.isDestroyed()) {
+    return;
+  }
+
+  viewer.terrainProvider = provider;
 }
 
 function flyCesiumToChina(viewer: CesiumViewer, Cesium: CesiumNamespace, duration = 0.6) {
@@ -193,6 +239,61 @@ function flyCesiumToLayer(
 
 function getCesiumZoomStep(viewer: CesiumViewer) {
   return Math.max(viewer.camera.positionCartographic.height * 0.22, 1_000);
+}
+
+function parseLocateQuery(query: string) {
+  const trimmed = query.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const coordinateMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/);
+
+  if (coordinateMatch) {
+    const first = Number(coordinateMatch[1]);
+    const second = Number(coordinateMatch[2]);
+
+    if (Number.isFinite(first) && Number.isFinite(second)) {
+      if (Math.abs(first) <= 180 && Math.abs(second) <= 90) {
+        return { lon: first, lat: second };
+      }
+
+      if (Math.abs(first) <= 90 && Math.abs(second) <= 180) {
+        return { lon: second, lat: first };
+      }
+    }
+  }
+
+  return null;
+}
+
+function getNominatimBounds(result: NominatimSearchResult): [number, number, number, number] | null {
+  if (!result.boundingbox || result.boundingbox.length !== 4) {
+    return null;
+  }
+
+  const south = Number(result.boundingbox[0]);
+  const north = Number(result.boundingbox[1]);
+  const west = Number(result.boundingbox[2]);
+  const east = Number(result.boundingbox[3]);
+
+  if (![south, north, west, east].every(Number.isFinite)) {
+    return null;
+  }
+
+  return [west, south, east, north];
+}
+
+function getNominatimPoint(result: NominatimSearchResult) {
+  const lon = Number(result.lon);
+  const lat = Number(result.lat);
+
+  if (![lon, lat].every(Number.isFinite)) {
+    return null;
+  }
+
+  return { lon, lat };
 }
 
 function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): maplibregl.StyleSpecification {
@@ -295,6 +396,8 @@ export function MapPanel() {
   const mapRef = useRef<maplibregl.Map | null>(null);
   const digitizeMapRef = useRef<OpenLayersDigitizeMapHandle | null>(null);
   const cesiumRef = useRef<{ Cesium: CesiumNamespace; viewer: CesiumViewer } | null>(null);
+  const cesiumSyncRef = useRef<{ imagery: CesiumImageryId; terrain: CesiumTerrainId } | null>(null);
+  const cesiumSyncGenerationRef = useRef(0);
   const lastLayerNameRef = useRef('');
   const mapModeRef = useRef<MapViewMode>('planar');
   const digitizeMapVisibleRef = useRef(false);
@@ -516,24 +619,69 @@ export function MapPanel() {
       return;
     }
 
-    const initializeCesium = async () => {
-      try {
-        setStatus('正在加载 Cesium 三维视图');
-        const Cesium = await loadCesium();
+    const syncCesium = async () => {
+      const syncGeneration = ++cesiumSyncGenerationRef.current;
 
-        if (isCancelled) {
+      try {
+        const existing = cesiumRef.current;
+        const needsViewer = !existing || existing.viewer.isDestroyed();
+
+        if (needsViewer) {
+          setStatus('正在加载 Cesium 三维视图');
+          const Cesium = await loadCesium();
+
+          if (isCancelled) {
+            return;
+          }
+
+          configureCesiumIonToken(Cesium);
+          const viewer = createCesiumViewer(container, Cesium);
+          cesiumRef.current = {
+            Cesium,
+            viewer,
+          };
+          cesiumSyncRef.current = null;
+        }
+
+        if (syncGeneration !== cesiumSyncGenerationRef.current) {
           return;
         }
 
-        if (!cesiumRef.current || cesiumRef.current.viewer.isDestroyed()) {
-          cesiumRef.current = {
-            Cesium,
-            viewer: createCesiumViewer(container, Cesium),
-          };
+        const cesium = cesiumRef.current;
+
+        if (!cesium || cesium.viewer.isDestroyed()) {
+          return;
         }
 
-        cesiumRef.current.viewer.resize?.();
-        setStatus('');
+        const previous = cesiumSyncRef.current;
+        const imageryChanged = !previous || previous.imagery !== mapCommandState.cesiumImagery;
+        const terrainChanged = !previous || previous.terrain !== mapCommandState.cesiumTerrain;
+
+        if (imageryChanged) {
+          await applyCesiumImagery(cesium.viewer, cesium.Cesium, mapCommandState.cesiumImagery);
+        }
+
+        if (isCancelled || syncGeneration !== cesiumSyncGenerationRef.current) {
+          return;
+        }
+
+        if (terrainChanged) {
+          await applyCesiumTerrain(cesium.viewer, cesium.Cesium, mapCommandState.cesiumTerrain);
+        }
+
+        if (isCancelled || syncGeneration !== cesiumSyncGenerationRef.current) {
+          return;
+        }
+
+        cesiumSyncRef.current = {
+          imagery: mapCommandState.cesiumImagery,
+          terrain: mapCommandState.cesiumTerrain,
+        };
+        cesium.viewer.resize?.();
+
+        if (needsViewer) {
+          setStatus('');
+        }
       } catch (error) {
         if (!isCancelled) {
           setStatus(error instanceof Error ? error.message : 'Cesium 三维视图加载失败');
@@ -541,12 +689,13 @@ export function MapPanel() {
       }
     };
 
-    void initializeCesium();
+    void syncCesium();
 
     return () => {
       isCancelled = true;
+      cesiumSyncGenerationRef.current += 1;
     };
-  }, [mapCommandState.mapMode]);
+  }, [mapCommandState.cesiumImagery, mapCommandState.cesiumTerrain, mapCommandState.mapMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -818,6 +967,14 @@ export function MapPanel() {
     updateMapCommandState({ basemap });
   }, [layerVisibility.basemap, updateMapCommandState]);
 
+  const setCesiumImagery = useCallback((imagery: CesiumImageryId) => {
+    updateMapCommandState({ cesiumImagery: imagery });
+  }, [updateMapCommandState]);
+
+  const setCesiumTerrain = useCallback((terrain: CesiumTerrainId) => {
+    updateMapCommandState({ cesiumTerrain: terrain });
+  }, [updateMapCommandState]);
+
   const toggleDragRotate = useCallback(() => {
     const map = mapRef.current;
 
@@ -851,6 +1008,77 @@ export function MapPanel() {
     updateMapCommandState({ displayCrs, mapMode: displayCrs !== 'webMercator' ? 'planar' : mapModeRef.current });
   }, [syncViewport, updateMapCommandState]);
 
+  const locateByQuery = useCallback(async (query: string) => {
+    const trimmed = query.trim();
+
+    if (!trimmed || mapModeRef.current !== 'globe') {
+      return false;
+    }
+
+    const cesium = cesiumRef.current;
+    const viewer = cesium?.viewer;
+
+    if (!cesium || !viewer || viewer.isDestroyed()) {
+      return false;
+    }
+
+    const coordinate = parseLocateQuery(trimmed);
+
+    if (coordinate) {
+      viewer.camera.flyTo({
+        destination: cesium.Cesium.Cartesian3.fromDegrees(coordinate.lon, coordinate.lat, 2_400_000),
+        duration: 0.8,
+      });
+      return true;
+    }
+
+    const url = new URL('https://nominatim.openstreetmap.org/search');
+    url.searchParams.set('format', 'jsonv2');
+    url.searchParams.set('limit', '1');
+    url.searchParams.set('q', trimmed);
+
+    try {
+      const response = await fetch(url.toString(), {
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const results = (await response.json()) as NominatimSearchResult[];
+      const result = results[0];
+
+      if (!result) {
+        return false;
+      }
+
+      const bounds = getNominatimBounds(result);
+
+      if (bounds) {
+        flyCesiumToLayer(viewer, cesium.Cesium, bounds);
+        return true;
+      }
+
+      const point = getNominatimPoint(result);
+
+      if (!point) {
+        return false;
+      }
+
+      viewer.camera.flyTo({
+        destination: cesium.Cesium.Cartesian3.fromDegrees(point.lon, point.lat, 2_400_000),
+        duration: 0.8,
+      });
+
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   const locate = useCallback(() => {
     if (mapModeRef.current === 'globe') {
       const cesium = cesiumRef.current;
@@ -879,17 +1107,20 @@ export function MapPanel() {
 
   const mapCommands = useMemo(
     () => ({
+      locateByQuery,
       zoomIn,
       zoomOut,
       resetNorth,
       setBasemap,
+      setCesiumImagery,
+      setCesiumTerrain,
       setDisplayCrs,
       setMapMode,
       syncViewport,
       toggleDragRotate,
       locate,
     }),
-    [locate, resetNorth, setBasemap, setDisplayCrs, setMapMode, syncViewport, toggleDragRotate, zoomIn, zoomOut],
+    [locate, locateByQuery, resetNorth, setBasemap, setCesiumImagery, setCesiumTerrain, setDisplayCrs, setMapMode, syncViewport, toggleDragRotate, zoomIn, zoomOut],
   );
 
   useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
