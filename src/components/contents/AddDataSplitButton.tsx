@@ -8,6 +8,7 @@ export function AddDataSplitButton() {
   const [remoteUrl, setRemoteUrl] = useState('');
   const [isSubmittingRemote, setIsSubmittingRemote] = useState(false);
   const {
+    uploadCsv,
     uploadGeoJson,
     uploadGeoPackage,
     uploadGeoParquetFile,
@@ -24,7 +25,9 @@ export function AddDataSplitButton() {
       return;
     }
 
-    if (isGeoTiffFile(file.name)) {
+    if (isCsvFile(file.name)) {
+      await uploadCsv(file);
+    } else if (isGeoTiffFile(file.name)) {
       await uploadGeoTiff(file);
     } else if (isGeoJsonFile(file.name)) {
       await uploadGeoJson(file);
@@ -78,7 +81,7 @@ export function AddDataSplitButton() {
         className="add-data-local"
         type="button"
         title="本地添加数据"
-        aria-label="本地添加 Shapefile ZIP、GeoJSON、GeoParquet、GeoPackage 或 GeoTIFF 数据"
+        aria-label="本地添加 CSV、Shapefile ZIP、GeoJSON、GeoParquet、GeoPackage 或 GeoTIFF 数据"
         onClick={() => fileInputRef.current?.click()}
       >
         <FolderPlus size={16} />
@@ -119,11 +122,15 @@ export function AddDataSplitButton() {
         ref={fileInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".zip,.geojson,.json,.parquet,.geoparquet,.gpkg,.geopackage,.tif,.tiff,.geotiff"
+        accept=".csv,.zip,.geojson,.json,.parquet,.geoparquet,.gpkg,.geopackage,.tif,.tiff,.geotiff"
         onChange={handleFileChange}
       />
     </div>
   );
+}
+
+function isCsvFile(fileName: string) {
+  return /\.csv$/i.test(pathNameForExtension(fileName));
 }
 
 function isGeoTiffFile(fileName: string) {

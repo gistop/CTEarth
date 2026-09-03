@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
-import { defaultUploadedLayerStyle, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
+import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
 import { useDigitize } from './digitize/DigitizeContext';
 import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeMap';
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
@@ -16,6 +16,10 @@ const CHINA_ZOOM = 3.6;
 const DEFAULT_BASEMAP: BasemapId = 'osm';
 const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 const CESIUM_BASE_URL = '/cesium/';
+const TERRAIN_DEM_SOURCE_ID = 'terrain-dem';
+const TERRAIN_HILLSHADE_SOURCE_ID = 'terrain-hillshade-dem';
+const TERRAIN_HILLSHADE_LAYER_ID = 'terrain-hillshade';
+const TERRAIN_DEM_TILEJSON_URL = 'https://tiles.mapterhorn.com/tilejson.json';
 
 const basemapLayers: Record<BasemapId, string[]> = {
   osm: ['basemap-osm'],
@@ -35,6 +39,9 @@ type CesiumViewer = {
     zoomIn: (amount?: number) => void;
     zoomOut: (amount?: number) => void;
     flyTo: (options: { destination: unknown; duration?: number }) => void;
+  };
+  screenSpaceEventHandler: {
+    setInputAction: (callback: () => void, type: unknown) => void;
   };
   imageryLayers: {
     removeAll: (destroy?: boolean) => void;
@@ -70,6 +77,9 @@ type CesiumNamespace = CesiumLayerNamespace & {
   };
   Ion?: {
     defaultAccessToken: string;
+  };
+  ScreenSpaceEventType: {
+    LEFT_DOUBLE_CLICK: unknown;
   };
 };
 
@@ -178,6 +188,9 @@ function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
   viewer.scene.globe.show = true;
   viewer.scene.backgroundColor = Cesium.Color.SKYBLUE;
   viewer.scene.globe.baseColor = Cesium.Color.LIGHTGREY;
+  viewer.screenSpaceEventHandler.setInputAction(() => {
+    viewer.camera.zoomIn(getCesiumZoomStep(viewer));
+  }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
   viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
   flyCesiumToChina(viewer, Cesium, 1.6);
 
@@ -310,19 +323,29 @@ function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): mapli
         type: 'raster',
         tiles: createTiandituTiles('vec'),
         tileSize: 256,
-        attribution: '天地图',
+        attribution: 'Tianditu',
       },
       tiandituCva: {
         type: 'raster',
         tiles: createTiandituTiles('cva'),
         tileSize: 256,
-        attribution: '天地图',
+        attribution: 'Tianditu',
       },
       esriImagery: {
         type: 'raster',
         tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
         tileSize: 256,
-        attribution: 'Tiles © Esri',
+        attribution: 'Tiles Esri',
+      },
+      [TERRAIN_DEM_SOURCE_ID]: {
+        type: 'raster-dem',
+        url: TERRAIN_DEM_TILEJSON_URL,
+        tileSize: 256,
+      },
+      [TERRAIN_HILLSHADE_SOURCE_ID]: {
+        type: 'raster-dem',
+        url: TERRAIN_DEM_TILEJSON_URL,
+        tileSize: 256,
       },
     },
     layers: [
@@ -358,6 +381,22 @@ function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): mapli
           visibility: activeBasemap === 'esri' ? 'visible' : 'none',
         },
       },
+      {
+        id: TERRAIN_HILLSHADE_LAYER_ID,
+        type: 'hillshade',
+        source: TERRAIN_HILLSHADE_SOURCE_ID,
+        layout: {
+          visibility: 'none',
+        },
+        paint: {
+          'hillshade-method': 'standard',
+          'hillshade-illumination-direction': 315,
+          'hillshade-shadow-color': '#2f3340',
+          'hillshade-highlight-color': '#ffffff',
+          'hillshade-accent-color': '#2f3340',
+          'hillshade-exaggeration': 0.5,
+        },
+      },
     ],
   };
 }
@@ -390,6 +429,25 @@ function setBasemapOpacity(map: maplibregl.Map, opacity: number) {
   });
 }
 
+function setTerrainMode(map: maplibregl.Map, enabled: boolean) {
+  if (!map.isStyleLoaded() || !map.getSource(TERRAIN_DEM_SOURCE_ID)) {
+    return false;
+  }
+
+  if (map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
+    map.setLayoutProperty(TERRAIN_HILLSHADE_LAYER_ID, 'visibility', enabled ? 'visible' : 'none');
+  }
+
+  map.setTerrain(enabled
+    ? {
+      source: TERRAIN_DEM_SOURCE_ID,
+      exaggeration: 1.15,
+    }
+    : null);
+
+  return true;
+}
+
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
@@ -398,7 +456,6 @@ export function MapPanel() {
   const cesiumRef = useRef<{ Cesium: CesiumNamespace; viewer: CesiumViewer } | null>(null);
   const cesiumSyncRef = useRef<{ imagery: CesiumImageryId; terrain: CesiumTerrainId } | null>(null);
   const cesiumSyncGenerationRef = useRef(0);
-  const lastLayerNameRef = useRef('');
   const mapModeRef = useRef<MapViewMode>('planar');
   const digitizeMapVisibleRef = useRef(false);
   const { editingActive, status: digitizeStatus } = useDigitize();
@@ -406,11 +463,11 @@ export function MapPanel() {
   const { identifyActive } = useMapIdentify();
   const { selectionActive } = useMapSelection();
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
-  const skipInitialAutoFitRef = useRef(Boolean(viewportBounds4326));
   const {
     layer,
     layers,
     layerZoomRequest,
+    rasterZoomRequest,
     layerOrder,
     layerVisibility,
     uploadedLayerVisibility,
@@ -423,17 +480,17 @@ export function MapPanel() {
     uploadedLayerStyles,
   } = useGis();
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
-  const [status, setStatus] = useState('正在初始化在线地图');
+  const [status, setStatus] = useState('\u6b63\u5728\u521d\u59cb\u5316\u5728\u7ebf\u5730\u56fe');
   const [hasLoadedDigitizeMap, setHasLoadedDigitizeMap] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const featureIdentifyActive = identifyActive && !editingActive && mapCommandState.mapMode !== 'globe';
   const featureSelectionActive = selectionActive && !featureIdentifyActive && !editingActive && mapCommandState.mapMode !== 'globe';
   const selectionStatus = selectionActive
     ? mapCommandState.mapMode === 'globe'
-      ? '选择工具暂不支持三维视图'
+      ? '\u9009\u62e9\u5de5\u5177\u6682\u4e0d\u652f\u6301\u4e09\u7ef4\u89c6\u56fe'
       : layers.length === 0
-        ? '选择工具：请先加载矢量图层'
-        : '选择工具：单击要素选择，Ctrl/⌘ 切换，Shift 添加'
+        ? '\u9009\u62e9\u5de5\u5177\uff1a\u8bf7\u5148\u52a0\u8f7d\u77e2\u91cf\u56fe\u5c42'
+        : '\u9009\u62e9\u5de5\u5177\uff1a\u5355\u51fb\u8981\u7d20\u9009\u62e9\uff0cCtrl/Command \u5207\u6362\uff0cShift \u6dfb\u52a0'
     : '';
 
   useEffect(() => {
@@ -466,7 +523,7 @@ export function MapPanel() {
       const { width, height } = container.getBoundingClientRect();
 
       if (width < 20 || height < 20) {
-        setStatus(`等待地图容器尺寸 ${Math.round(width)} x ${Math.round(height)}`);
+        setStatus(`\u7b49\u5f85\u5730\u56fe\u5bb9\u5668\u5c3a\u5bf8 ${Math.round(width)} x ${Math.round(height)}`);
         return;
       }
 
@@ -477,6 +534,7 @@ export function MapPanel() {
         pitch: 0,
         minZoom: 2,
         maxZoom: 18,
+        maxPitch: 85,
         attributionControl: false,
         style: createOnlineMapStyle(DEFAULT_BASEMAP),
       });
@@ -487,7 +545,7 @@ export function MapPanel() {
         setViewportBounds4326(mapBoundsToLonLatExtent(map));
       });
       map.on('error', (event) => {
-        setStatus(event.error?.message ?? '在线地图加载错误');
+        setStatus(event.error?.message ?? '\u5728\u7ebf\u5730\u56fe\u52a0\u8f7d\u9519\u8bef');
       });
       map.once('load', () => {
         map.resize();
@@ -543,21 +601,27 @@ export function MapPanel() {
     }
 
     if (mapCommandState.mapMode === 'globe') {
+      setTerrainMode(map, false);
       setStatus('');
       return;
     }
 
     if (mapCommandState.mapMode === 'terrain') {
+      const terrainEnabled = setTerrainMode(map, true);
+
       map.easeTo({
-        pitch: 0,
-        bearing: 0,
+        pitch: 60,
+        bearing: -18,
         duration: 300,
         essential: true,
       });
-      setStatus('地形模式占位：等待接入 DEM 高程瓦片服务');
+      setStatus(terrainEnabled
+        ? '\u5730\u5f62\u6a21\u5f0f\uff1a\u5df2\u63a5\u5165 DEM \u9ad8\u7a0b\u74e6\u7247\u670d\u52a1'
+        : '\u5730\u5f62\u6a21\u5f0f\uff1aDEM \u9ad8\u7a0b\u74e6\u7247\u6e90\u672a\u5c31\u7eea');
       return;
     }
 
+    setTerrainMode(map, false);
     map.easeTo({
       pitch: 0,
       bearing: 0,
@@ -603,9 +667,29 @@ export function MapPanel() {
     }
 
     if (!fitValidBounds(map, bounds, 0.14, 80, 700)) {
-      setStatus('图层坐标超出经纬度范围，已跳过自动定位');
+      setStatus('\u56fe\u5c42\u5750\u6807\u8d85\u51fa\u7ecf\u7eac\u5ea6\u8303\u56f4\uff0c\u5df2\u8df3\u8fc7\u81ea\u52a8\u5b9a\u4f4d');
     }
   }, [layerZoomRequest, layers, mapCommandState.mapMode, mapReady]);
+
+  useEffect(() => {
+    if (!rasterZoomRequest || !raster || rasterZoomRequest.rasterId !== raster.id) {
+      return;
+    }
+
+    if (mapCommandState.mapMode === 'globe') {
+      return;
+    }
+
+    const map = mapRef.current;
+
+    if (!mapReady || !map) {
+      return;
+    }
+
+    if (!fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700)) {
+      setStatus('\u6805\u683c\u5750\u6807\u8d85\u51fa\u7ecf\u7eac\u5ea6\u8303\u56f4\uff0c\u5df2\u8df3\u8fc7\u81ea\u52a8\u5b9a\u4f4d');
+    }
+  }, [mapCommandState.mapMode, mapReady, raster, rasterZoomRequest]);
 
   useEffect(() => {
     if (mapCommandState.mapMode !== 'globe') {
@@ -627,7 +711,7 @@ export function MapPanel() {
         const needsViewer = !existing || existing.viewer.isDestroyed();
 
         if (needsViewer) {
-          setStatus('正在加载 Cesium 三维视图');
+          setStatus('\u6b63\u5728\u52a0\u8f7d Cesium \u4e09\u7ef4\u89c6\u56fe');
           const Cesium = await loadCesium();
 
           if (isCancelled) {
@@ -684,7 +768,7 @@ export function MapPanel() {
         }
       } catch (error) {
         if (!isCancelled) {
-          setStatus(error instanceof Error ? error.message : 'Cesium 三维视图加载失败');
+          setStatus(error instanceof Error ? error.message : 'Cesium \u4e09\u7ef4\u89c6\u56fe\u52a0\u8f7d\u5931\u8d25');
         }
       }
     };
@@ -717,12 +801,6 @@ export function MapPanel() {
       return;
     }
 
-    if (layers.length === 0) {
-      removeStaleUploadedLayers(map, new Set());
-      lastLayerNameRef.current = '';
-      return;
-    }
-
     const expectedLayerIds = new Set(layers.map((item) => item.id));
     removeStaleUploadedLayers(map, expectedLayerIds);
 
@@ -737,26 +815,7 @@ export function MapPanel() {
 
     applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, Boolean(vectorOverlay));
 
-    if (skipInitialAutoFitRef.current) {
-      if (layer) {
-        lastLayerNameRef.current = layer.id;
-      }
-      skipInitialAutoFitRef.current = false;
-      return;
-    }
-
-    if (layer && lastLayerNameRef.current !== layer.id) {
-      const bounds = layer.points.features.length > 0
-        ? getPointBounds(layer.points.features)
-        : getGeoJsonBounds(layer.geojson);
-
-      if (bounds && !fitValidBounds(map, bounds, 0.14, 80, 700)) {
-        setStatus('图层坐标超出经纬度范围，已跳过自动定位');
-      }
-
-      lastLayerNameRef.current = layer.id;
-    }
-  }, [layer, layerOrder, layers, mapReady, raster, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay]);
+  }, [layerOrder, layers, mapReady, raster, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1349,6 +1408,7 @@ function applyLayerOrder(
     ...uploadedLayers.map((item) => `uploaded:${item.id}`),
     ...(hasVectorOverlay ? ['vectorOverlay'] : []),
     ...(rasterOrderId ? [rasterOrderId] : []),
+    TERRAIN_HILLSHADE_LAYER_ID,
     'basemap',
   ];
   const seen = new Set<string>();
@@ -1384,6 +1444,10 @@ function layerGroupIds(id: string, uploadedIds: Set<string>, rasterId: string | 
 
   if (id === 'vectorOverlay') {
     return hasVectorOverlay ? vectorOverlayLayerIds : [];
+  }
+
+  if (id === TERRAIN_HILLSHADE_LAYER_ID) {
+    return [TERRAIN_HILLSHADE_LAYER_ID];
   }
 
   if (id.startsWith('uploaded:')) {
@@ -1536,42 +1600,6 @@ function enrichFeature(feature: unknown, layer: { id: string; selectedField: str
   };
 }
 
-function getGeoJsonBounds(geojson: { features: unknown[] }): [number, number, number, number] | null {
-  const bounds: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
-
-  for (const feature of geojson.features) {
-    if (!isRecord(feature) || !isRecord(feature.geometry)) {
-      continue;
-    }
-
-    expandCoordinateBounds(feature.geometry.coordinates, bounds);
-  }
-
-  if (!Number.isFinite(bounds[0])) {
-    return null;
-  }
-
-  return bounds;
-}
-
-function expandCoordinateBounds(value: unknown, bounds: [number, number, number, number]) {
-  if (!Array.isArray(value)) {
-    return;
-  }
-
-  if (value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
-    const lon = Number(value[0]);
-    const lat = Number(value[1]);
-    bounds[0] = Math.min(bounds[0], lon);
-    bounds[1] = Math.min(bounds[1], lat);
-    bounds[2] = Math.max(bounds[2], lon);
-    bounds[3] = Math.max(bounds[3], lat);
-    return;
-  }
-
-  value.forEach((item) => expandCoordinateBounds(item, bounds));
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -1579,3 +1607,4 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isPointLikeFeature(value: Record<string, unknown>) {
   return isRecord(value.geometry) && value.geometry.type === 'Point';
 }
+

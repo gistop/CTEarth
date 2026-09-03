@@ -51,6 +51,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
     layerVisibility,
     layers,
     raster,
+    rasterLayerVisibility,
     rasterStyle,
     uploadedLayerStyles,
     uploadedLayerVisibility,
@@ -245,10 +246,12 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       return;
     }
 
-    rasterLayer.setVisible(Boolean(raster && layerVisibility.raster));
+    const isRasterVisible = Boolean(raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster));
+
+    rasterLayer.setVisible(isRasterVisible);
     rasterLayer.setOpacity(rasterStyle.opacity);
 
-    if (!raster || !layerVisibility.raster) {
+    if (!raster || !isRasterVisible) {
       rasterLayer.setSource(null);
       return;
     }
@@ -258,7 +261,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       url: raster.imageUrl,
       projection: 'EPSG:3857',
     }));
-  }, [layerVisibility.raster, raster, rasterStyle.opacity]);
+  }, [layerVisibility.raster, raster, rasterLayerVisibility, rasterStyle.opacity]);
 
   useEffect(() => {
     const vectorOverlayLayer = vectorOverlayLayerRef.current;
@@ -392,7 +395,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
     const extent = createExtent();
     let hasExtent = false;
 
-    if (raster && layerVisibility.raster) {
+    if (raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster)) {
       const rasterExtent = layoutRasterExtent(raster.coordinates);
       if (rasterExtent) {
         extendExtent(extent, rasterExtent);
@@ -436,7 +439,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       padding: [14, 14, 14, 14],
     });
     view.setRotation(0);
-  }, [layerVisibility.raster, layerVisibility.vectorOverlay, layers, raster, uploadedLayerVisibility, vectorOverlay]);
+  }, [layerVisibility.raster, layerVisibility.vectorOverlay, layers, raster, rasterLayerVisibility, uploadedLayerVisibility, vectorOverlay]);
 
   return <div ref={containerRef} className="layout-map-preview-map" aria-hidden="true" />;
 }

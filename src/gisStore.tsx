@@ -14,6 +14,13 @@ import { FeatureColumn, GeoPackageDataType, GeometryType } from '@ngageoint/geop
 import geoPackageSqlWasmUrl from '@ngageoint/geopackage/dist/sql-wasm.wasm?url';
 import JSZip from 'jszip';
 import shp from 'shpjs';
+import {
+  deleteWorkspaceDraft,
+  readWorkspaceDraft,
+  writeWorkspaceDraft,
+  type WorkspaceRasterLayer,
+  type WorkspaceVectorLayer,
+} from './workspaceDraftStore';
 
 export type PointFeature = {
   type: 'Feature';
@@ -237,6 +244,7 @@ type GisContextValue = {
   layers: UploadedLayer[];
   activeLayerId: string | null;
   layerZoomRequest: { layerId: string; requestId: number } | null;
+  rasterZoomRequest: { rasterId: string; requestId: number } | null;
   raster: RasterOverlay | null;
   rasters: RasterOverlay[];
   activeRasterId: string | null;
@@ -251,8 +259,10 @@ type GisContextValue = {
   layerOrder: LayerOrderId[];
   toolsReady: boolean;
   isRunning: boolean;
+  workspaceDraftLoaded: boolean;
   message: string;
   uploadShapefileZip: (file: File) => Promise<void>;
+  uploadCsv: (file: File) => Promise<void>;
   uploadGeoJson: (file: File) => Promise<void>;
   uploadGeoParquetFile: (file: File) => Promise<void>;
   uploadGeoParquetUrl: (url: string) => Promise<void>;
@@ -279,6 +289,7 @@ type GisContextValue = {
   setActiveLayer: (id: string) => void;
   setActiveRaster: (id: string) => void;
   zoomToLayer: (layerId: string) => void;
+  zoomToRaster: (rasterId: string) => void;
   setRasterLayerVisibility: (id: string, visible: boolean) => void;
   setSelectedField: (field: string) => void;
   setLayerSelection: (layerId: string, indexes: number[]) => void;
@@ -332,6 +343,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [layers, setLayers] = useState<UploadedLayer[]>([]);
   const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
   const [layerZoomRequest, setLayerZoomRequest] = useState<{ layerId: string; requestId: number } | null>(null);
+  const [rasterZoomRequest, setRasterZoomRequest] = useState<{ rasterId: string; requestId: number } | null>(null);
   const [rasters, setRasters] = useState<RasterOverlay[]>([]);
   const [activeRasterId, setActiveRasterId] = useState<string | null>(null);
   const [vectorOverlay, setVectorOverlay] = useState<VectorOverlay | null>(null);
@@ -345,7 +357,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [layerOrder, setLayerOrder] = useState<LayerOrderId[]>(defaultLayerOrder);
   const [toolsReady, setToolsReady] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [workspaceDraftLoaded, setWorkspaceDraftLoaded] = useState(false);
   const [message, setMessage] = useState('WASM 工具正在加载');
 
   const layer = useMemo(
@@ -480,6 +492,13 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
+  const zoomToRaster = useCallback((rasterId: string) => {
+    setRasterZoomRequest((current) => ({
+      rasterId,
+      requestId: (current?.requestId ?? 0) + 1,
+    }));
+  }, []);
+
   const addGeoJsonLayer = useCallback((fileName: string, geojson: GeoJsonFeatureCollection, formatLabel: string) => {
     const points = geojson.features.filter(isPointFeature);
     const fields = getFields(geojson.features);
@@ -540,24 +559,39 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
 
-    readVectorDraft()
+    readWorkspaceDraft()
       .then((draft) => {
         if (!active) {
           return;
         }
 
-        if (draft?.layers.length) {
-          const nextLayers = draft.layers.map(draftLayerToUploadedLayer);
+        if (draft?.vectorLayers.length || draft?.rasterLayers.length) {
+          const nextLayers = draft.vectorLayers.map(draftLayerToUploadedLayer);
+          const nextRasters = draft.rasterLayers.map(draftRasterLayerToOverlay);
           const layerIds = new Set(nextLayers.map((item) => item.id));
+          const rasterIds = new Set(nextRasters.map((item) => `raster:${item.id}`));
 
           setLayers(nextLayers);
+          setRasters(nextRasters);
           setActiveLayerId(draft.activeLayerId && layerIds.has(draft.activeLayerId) ? draft.activeLayerId : nextLayers.at(-1)?.id ?? null);
+          setActiveRasterId(draft.activeRasterId && rasterIds.has(`raster:${draft.activeRasterId}`) ? draft.activeRasterId : nextRasters.at(-1)?.id ?? null);
           setUploadedLayerVisibilityState(draft.uploadedLayerVisibility ?? {});
           setUploadedLayerStyles(draft.uploadedLayerStyles ?? {});
+          setRasterLayerVisibilityState(draft.rasterLayerVisibility ?? {});
+          setRasterStyleState(draft.rasterStyle ?? defaultRasterStyle);
+          setLayerVisibilityState(draft.layerVisibility ?? defaultLayerVisibility);
           setLayerOrder([
-            ...draft.layerOrder.filter((id) => id === 'basemap' || id === 'vectorOverlay' || layerIds.has(id.slice('uploaded:'.length))),
+            ...draft.layerOrder.filter((id) => (
+              id === 'basemap'
+              || id === 'vectorOverlay'
+              || (id.startsWith('uploaded:') && layerIds.has(id.slice('uploaded:'.length)))
+              || (id.startsWith('raster:') && rasterIds.has(id))
+            )),
             ...nextLayers
               .map((item) => `uploaded:${item.id}` as const)
+              .filter((id) => !draft.layerOrder.includes(id)),
+            ...nextRasters
+              .map((item) => `raster:${item.id}` as const)
               .filter((id) => !draft.layerOrder.includes(id)),
             'basemap',
           ]);
@@ -571,7 +605,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       })
       .finally(() => {
         if (active) {
-          setDraftLoaded(true);
+          setWorkspaceDraftLoaded(true);
         }
       });
 
@@ -581,29 +615,46 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!draftLoaded) {
+    if (!workspaceDraftLoaded) {
       return undefined;
     }
 
     const handle = window.setTimeout(() => {
-      if (layers.length === 0) {
-        void deleteVectorDraft();
+      if (layers.length === 0 && rasters.length === 0) {
+        void deleteWorkspaceDraft();
         return;
       }
 
-      void writeVectorDraft({
-        version: 1,
+      void writeWorkspaceDraft({
+        version: 2,
         savedAt: new Date().toISOString(),
         activeLayerId,
-        layers: layers.map(layerToDraftLayer),
+        activeRasterId,
+        vectorLayers: layers.map(layerToWorkspaceDraftLayer),
+        rasterLayers: rasters.map(rasterToWorkspaceDraftLayer),
         uploadedLayerStyles,
         uploadedLayerVisibility,
+        rasterLayerVisibility,
+        rasterStyle,
+        layerVisibility,
         layerOrder,
       });
     }, 500);
 
     return () => window.clearTimeout(handle);
-  }, [activeLayerId, draftLoaded, layerOrder, layers, uploadedLayerStyles, uploadedLayerVisibility]);
+  }, [
+    activeLayerId,
+    activeRasterId,
+    layerOrder,
+    layerVisibility,
+    layers,
+    rasterLayerVisibility,
+    rasterStyle,
+    rasters,
+    uploadedLayerStyles,
+    uploadedLayerVisibility,
+    workspaceDraftLoaded,
+  ]);
 
   const uploadShapefileZip = useCallback(async (file: File) => {
     try {
@@ -656,6 +707,25 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const text = new TextDecoder().decode(bytes);
       const geojson = normalizeGeoJson(JSON.parse(text));
       addGeoJsonLayer(file.name || 'input.geojson', geojson, 'GeoJSON');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }, [addGeoJsonLayer]);
+
+  const uploadCsv = useCallback(async (file: File) => {
+    try {
+      setMessage('正在读取 CSV 表格');
+      setVectorOverlay(null);
+
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const { coordinateMode, geojson, skippedRows } = csvToPointGeoJson(decodeCsvText(bytes));
+
+      addGeoJsonLayer(file.name || 'input.csv', geojson, 'CSV');
+      setMessage(
+        `已加载 CSV 点图层：${file.name || 'input.csv'}，${geojson.features.length} 个点`
+        + (skippedRows > 0 ? `，跳过 ${skippedRows} 行无效坐标` : '')
+        + (coordinateMode === 'webMercator' ? '，已从 EPSG:3857 转为 WGS84' : ''),
+      );
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -1613,6 +1683,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     layers,
     activeLayerId,
     layerZoomRequest,
+    rasterZoomRequest,
     raster,
     rasters,
     activeRasterId,
@@ -1627,8 +1698,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     layerOrder,
     toolsReady,
     isRunning,
+    workspaceDraftLoaded,
     message,
     uploadShapefileZip,
+    uploadCsv,
     uploadGeoJson,
     uploadGeoParquetFile,
     uploadGeoParquetUrl,
@@ -1655,6 +1728,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setActiveLayer,
     setActiveRaster,
     zoomToLayer,
+    zoomToRaster,
     setSelectedField,
     setLayerSelection,
     setRasterLayerVisibility,
@@ -1668,7 +1742,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, zoomToLayer]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -1763,29 +1837,6 @@ type SaveFilePickerWindow = Window & {
     }>;
   }) => Promise<LocalSaveFileHandle>;
 };
-
-type VectorDraftLayer = {
-  id: string;
-  fileName: string;
-  geometryType?: EditableGeometryType;
-  geojson: GeoJsonFeatureCollection;
-  selectedField: string;
-  selectedFeatureIndexes: number[];
-};
-
-type VectorDraft = {
-  version: 1;
-  savedAt: string;
-  activeLayerId: string | null;
-  layers: VectorDraftLayer[];
-  uploadedLayerStyles: Record<string, UploadedLayerStyle>;
-  uploadedLayerVisibility: Record<string, boolean>;
-  layerOrder: LayerOrderId[];
-};
-
-const vectorDraftDbName = 'ctearth-vector-drafts';
-const vectorDraftStoreName = 'drafts';
-const vectorDraftKey = 'current';
 
 function createGeoJsonToolInput(inputName: string, geojson: GeoJsonFeatureCollection): ShapefileInput {
   const outputName = ensureGeoJsonName(inputName);
@@ -2102,7 +2153,7 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function layerToDraftLayer(layer: UploadedLayer): VectorDraftLayer {
+function layerToWorkspaceDraftLayer(layer: UploadedLayer): WorkspaceVectorLayer {
   return {
     id: layer.id,
     fileName: ensureGeoJsonName(layer.fileName || 'draft-layer.geojson'),
@@ -2113,7 +2164,7 @@ function layerToDraftLayer(layer: UploadedLayer): VectorDraftLayer {
   };
 }
 
-function draftLayerToUploadedLayer(layer: VectorDraftLayer): UploadedLayer {
+function draftLayerToUploadedLayer(layer: WorkspaceVectorLayer): UploadedLayer {
   const geojson = normalizeGeoJson(layer.geojson);
   const points = geojson.features.filter(isPointFeature);
   const fields = getFields(geojson.features);
@@ -2136,92 +2187,30 @@ function draftLayerToUploadedLayer(layer: VectorDraftLayer): UploadedLayer {
   };
 }
 
-async function readVectorDraft(): Promise<VectorDraft | null> {
-  const database = await openVectorDraftDb();
-
-  if (!database) {
-    return null;
-  }
-
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(vectorDraftStoreName, 'readonly');
-    const request = transaction.objectStore(vectorDraftStoreName).get(vectorDraftKey);
-
-    request.addEventListener('success', () => resolve(isVectorDraft(request.result) ? request.result : null));
-    request.addEventListener('error', () => reject(request.error));
-    transaction.addEventListener('complete', () => database.close());
-  });
+function rasterToWorkspaceDraftLayer(raster: RasterOverlay): WorkspaceRasterLayer {
+  return {
+    id: raster.id,
+    name: raster.name,
+    toolInput: raster.toolInput,
+  };
 }
 
-async function writeVectorDraft(draft: VectorDraft): Promise<void> {
-  const database = await openVectorDraftDb();
+function draftRasterLayerToOverlay(layer: WorkspaceRasterLayer): RasterOverlay {
+  const inputName = layer.toolInput.inputName;
+  const sourceBytes = layer.toolInput.files[inputName] ?? Object.values(layer.toolInput.files)[0];
 
-  if (!database) {
-    return;
+  if (!sourceBytes) {
+    throw new Error(`Saved raster draft is missing source bytes for ${layer.name}.`);
   }
 
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(vectorDraftStoreName, 'readwrite');
+  const raster = readRasterOverlay(sourceBytes, layer.name, inputName);
 
-    transaction.objectStore(vectorDraftStoreName).put(draft, vectorDraftKey);
-    transaction.addEventListener('complete', () => {
-      database.close();
-      resolve();
-    });
-    transaction.addEventListener('error', () => {
-      database.close();
-      reject(transaction.error);
-    });
-  });
-}
-
-async function deleteVectorDraft(): Promise<void> {
-  const database = await openVectorDraftDb();
-
-  if (!database) {
-    return;
-  }
-
-  return new Promise((resolve, reject) => {
-    const transaction = database.transaction(vectorDraftStoreName, 'readwrite');
-
-    transaction.objectStore(vectorDraftStoreName).delete(vectorDraftKey);
-    transaction.addEventListener('complete', () => {
-      database.close();
-      resolve();
-    });
-    transaction.addEventListener('error', () => {
-      database.close();
-      reject(transaction.error);
-    });
-  });
-}
-
-async function openVectorDraftDb(): Promise<IDBDatabase | null> {
-  if (!('indexedDB' in window)) {
-    return null;
-  }
-
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(vectorDraftDbName, 1);
-
-    request.addEventListener('upgradeneeded', () => {
-      if (!request.result.objectStoreNames.contains(vectorDraftStoreName)) {
-        request.result.createObjectStore(vectorDraftStoreName);
-      }
-    });
-    request.addEventListener('success', () => resolve(request.result));
-    request.addEventListener('error', () => reject(request.error));
-  });
-}
-
-function isVectorDraft(value: unknown): value is VectorDraft {
-  return isRecord(value)
-    && value.version === 1
-    && Array.isArray(value.layers)
-    && Array.isArray(value.layerOrder)
-    && isRecord(value.uploadedLayerStyles)
-    && isRecord(value.uploadedLayerVisibility);
+  return {
+    ...raster,
+    id: layer.id,
+    name: layer.name,
+    toolInput: layer.toolInput,
+  };
 }
 
 export function getPointBounds(points: PointFeature[]) {
@@ -2237,6 +2226,42 @@ export function getPointBounds(points: PointFeature[]) {
     },
     [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
   );
+}
+
+export function getGeoJsonBounds(geojson: { features: unknown[] }): [number, number, number, number] | null {
+  const bounds: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+
+  for (const feature of geojson.features) {
+    if (!isRecord(feature) || !isRecord(feature.geometry)) {
+      continue;
+    }
+
+    expandCoordinateBounds(feature.geometry.coordinates, bounds);
+  }
+
+  if (!Number.isFinite(bounds[0])) {
+    return null;
+  }
+
+  return bounds;
+}
+
+function expandCoordinateBounds(value: unknown, bounds: [number, number, number, number]) {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  if (value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+    const lon = Number(value[0]);
+    const lat = Number(value[1]);
+    bounds[0] = Math.min(bounds[0], lon);
+    bounds[1] = Math.min(bounds[1], lat);
+    bounds[2] = Math.max(bounds[2], lon);
+    bounds[3] = Math.max(bounds[3], lat);
+    return;
+  }
+
+  value.forEach((item) => expandCoordinateBounds(item, bounds));
 }
 
 function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name): RasterOverlay {
@@ -2713,6 +2738,310 @@ function normalizeGeoJson(data: unknown): { type: 'FeatureCollection'; features:
   }
 
   throw new Error('无法读取 Shapefile 压缩包。');
+}
+
+type CsvCoordinateMode = 'lonLat' | 'webMercator';
+
+type CsvPointGeoJsonResult = {
+  coordinateMode: CsvCoordinateMode;
+  geojson: GeoJsonFeatureCollection;
+  skippedRows: number;
+};
+
+function decodeCsvText(bytes: Uint8Array) {
+  const utf8Text = new TextDecoder('utf-8').decode(bytes);
+
+  if (!utf8Text.includes('\uFFFD')) {
+    return utf8Text.replace(/^\uFEFF/, '');
+  }
+
+  try {
+    return new TextDecoder('gb18030').decode(bytes).replace(/^\uFEFF/, '');
+  } catch {
+    return utf8Text.replace(/^\uFEFF/, '');
+  }
+}
+
+function csvToPointGeoJson(text: string): CsvPointGeoJsonResult {
+  const rows = parseCsvRows(text);
+  const headerIndex = rows.findIndex((row) => row.some((cell) => cell.trim()));
+
+  if (headerIndex < 0) {
+    throw new Error('CSV 文件为空。');
+  }
+
+  const rawHeaders = rows[headerIndex].map((header) => header.replace(/^\uFEFF/, '').trim());
+  const headers = uniqueCsvHeaders(rawHeaders);
+  const coordinateColumns = findCsvCoordinateColumns(rawHeaders);
+
+  if (!coordinateColumns) {
+    throw new Error('CSV 未找到经纬度字段。请提供 Longitude/lon/lng/x 与 Latitude/lat/y 字段。');
+  }
+
+  const candidateRows = rows.slice(headerIndex + 1)
+    .filter((row) => row.some((cell) => cell.trim()))
+    .map((row, index) => ({
+      index,
+      row,
+      x: parseCsvCoordinate(row[coordinateColumns.xIndex]),
+      y: parseCsvCoordinate(row[coordinateColumns.yIndex]),
+    }));
+
+  const validCoordinateRows = candidateRows.filter((row) => Number.isFinite(row.x) && Number.isFinite(row.y));
+
+  if (validCoordinateRows.length === 0) {
+    throw new Error('CSV 坐标字段没有可用数值。');
+  }
+
+  const coordinateMode = detectCsvCoordinateMode(
+    validCoordinateRows.map((row) => [row.x, row.y]),
+    coordinateColumns.usesPlainXY,
+  );
+  const features = candidateRows.flatMap(({ row, x, y }) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return [];
+    }
+
+    const coordinate = coordinateMode === 'webMercator'
+      ? webMercatorToLonLat(x, y)
+      : [x, y] as [number, number];
+
+    if (!isLonLatCoordinate(coordinate)) {
+      return [];
+    }
+
+    return [{
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: coordinate,
+      },
+      properties: csvRowProperties(headers, row),
+    }];
+  });
+
+  if (features.length === 0) {
+    throw new Error('CSV 坐标无法转换为有效经纬度点。');
+  }
+
+  return {
+    coordinateMode,
+    geojson: { type: 'FeatureCollection', features },
+    skippedRows: candidateRows.length - features.length,
+  };
+}
+
+function parseCsvRows(text: string) {
+  const delimiter = detectCsvDelimiter(text);
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (text[index + 1] === '"') {
+          cell += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += char;
+      }
+
+      continue;
+    }
+
+    if (char === '"' && cell.length === 0) {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === delimiter) {
+      row.push(cell);
+      cell = '';
+      continue;
+    }
+
+    if (char === '\r' || char === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+
+      if (char === '\r' && text[index + 1] === '\n') {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    cell += char;
+  }
+
+  if (inQuotes) {
+    throw new Error('CSV 引号未闭合。');
+  }
+
+  row.push(cell);
+  rows.push(row);
+
+  while (rows.length > 0 && rows[rows.length - 1].every((value) => !value.trim())) {
+    rows.pop();
+  }
+
+  return rows;
+}
+
+function detectCsvDelimiter(text: string) {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? '';
+  const candidates = [',', '\t', ';'];
+
+  return candidates
+    .map((delimiter) => ({ delimiter, count: countDelimitedCells(firstLine, delimiter) }))
+    .sort((left, right) => right.count - left.count)[0]?.delimiter ?? ',';
+}
+
+function countDelimitedCells(line: string, delimiter: string) {
+  let count = 0;
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (!inQuotes && char === delimiter) {
+      count += 1;
+    }
+  }
+
+  return count;
+}
+
+function uniqueCsvHeaders(headers: string[]) {
+  const seen = new Map<string, number>();
+
+  return headers.map((header, index) => {
+    const baseName = header.trim() || `field_${index + 1}`;
+    const key = normalizeCsvHeader(baseName) || `field${index + 1}`;
+    const count = (seen.get(key) ?? 0) + 1;
+
+    seen.set(key, count);
+
+    return count === 1 ? baseName : `${baseName}_${count}`;
+  });
+}
+
+function findCsvCoordinateColumns(headers: string[]) {
+  const normalizedHeaders = headers.map(normalizeCsvHeader);
+  const xIndex = findCsvHeaderIndex(normalizedHeaders, ['longitude', 'long', 'lon', 'lng', '经度', '經度'], ['x']);
+  const yIndex = findCsvHeaderIndex(normalizedHeaders, ['latitude', 'lat', '纬度', '緯度'], ['y']);
+
+  if (xIndex < 0 || yIndex < 0 || xIndex === yIndex) {
+    return null;
+  }
+
+  return {
+    xIndex,
+    yIndex,
+    usesPlainXY: normalizedHeaders[xIndex] === 'x' && normalizedHeaders[yIndex] === 'y',
+  };
+}
+
+function findCsvHeaderIndex(headers: string[], preferredAliases: string[], fallbackAliases: string[]) {
+  for (const alias of preferredAliases.map(normalizeCsvHeader)) {
+    const exactIndex = headers.findIndex((header) => header === alias);
+
+    if (exactIndex >= 0) {
+      return exactIndex;
+    }
+  }
+
+  for (const alias of preferredAliases.map(normalizeCsvHeader)) {
+    if (alias.length <= 2) {
+      continue;
+    }
+
+    const includedIndex = headers.findIndex((header) => header.includes(alias));
+
+    if (includedIndex >= 0) {
+      return includedIndex;
+    }
+  }
+
+  for (const alias of fallbackAliases.map(normalizeCsvHeader)) {
+    const exactIndex = headers.findIndex((header) => header === alias);
+
+    if (exactIndex >= 0) {
+      return exactIndex;
+    }
+  }
+
+  return -1;
+}
+
+function normalizeCsvHeader(value: string) {
+  return value
+    .replace(/^\uFEFF/, '')
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+function parseCsvCoordinate(value: string | undefined) {
+  if (value === undefined) {
+    return Number.NaN;
+  }
+
+  return Number(value.trim().replace(/,/g, ''));
+}
+
+function detectCsvCoordinateMode(coordinates: number[][], usesPlainXY: boolean): CsvCoordinateMode {
+  if (coordinates.every(([x, y]) => isLonLatCoordinate([x, y]))) {
+    return 'lonLat';
+  }
+
+  if (usesPlainXY && coordinates.every(([x, y]) => isLikelyWebMercatorCoordinate(x, y))) {
+    return 'webMercator';
+  }
+
+  throw new Error('CSV 的 X/Y 坐标不在经纬度范围内；如为投影坐标，请先转换为经纬度或使用明显的 Web Mercator X/Y。');
+}
+
+function isLonLatCoordinate(coordinate: number[]): coordinate is [number, number] {
+  return coordinate.length >= 2
+    && Number.isFinite(coordinate[0])
+    && Number.isFinite(coordinate[1])
+    && coordinate[0] >= -180
+    && coordinate[0] <= 180
+    && coordinate[1] >= -90
+    && coordinate[1] <= 90;
+}
+
+function isLikelyWebMercatorCoordinate(x: number, y: number) {
+  const max = 20_037_508.342789244;
+
+  return Math.abs(x) <= max
+    && Math.abs(y) <= max
+    && Math.abs(x) > 1_000_000;
+}
+
+function webMercatorToLonLat(x: number, y: number): [number, number] {
+  const radius = 6_378_137;
+  const lon = x / radius * 180 / Math.PI;
+  const lat = (2 * Math.atan(Math.exp(y / radius)) - Math.PI / 2) * 180 / Math.PI;
+
+  return [lon, lat];
+}
+
+function csvRowProperties(headers: string[], row: string[]) {
+  return Object.fromEntries(headers.map((header, index) => [header, row[index] ?? '']));
 }
 
 function isFeatureCollectionLike(value: unknown): value is { type: 'FeatureCollection'; features: unknown[] } {
@@ -3309,7 +3638,7 @@ export function displayLayerName(fileName: string) {
   let name = basename(fileName || 'layer').trim() || 'layer';
 
   while (true) {
-    const next = name.replace(/\.(zip|geojson|json|shp|gpkg|geopackage|geoparquet|tif|tiff|geotiff)$/i, '');
+    const next = name.replace(/\.(zip|csv|geojson|json|shp|gpkg|geopackage|geoparquet|tif|tiff|geotiff)$/i, '');
 
     if (next === name) {
       return name;
@@ -3352,6 +3681,7 @@ function sanitizeGeoPackageTableName(value: string) {
 function geoJsonToolInputName(fileName: string) {
   const baseName = basename(fileName || 'input')
     .replace(/\.(geo)?parquet$/i, '')
+    .replace(/\.csv$/i, '')
     .replace(/\.json$/i, '')
     .replace(/\.geojson$/i, '')
     .trim() || 'input';

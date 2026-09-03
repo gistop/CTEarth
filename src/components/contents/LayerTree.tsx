@@ -25,11 +25,17 @@ import { MapGroupEditPanel } from './MapGroupEditPanel';
 import { MapGroupSection, type MapGroup, type MapGroupLayerItem, type MapGroupLayerItemId } from './MapGroupSection';
 import { SaveAsSplitButton } from './SaveAsSplitButton';
 import {
+  deleteMapGroupDraft,
+  readMapGroupDraft,
+  writeMapGroupDraft,
+} from '../../mapGroupDraftStore';
+import {
   defaultBasemapStyle,
   defaultRasterStyle,
   defaultUploadedLayerStyle,
   defaultVectorOverlayStyle,
   displayLayerName,
+  getGeoJsonBounds,
   getPointBounds,
   useGis,
   type BasemapLayerStyle,
@@ -83,6 +89,7 @@ export function LayerTree() {
   const [mapGroups, setMapGroups] = useState<MapGroup[]>(defaultMapGroups);
   const [currentMapGroupId, setCurrentMapGroupId] = useState(defaultMapGroupId);
   const [collapsedMapGroupIds, setCollapsedMapGroupIds] = useState<Set<string>>(() => new Set());
+  const [mapGroupDraftLoaded, setMapGroupDraftLoaded] = useState(false);
   const {
     layers,
     activeLayerId,
@@ -115,7 +122,9 @@ export function LayerTree() {
     renameVectorOverlay,
     setActiveLayer,
     setActiveRaster,
+    workspaceDraftLoaded,
     zoomToLayer,
+    zoomToRaster,
   } = useGis();
   const { openAttributeTable } = useAttributeTable();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -201,10 +210,60 @@ export function LayerTree() {
   }, [activeLayerId, raster?.id, vectorOverlay]);
 
   useEffect(() => {
+    if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
+      return;
+    }
+
     setMapGroups((current) => assignUnclaimedLayerItemsToCurrentGroup(current, currentMapGroupId, layerItemIds));
-  }, [currentMapGroupId, layerItemIds]);
+  }, [currentMapGroupId, layerItemIds, mapGroupDraftLoaded, workspaceDraftLoaded]);
 
   useEffect(() => {
+    if (!workspaceDraftLoaded) {
+      return undefined;
+    }
+
+    let active = true;
+
+    readMapGroupDraft()
+      .then((draft) => {
+        if (!active) {
+          return;
+        }
+
+        if (draft) {
+          const nextMapGroups = draft.mapGroups.length > 0 ? draft.mapGroups as MapGroup[] : defaultMapGroups;
+          const nextGroupIds = new Set(nextMapGroups.map((group) => group.id));
+
+          setMapGroups(nextMapGroups);
+          setCurrentMapGroupId(
+            nextGroupIds.has(draft.currentMapGroupId)
+              ? draft.currentMapGroupId
+              : nextMapGroups[0]?.id ?? defaultMapGroupId,
+          );
+          setCollapsedMapGroupIds(new Set(draft.collapsedMapGroupIds.filter((id) => nextGroupIds.has(id))));
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          console.warn(error);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setMapGroupDraftLoaded(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [workspaceDraftLoaded]);
+
+  useEffect(() => {
+    if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
+      return;
+    }
+
     const visibleLayerIds = getVisibleMapGroupLayerIds(mapGroups);
     const shouldShowBasemap = visibleLayerIds.has('basemap');
     const shouldShowVectorOverlay = Boolean(vectorOverlay) && visibleLayerIds.has('vectorOverlay');
@@ -237,6 +296,7 @@ export function LayerTree() {
     layerVisibility.raster,
     layerVisibility.vectorOverlay,
     layers,
+    mapGroupDraftLoaded,
     mapGroups,
     rasterLayerVisibility,
     rasters,
@@ -245,11 +305,39 @@ export function LayerTree() {
     setUploadedLayerVisibility,
     uploadedLayerVisibility,
     vectorOverlay,
+    workspaceDraftLoaded,
   ]);
 
   useEffect(() => {
-    setLayerDrawOrder(mapGroups.flatMap((group) => group.layerItems.map((item) => item.layerId)));
-  }, [mapGroups, setLayerDrawOrder]);
+    if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
+      return undefined;
+    }
+
+    setLayerDrawOrder(getMapGroupLayerDrawOrder(mapGroups));
+  }, [mapGroupDraftLoaded, mapGroups, setLayerDrawOrder, workspaceDraftLoaded]);
+
+  useEffect(() => {
+    if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
+      return undefined;
+    }
+
+    const handle = window.setTimeout(() => {
+      if (mapGroups.length === 0) {
+        void deleteMapGroupDraft();
+        return;
+      }
+
+      void writeMapGroupDraft({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        currentMapGroupId,
+        mapGroups,
+        collapsedMapGroupIds: [...collapsedMapGroupIds],
+      });
+    }, 500);
+
+    return () => window.clearTimeout(handle);
+  }, [collapsedMapGroupIds, currentMapGroupId, mapGroupDraftLoaded, mapGroups, workspaceDraftLoaded]);
 
   const getLayerEditValue = (item: LayerListItem) => {
     if (item.kind === 'uploaded') {
@@ -703,7 +791,14 @@ export function LayerTree() {
                     setActiveLayer(item.layer.id);
                     zoomToLayer(item.layer.id);
                   }
-                  : undefined}
+                  : item.kind === 'raster'
+                    ? () => {
+                      handleCurrentMapGroupChange(group.id);
+                      setSelectedItemId(item.id);
+                      setActiveRaster(item.raster.id);
+                      zoomToRaster(item.raster.id);
+                    }
+                    : undefined}
                 onSelect={item.kind === 'uploaded'
                   ? () => {
                     handleCurrentMapGroupChange(group.id);
@@ -1393,6 +1488,24 @@ function getVisibleMapGroupLayerIds(groups: MapGroup[]) {
   return visibleIds;
 }
 
+function getMapGroupLayerDrawOrder(groups: MapGroup[]): LayerOrderId[] {
+  const orderedLayerIds: LayerOrderId[] = [];
+  let hasBasemap = false;
+
+  groups.forEach((group) => {
+    group.layerItems.forEach((item) => {
+      if (item.layerId === 'basemap') {
+        hasBasemap = true;
+        return;
+      }
+
+      orderedLayerIds.push(item.layerId);
+    });
+  });
+
+  return hasBasemap ? [...orderedLayerIds, 'basemap'] : orderedLayerIds;
+}
+
 function assignUnclaimedLayerItemsToCurrentGroup(groups: MapGroup[], currentGroupId: string, layerItemIds: MapGroupLayerItemId[]) {
   const availableIds = new Set(layerItemIds);
   let changed = false;
@@ -1593,42 +1706,6 @@ function getLayerBounds(layer: UploadedLayer) {
   return layer.points.features.length > 0
     ? getPointBounds(layer.points.features)
     : getGeoJsonBounds(layer.geojson);
-}
-
-function getGeoJsonBounds(geojson: { features: unknown[] }): [number, number, number, number] | null {
-  const bounds: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
-
-  for (const feature of geojson.features) {
-    if (!isRecord(feature) || !isRecord(feature.geometry)) {
-      continue;
-    }
-
-    expandCoordinateBounds(feature.geometry.coordinates, bounds);
-  }
-
-  if (!Number.isFinite(bounds[0])) {
-    return null;
-  }
-
-  return bounds;
-}
-
-function expandCoordinateBounds(value: unknown, bounds: [number, number, number, number]) {
-  if (!Array.isArray(value)) {
-    return;
-  }
-
-  if (value.length >= 2 && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
-    const lon = Number(value[0]);
-    const lat = Number(value[1]);
-    bounds[0] = Math.min(bounds[0], lon);
-    bounds[1] = Math.min(bounds[1], lat);
-    bounds[2] = Math.max(bounds[2], lon);
-    bounds[3] = Math.max(bounds[3], lat);
-    return;
-  }
-
-  value.forEach((item) => expandCoordinateBounds(item, bounds));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

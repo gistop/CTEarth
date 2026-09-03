@@ -136,6 +136,8 @@ Basemap tile sources are Web Mercator tile services:
 - Tianditu `*_w` WMTS tiles
 - Esri World Imagery tiles
 
+Note: Tianditu WMTS is a third-party cross-origin tile service. In some network environments, proxies, or VPNs, the browser may block it because the response does not include an `Access-Control-Allow-Origin` header.
+
 If a non-Web-Mercator tile source is added later, it should not be wired into the
 current MapLibre basemap path without a separate compatibility check.
 

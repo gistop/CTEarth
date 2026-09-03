@@ -17,7 +17,7 @@ import XYZ from 'ol/source/XYZ.js';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style.js';
 import type { Coordinate } from 'ol/coordinate.js';
 import type { BasemapId, DisplayCrsId } from './MapCommandContext';
-import { defaultUploadedLayerStyle, useGis } from '../../gisStore';
+import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, useGis } from '../../gisStore';
 import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
 import { useMapViewport } from './MapViewportContext';
 
@@ -53,9 +53,12 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   const initialViewportBoundsRef = useRef(viewportBounds4326);
   const {
     basemapStyle,
+    layerZoomRequest,
     layerVisibility,
     layers,
     raster,
+    rasterLayerVisibility,
+    rasterZoomRequest,
     rasterStyle,
     uploadedLayerStyles,
     uploadedLayerVisibility,
@@ -208,8 +211,10 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       return;
     }
 
+    const isRasterVisible = Boolean(raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster));
+
     layer.setOpacity(rasterStyle.opacity);
-    layer.setVisible(Boolean(raster && layerVisibility.raster));
+    layer.setVisible(isRasterVisible);
 
     if (!raster) {
       layer.setSource(null);
@@ -221,7 +226,55 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       projection: projectionCode,
       url: raster.imageUrl,
     }));
-  }, [layerVisibility.raster, projectionCode, raster, rasterStyle.opacity]);
+  }, [layerVisibility.raster, projectionCode, raster, rasterLayerVisibility, rasterStyle.opacity]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || !raster || !rasterZoomRequest || rasterZoomRequest.rasterId !== raster.id) {
+      return;
+    }
+
+    const bounds = rasterBoundsFromCoordinates(raster.coordinates);
+
+    if (!fitOpenLayersToViewportBounds(map, bounds, projectionCode)) {
+      return;
+    }
+
+    const nextBounds = openLayersMapToLonLatExtent(map, projectionCode);
+
+    if (nextBounds) {
+      setViewportBounds4326(nextBounds);
+    }
+  }, [projectionCode, raster, rasterZoomRequest, setViewportBounds4326]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map || !layerZoomRequest) {
+      return;
+    }
+
+    const targetLayer = layers.find((item) => item.id === layerZoomRequest.layerId);
+
+    if (!targetLayer) {
+      return;
+    }
+
+    const bounds = targetLayer.points.features.length > 0
+      ? getPointBounds(targetLayer.points.features)
+      : getGeoJsonBounds(targetLayer.geojson);
+
+    if (!bounds || !fitOpenLayersToLayerBounds(map, bounds, projectionCode)) {
+      return;
+    }
+
+    const nextBounds = openLayersMapToLonLatExtent(map, projectionCode);
+
+    if (nextBounds) {
+      setViewportBounds4326(nextBounds);
+    }
+  }, [layerZoomRequest, layers, projectionCode, setViewportBounds4326]);
 
   useEffect(() => {
     const source = uploadedSourceRef.current;
@@ -344,6 +397,22 @@ function rasterExtent(
   ];
 }
 
+function rasterBoundsFromCoordinates(
+  coordinates: [[number, number], [number, number], [number, number], [number, number]],
+): [number, number, number, number] {
+  const bounds = coordinates.reduce(
+    (current, [lon, lat]) => [
+      Math.min(current[0], lon),
+      Math.min(current[1], lat),
+      Math.max(current[2], lon),
+      Math.max(current[3], lat),
+    ] as [number, number, number, number],
+    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
+  );
+
+  return bounds;
+}
+
 function openLayersMapToLonLatExtent(map: Map, projectionCode: string): [number, number, number, number] | null {
   const size = map.getSize();
 
@@ -388,6 +457,38 @@ function fitOpenLayersToViewportBounds(
   map.getView().setRotation(0);
 
   return true;
+}
+
+function fitOpenLayersToLayerBounds(
+  map: Map,
+  bounds: [number, number, number, number],
+  projectionCode: string,
+) {
+  const paddedBounds = padLonLatBounds(bounds, 0.14);
+
+  return paddedBounds ? fitOpenLayersToViewportBounds(map, paddedBounds, projectionCode) : false;
+}
+
+function padLonLatBounds(bounds: [number, number, number, number], ratio: number): [number, number, number, number] | null {
+  const [minLon, minLat, maxLon, maxLat] = bounds;
+
+  if (!bounds.every(Number.isFinite) || minLon > maxLon || minLat > maxLat || minLat < -90 || maxLat > 90) {
+    return null;
+  }
+
+  const lonPad = Math.max((maxLon - minLon) * ratio, 0.01);
+  const latPad = Math.max((maxLat - minLat) * ratio, 0.01);
+
+  return [
+    minLon - lonPad,
+    clampLatitude(minLat - latPad),
+    maxLon + lonPad,
+    clampLatitude(maxLat + latPad),
+  ];
+}
+
+function clampLatitude(value: number) {
+  return Math.max(-90, Math.min(90, value));
 }
 
 function projectionCodeForDisplayCrs(displayCrs: DisplayCrsId) {

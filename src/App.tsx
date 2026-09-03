@@ -854,7 +854,7 @@ function Ribbon({
 
 function ContentsPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const { layer, message, uploadGeoJson, uploadGeoTiff, uploadShapefileZip } = useGis();
+  const { layer, message, uploadCsv, uploadGeoJson, uploadGeoTiff, uploadShapefileZip } = useGis();
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -863,7 +863,9 @@ function ContentsPanel() {
       return;
     }
 
-    if (isGeoTiffFile(file.name)) {
+    if (/\.csv$/i.test(file.name)) {
+      await uploadCsv(file);
+    } else if (isGeoTiffFile(file.name)) {
       await uploadGeoTiff(file);
     } else if (/\.geojson$/i.test(file.name) || /\.json$/i.test(file.name)) {
       await uploadGeoJson(file);
@@ -885,10 +887,10 @@ function ContentsPanel() {
         <Map size={18} />
         <PenTool size={18} />
         <Grid2X2 size={18} />
-        <button type="button" title="上传 Shapefile ZIP、GeoJSON 或 GeoTIFF" aria-label="上传 Shapefile ZIP、GeoJSON 或 GeoTIFF" onClick={() => fileInputRef.current?.click()}>
+        <button type="button" title="上传 CSV、Shapefile ZIP、GeoJSON 或 GeoTIFF" aria-label="上传 CSV、Shapefile ZIP、GeoJSON 或 GeoTIFF" onClick={() => fileInputRef.current?.click()}>
           <Upload size={18} />
         </button>
-        <input ref={fileInputRef} className="hidden-file-input" type="file" accept=".zip,.geojson,.json,.tif,.tiff,.geotiff" onChange={handleFileChange} />
+        <input ref={fileInputRef} className="hidden-file-input" type="file" accept=".csv,.zip,.geojson,.json,.tif,.tiff,.geotiff" onChange={handleFileChange} />
       </div>
       <section className="layer-tree">
         <h3>绘制顺序</h3>

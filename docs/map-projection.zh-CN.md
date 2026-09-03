@@ -118,6 +118,8 @@ event.lngLat.lat
 - 天地图 `*_w` WMTS 瓦片
 - Esri World Imagery 瓦片
 
+补充说明：天地图 WMTS 属于第三方跨域瓦片服务，在某些网络环境、代理或 VPN 下可能因为缺少 `Access-Control-Allow-Origin` 响应头而被浏览器拦截。
+
 如果后续增加非 Web Mercator 的瓦片源，不应直接接入当前 MapLibre 底图路径，需要先单独确认兼容性。
 
 ## OpenLayers 投影说明
