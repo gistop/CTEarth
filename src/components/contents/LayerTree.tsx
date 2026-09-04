@@ -6,7 +6,6 @@ import {
   Image,
   Layers,
   Map as MapIcon,
-  MapPlus,
   PenTool,
   Plus,
   RotateCcw,
@@ -22,8 +21,12 @@ import { useAttributeTable } from '../attributes/AttributeTableContext';
 import { AddDataSplitButton } from './AddDataSplitButton';
 import { InlineRenameLabel } from './InlineRenameLabel';
 import { MapGroupEditPanel } from './MapGroupEditPanel';
+import { MapGroupSplitButton } from './MapGroupSplitButton';
 import { MapGroupSection, type MapGroup, type MapGroupLayerItem, type MapGroupLayerItemId } from './MapGroupSection';
 import { SaveAsSplitButton } from './SaveAsSplitButton';
+import { useMapCommands } from '../map/MapCommandContext';
+import { useMapBasemapSelection } from '../map/MapBasemapSelectionContext';
+import { defaultBasemapId, getBasemapLabel, type BasemapId } from '../map/basemapOptions';
 import {
   deleteMapGroupDraft,
   readMapGroupDraft,
@@ -51,7 +54,7 @@ import {
 type LayerGeometryKind = 'point' | 'line' | 'polygon' | 'mixed' | 'empty';
 
 type LayerListItem =
-  | { id: 'basemap'; kind: 'basemap'; label: string; checked: boolean }
+  | { id: string; kind: 'basemap'; label: string; checked: boolean; basemapId: BasemapId }
   | { id: `uploaded:${string}`; kind: 'uploaded'; layer: UploadedLayer; label: string; checked: boolean; geometryKind: LayerGeometryKind }
   | { id: `raster:${string}`; kind: 'raster'; raster: RasterOverlay; label: string; checked: boolean }
   | { id: 'vectorOverlay'; kind: 'vectorOverlay'; label: string; checked: boolean; geometryKind: LayerGeometryKind };
@@ -80,7 +83,12 @@ type EditTarget =
   | { kind: 'layer'; groupId: string; layerInstanceKey: string; itemId: string; layerKind: Exclude<LayerListItem['kind'], 'basemap'> };
 
 const defaultMapGroupId = 'map-1';
-const defaultMapGroups: MapGroup[] = [{ id: defaultMapGroupId, name: '地图', layerItems: [createMapGroupLayerItem('basemap')] }];
+const defaultMapGroups: MapGroup[] = [{
+  id: defaultMapGroupId,
+  name: '地图',
+  displayVisible: true,
+  layerItems: [createMapGroupLayerItem('basemap', defaultBasemapId)],
+}];
 
 export function LayerTree() {
   const [draggingItem, setDraggingItem] = useState<LayerDragState | null>(null);
@@ -126,6 +134,8 @@ export function LayerTree() {
     zoomToLayer,
     zoomToRaster,
   } = useGis();
+  const { mapCommandState, setBasemap } = useMapCommands();
+  const { registerBasemapChangeHandler } = useMapBasemapSelection();
   const { openAttributeTable } = useAttributeTable();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -161,7 +171,15 @@ export function LayerTree() {
       const orderedRows: MapGroupLayerRow[] = [];
 
       for (const groupItem of group.layerItems) {
-        const item = itemById.get(groupItem.layerId);
+        const item = groupItem.layerId === 'basemap'
+          ? {
+            id: `${group.id}:${groupItem.instanceId}`,
+            kind: 'basemap' as const,
+            label: `底图 · ${getBasemapLabel(groupItem.basemapId ?? defaultBasemapId)}`,
+            checked: groupItem.visible,
+            basemapId: groupItem.basemapId ?? defaultBasemapId,
+          }
+          : itemById.get(groupItem.layerId);
 
         if (!item) {
           continue;
@@ -218,6 +236,55 @@ export function LayerTree() {
   }, [currentMapGroupId, layerItemIds, mapGroupDraftLoaded, workspaceDraftLoaded]);
 
   useEffect(() => {
+    return registerBasemapChangeHandler((basemapId) => {
+      const targetBasemapItem = getTargetBasemapItem(mapGroups, currentMapGroupId, selectedItemId);
+
+      if (!targetBasemapItem) {
+        setBasemap(basemapId);
+        return;
+      }
+
+      setBasemap(basemapId);
+      setMapGroups((current) => current.map((group) => (
+        group.id === targetBasemapItem.groupId
+          ? {
+            ...group,
+            layerItems: group.layerItems.map((item) => (
+              item.instanceId === targetBasemapItem.instanceId
+                ? { ...item, basemapId }
+                : item
+            )),
+          }
+          : group
+      )));
+      setSelectedItemId(targetBasemapItem.selectionId);
+    });
+  }, [currentMapGroupId, mapGroups, registerBasemapChangeHandler, selectedItemId, setBasemap]);
+
+  useEffect(() => {
+    if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
+      return;
+    }
+
+    const activeBasemapItem = getActiveBasemapItem(mapGroups);
+
+    if (!activeBasemapItem) {
+      if (layerVisibility.basemap) {
+        setLayerVisibility('basemap', false);
+      }
+      return;
+    }
+
+    if (!layerVisibility.basemap) {
+      setLayerVisibility('basemap', true);
+    }
+
+    if (activeBasemapItem.basemapId !== mapCommandState.basemap) {
+      setBasemap(activeBasemapItem.basemapId);
+    }
+  }, [layerVisibility.basemap, mapCommandState.basemap, mapGroupDraftLoaded, mapGroups, setBasemap, setLayerVisibility, workspaceDraftLoaded]);
+
+  useEffect(() => {
     if (!workspaceDraftLoaded) {
       return undefined;
     }
@@ -231,7 +298,9 @@ export function LayerTree() {
         }
 
         if (draft) {
-          const nextMapGroups = draft.mapGroups.length > 0 ? draft.mapGroups as MapGroup[] : defaultMapGroups;
+          const nextMapGroups = draft.mapGroups.length > 0
+            ? normalizeMapGroups(draft.mapGroups as MapGroup[])
+            : defaultMapGroups;
           const nextGroupIds = new Set(nextMapGroups.map((group) => group.id));
 
           setMapGroups(nextMapGroups);
@@ -264,8 +333,8 @@ export function LayerTree() {
       return;
     }
 
+    const shouldShowBasemap = Boolean(getActiveBasemapItem(mapGroups));
     const visibleLayerIds = getVisibleMapGroupLayerIds(mapGroups);
-    const shouldShowBasemap = visibleLayerIds.has('basemap');
     const shouldShowVectorOverlay = Boolean(vectorOverlay) && visibleLayerIds.has('vectorOverlay');
 
     if (layerVisibility.basemap !== shouldShowBasemap) {
@@ -441,7 +510,6 @@ export function LayerTree() {
       return;
     }
 
-    handleCurrentMapGroupChange(group.id);
     setExpandedEditTarget({ kind: 'group', groupId: group.id });
     setEditValue(group.name);
   };
@@ -451,8 +519,6 @@ export function LayerTree() {
       closeEditPanel();
       return;
     }
-
-    handleCurrentMapGroupChange(groupId);
 
     if (item.kind === 'uploaded') {
       setSelectedItemId(item.id);
@@ -494,16 +560,29 @@ export function LayerTree() {
     }
 
     const id = createMapGroupId();
-    const nextGroup: MapGroup = { id, name, layerItems: [createMapGroupLayerItem('basemap')] };
+    const nextGroup: MapGroup = {
+      id,
+      name,
+      displayVisible: true,
+      layerItems: [createMapGroupLayerItem('basemap', mapCommandState.basemap)],
+    };
 
     setMapGroups((current) => [...current, nextGroup]);
-    setCurrentMapGroupId(id);
     setSelectedItemId(null);
     closeEditPanel();
   };
 
-  const handleCurrentMapGroupChange = (groupId: string) => {
+  const handleAddBasemapToCurrentMapGroup = () => {
+    setMapGroups((current) => addBasemapLayerItemToCurrentGroup(current, currentMapGroupId, mapCommandState.basemap));
+    closeEditPanel();
+  };
+
+  const handleSetCurrentMapGroup = (groupId: string) => {
     if (!mapGroups.some((group) => group.id === groupId)) {
+      return;
+    }
+
+    if (groupId === currentMapGroupId) {
       return;
     }
 
@@ -528,7 +607,7 @@ export function LayerTree() {
   };
 
   const handleLayerItemVisibilityChange = (groupId: string, groupItem: MapGroupLayerItem, visible: boolean) => {
-    setMapGroupLayerItemVisibility(groupId, groupItem.instanceId, visible);
+    setMapGroupLayerItemVisibility(groupId, groupItem, visible);
   };
 
   const handleMapGroupVisibilityChange = (groupId: string, visible: boolean) => {
@@ -539,14 +618,30 @@ export function LayerTree() {
     )));
   };
 
-  const setMapGroupLayerItemVisibility = (groupId: string, instanceId: string, visible: boolean) => {
+  const handleMapGroupDisplayVisibilityChange = (groupId: string, visible: boolean) => {
+    setMapGroups((current) => current.map((group) => (
+      group.id === groupId
+        ? { ...group, displayVisible: visible }
+        : group
+    )));
+  };
+
+  const setMapGroupLayerItemVisibility = (groupId: string, groupItem: MapGroupLayerItem, visible: boolean) => {
     setMapGroups((current) => current.map((group) => (
       group.id === groupId
         ? {
           ...group,
-          layerItems: group.layerItems.map((item) => (
-            item.instanceId === instanceId ? { ...item, visible } : item
-          )),
+          layerItems: group.layerItems.map((item) => {
+            if (item.instanceId === groupItem.instanceId) {
+              return { ...item, visible };
+            }
+
+            if (visible && groupItem.layerId === 'basemap' && item.layerId === 'basemap') {
+              return { ...item, visible: false };
+            }
+
+            return item;
+          }),
         }
         : group
     )));
@@ -586,7 +681,6 @@ export function LayerTree() {
 
   const moveLayerItemBetweenGroups = (dragged: LayerDragState, target: LayerDropTarget) => {
     setMapGroups((current) => moveLayerItemInMapGroups(current, dragged, target));
-    setCurrentMapGroupId(target.groupId);
     setSelectedItemId(dragged.layerId);
     closeEditPanel();
   };
@@ -670,14 +764,10 @@ export function LayerTree() {
           }}
         />
         <AddDataSplitButton />
-        <button
-          type="button"
-          title="新建地图"
-          aria-label="新建地图"
-          onClick={handleCreateMapGroup}
-        >
-          <MapPlus size={18} />
-        </button>
+        <MapGroupSplitButton
+          onCreateMapGroup={handleCreateMapGroup}
+          onAddBasemapToCurrentMapGroup={handleAddBasemapToCurrentMapGroup}
+        />
         <button
           type="button"
           title="删除选中图层"
@@ -715,6 +805,7 @@ export function LayerTree() {
             isDropTarget={isSameDropTarget(dropTarget, { groupId: group.id, index: null })}
             isCurrent={group.id === currentMapGroupId}
             isEditOpen={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id}
+            onDisplayVisibilityChange={(visible) => handleMapGroupDisplayVisibilityChange(group.id, visible)}
             nameNode={
               <InlineRenameLabel
                 value={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id ? editValue : group.name}
@@ -727,7 +818,6 @@ export function LayerTree() {
               />
             }
             someVisible={someVisible}
-            onActivate={() => handleCurrentMapGroupChange(group.id)}
             onDragEnter={() => {
               if (draggingItem) {
                 setDropTarget({ groupId: group.id, index: null });
@@ -735,14 +825,19 @@ export function LayerTree() {
             }}
             onEdit={() => openGroupEdit(group)}
             onDrop={() => handleDrop({ groupId: group.id, index: null })}
+            onSetCurrent={() => handleSetCurrentMapGroup(group.id)}
             onToggleExpanded={() => handleToggleMapGroupExpanded(group.id)}
             onVisibilityChange={(visible) => handleMapGroupVisibilityChange(group.id, visible)}
           >
             {rows.map(({ groupItem, item }, itemIndex) => {
               const layerInstanceKey = `${group.id}:${groupItem.instanceId}`;
+              const selectedRowId = item.kind === 'basemap' ? layerInstanceKey : item.id;
               const isEditOpen = expandedEditTarget?.kind === 'layer' && expandedEditTarget.layerInstanceKey === layerInstanceKey;
               const isDragging = isSameLayerDragState(draggingItem, { groupId: group.id, index: itemIndex });
               const isDropTarget = isSameDropTarget(dropTarget, { groupId: group.id, index: itemIndex });
+              const layerLabel = item.kind === 'basemap'
+                ? `底图 · ${getBasemapLabel(item.basemapId)}`
+                : item.label;
 
               return (
             <div className="layer-item-block" key={layerInstanceKey}>
@@ -755,9 +850,9 @@ export function LayerTree() {
                 })}
                 checked={item.checked}
                 dragState={isDragging ? 'dragging' : isDropTarget ? 'target' : undefined}
-                isSelected={selectedItemId === item.id}
+                isSelected={selectedItemId === selectedRowId}
                 isEditOpen={isEditOpen}
-                label={item.label}
+                label={layerLabel}
                 nameNode={item.kind !== 'basemap' && isEditOpen ? (
                   <InlineRenameLabel
                     value={editValue}
@@ -771,7 +866,7 @@ export function LayerTree() {
                 ) : (
                   <span className="tree-row-label">{item.label}</span>
                 )}
-                orderId={item.id}
+                orderId={item.kind === 'basemap' ? 'basemap' : item.id}
                 onChange={(checked) => handleLayerItemVisibilityChange(group.id, groupItem, checked)}
                 onDragEnd={() => {
                   setDraggingItem(null);
@@ -786,14 +881,12 @@ export function LayerTree() {
                 onDrop={() => handleDrop({ groupId: group.id, index: itemIndex })}
                 onDoubleClick={item.kind === 'uploaded'
                   ? () => {
-                    handleCurrentMapGroupChange(group.id);
                     setSelectedItemId(item.id);
                     setActiveLayer(item.layer.id);
                     zoomToLayer(item.layer.id);
                   }
                   : item.kind === 'raster'
                     ? () => {
-                      handleCurrentMapGroupChange(group.id);
                       setSelectedItemId(item.id);
                       setActiveRaster(item.raster.id);
                       zoomToRaster(item.raster.id);
@@ -801,22 +894,21 @@ export function LayerTree() {
                     : undefined}
                 onSelect={item.kind === 'uploaded'
                   ? () => {
-                    handleCurrentMapGroupChange(group.id);
                     setSelectedItemId(item.id);
                     setActiveLayer(item.layer.id);
                   }
                   : item.kind === 'raster'
                     ? () => {
-                      handleCurrentMapGroupChange(group.id);
                       setSelectedItemId(item.id);
                       setActiveRaster(item.raster.id);
                     }
                     : item.kind === 'vectorOverlay'
                       ? () => {
-                        handleCurrentMapGroupChange(group.id);
                         setSelectedItemId(item.id);
                       }
-                      : undefined}
+                : item.kind === 'basemap'
+                        ? () => setSelectedItemId(selectedRowId)
+                        : undefined}
                 onEdit={() => openLayerEdit(group.id, layerInstanceKey, item)}
               />
               {isEditOpen ? (
@@ -947,19 +1039,22 @@ function LayerRow({
       />
       {badge}
       {nameNode}
-      <button
-        className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
-        type="button"
-        title="编辑"
-        aria-label={`编辑 ${label}`}
-        aria-expanded={isEditOpen}
-        onClick={(event) => {
-          event.stopPropagation();
-          onEdit();
-        }}
-      >
-        <Settings size={15} strokeWidth={1.8} />
-      </button>
+      <div className="tree-row-actions">
+        <div className="tree-row-action-spacer" aria-hidden="true" />
+        <button
+          className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
+          type="button"
+          title="编辑"
+          aria-label={`编辑 ${label}`}
+          aria-expanded={isEditOpen}
+          onClick={(event) => {
+            event.stopPropagation();
+            onEdit();
+          }}
+        >
+          <Settings size={15} strokeWidth={1.8} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -1386,12 +1481,100 @@ function createMapGroupId() {
   return `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function createMapGroupLayerItem(layerId: MapGroupLayerItemId): MapGroupLayerItem {
+function createMapGroupLayerItem(layerId: MapGroupLayerItemId, basemapId = defaultBasemapId): MapGroupLayerItem {
   return {
     instanceId: `map-layer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     layerId,
     visible: true,
+    basemapId: layerId === 'basemap' ? basemapId : undefined,
   };
+}
+
+function addBasemapLayerItemToCurrentGroup(groups: MapGroup[], currentGroupId: string, basemapId: BasemapId) {
+  const nextBasemapItem = createMapGroupLayerItem('basemap', basemapId);
+
+  return groups.map((group) => {
+    if (group.id !== currentGroupId) {
+      return group;
+    }
+
+    const firstBasemapIndex = group.layerItems.findIndex((item) => item.layerId === 'basemap');
+
+    if (firstBasemapIndex < 0) {
+      return { ...group, layerItems: [...group.layerItems, nextBasemapItem] };
+    }
+
+    const nextLayerItems = [...group.layerItems];
+    nextLayerItems.splice(firstBasemapIndex, 0, nextBasemapItem);
+
+    return { ...group, layerItems: nextLayerItems };
+  });
+}
+
+function findSelectedBasemapItem(groups: MapGroup[], selectedItemId: string) {
+  for (const group of groups) {
+    for (const item of group.layerItems) {
+      if (`${group.id}:${item.instanceId}` === selectedItemId && item.layerId === 'basemap') {
+        return {
+          groupId: group.id,
+          instanceId: item.instanceId,
+          basemapId: item.basemapId ?? defaultBasemapId,
+          selectionId: `${group.id}:${item.instanceId}`,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function getTargetBasemapItem(groups: MapGroup[], currentMapGroupId: string, selectedItemId: string | null) {
+  if (selectedItemId) {
+    const selectedBasemapItem = findSelectedBasemapItem(groups, selectedItemId);
+
+    if (selectedBasemapItem) {
+      return selectedBasemapItem;
+    }
+  }
+
+  const currentGroup = groups.find((group) => group.id === currentMapGroupId);
+  const currentBasemapItem = currentGroup?.layerItems.find((item) => item.layerId === 'basemap');
+
+  if (!currentGroup || !currentBasemapItem) {
+    return null;
+  }
+
+  return {
+    groupId: currentGroup.id,
+    instanceId: currentBasemapItem.instanceId,
+    basemapId: currentBasemapItem.basemapId ?? defaultBasemapId,
+    selectionId: `${currentGroup.id}:${currentBasemapItem.instanceId}`,
+  };
+}
+
+function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId: string; basemapId: BasemapId; selectionId: string } | null {
+  let activeBasemapItem: { groupId: string; instanceId: string; basemapId: BasemapId; selectionId: string } | null = null;
+
+  groups.forEach((group) => {
+    if (group.displayVisible === false) {
+      return;
+    }
+
+    group.layerItems.forEach((item) => {
+      if (item.layerId !== 'basemap' || !item.visible) {
+        return;
+      }
+
+      activeBasemapItem = {
+        groupId: group.id,
+        instanceId: item.instanceId,
+        basemapId: item.basemapId ?? defaultBasemapId,
+        selectionId: `${group.id}:${item.instanceId}`,
+      };
+    });
+  });
+
+  return activeBasemapItem;
 }
 
 function isSameLayerDragState(left: LayerDragState | null, right: { groupId: string; index: number }) {
@@ -1478,6 +1661,10 @@ function getVisibleMapGroupLayerIds(groups: MapGroup[]) {
   const visibleIds = new Set<MapGroupLayerItemId>();
 
   groups.forEach((group) => {
+    if (group.displayVisible === false) {
+      return;
+    }
+
     group.layerItems.forEach((item) => {
       if (item.visible) {
         visibleIds.add(item.layerId);
@@ -1486,6 +1673,13 @@ function getVisibleMapGroupLayerIds(groups: MapGroup[]) {
   });
 
   return visibleIds;
+}
+
+function normalizeMapGroups(groups: MapGroup[]) {
+  return groups.map((group) => ({
+    ...group,
+    displayVisible: group.displayVisible ?? true,
+  }));
 }
 
 function getMapGroupLayerDrawOrder(groups: MapGroup[]): LayerOrderId[] {
@@ -1532,7 +1726,7 @@ function assignUnclaimedLayerItemsToCurrentGroup(groups: MapGroup[], currentGrou
 
   return normalizedGroups.map((group) => (
     group.id === currentGroupId
-      ? { ...group, layerItems: [...unclaimedIds.map(createMapGroupLayerItem), ...group.layerItems] }
+      ? { ...group, layerItems: [...unclaimedIds.map((layerId) => createMapGroupLayerItem(layerId)), ...group.layerItems] }
       : group
   ));
 }
@@ -1578,7 +1772,7 @@ function buildLayerItems({
     seen.add(id);
 
     if (id === 'basemap') {
-      items.push({ id, kind: 'basemap', label: '底图', checked: layerVisibility.basemap });
+      items.push({ id, kind: 'basemap', label: '底图', checked: layerVisibility.basemap, basemapId: defaultBasemapId });
       continue;
     }
 

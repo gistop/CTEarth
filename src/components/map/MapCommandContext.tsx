@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { type CesiumImageryId, type CesiumTerrainId, defaultCesiumImageryId, defaultCesiumTerrainId } from './cesiumLayerOptions';
-
-export type BasemapId = 'osm' | 'tianditu' | 'esri';
+import { defaultBasemapId } from './basemapOptions';
+import type { BasemapId } from './basemapOptions';
+export type { BasemapId } from './basemapOptions';
 export type DisplayCrsId = 'webMercator' | 'wgs84' | 'epsg32651';
 export type MapViewMode = 'planar' | 'terrain' | 'globe';
 
@@ -42,7 +43,7 @@ type MapCommandContextValue = {
 
 const MapCommandContext = createContext<MapCommandContextValue | null>(null);
 const defaultMapCommandState: MapCommandState = {
-  basemap: 'osm',
+  basemap: defaultBasemapId,
   cesiumImagery: defaultCesiumImageryId,
   cesiumTerrain: defaultCesiumTerrainId,
   displayCrs: 'webMercator',

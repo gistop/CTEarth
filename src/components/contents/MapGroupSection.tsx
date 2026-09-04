@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Settings, Square, SquareCheckBig } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eye, EyeOff, Settings, Square, SquareCheckBig } from 'lucide-react';
 import type { LayerOrderId } from '../../gisStore';
+import type { BasemapId } from '../map/basemapOptions';
 
 export type MapGroupLayerItemId = Exclude<LayerOrderId, 'raster'>;
 
@@ -8,11 +9,13 @@ export type MapGroupLayerItem = {
   instanceId: string;
   layerId: MapGroupLayerItemId;
   visible: boolean;
+  basemapId?: BasemapId;
 };
 
 export type MapGroup = {
   id: string;
   name: string;
+  displayVisible?: boolean;
   layerItems: MapGroupLayerItem[];
 };
 
@@ -27,10 +30,11 @@ type MapGroupSectionProps = {
   isEditOpen?: boolean;
   nameNode: ReactNode;
   someVisible: boolean;
-  onActivate: () => void;
   onDragEnter?: () => void;
   onDrop?: () => void;
   onEdit?: () => void;
+  onDisplayVisibilityChange: (visible: boolean) => void;
+  onSetCurrent: () => void;
   onToggleExpanded: () => void;
   onVisibilityChange: (visible: boolean) => void;
 };
@@ -46,10 +50,11 @@ export function MapGroupSection({
   isEditOpen,
   nameNode,
   someVisible,
-  onActivate,
   onDragEnter,
   onDrop,
   onEdit,
+  onDisplayVisibilityChange,
+  onSetCurrent,
   onToggleExpanded,
   onVisibilityChange,
 }: MapGroupSectionProps) {
@@ -65,10 +70,6 @@ export function MapGroupSection({
     <section className={isCurrent ? 'map-group-section is-current' : 'map-group-section'}>
       <div
         className={isDropTarget ? 'tree-row root map-group-row is-drop-target' : 'tree-row root map-group-row'}
-        role="button"
-        tabIndex={0}
-        aria-expanded={isExpanded}
-        onClick={onActivate}
         onDragEnter={(event) => {
           event.preventDefault();
           onDragEnter?.();
@@ -77,12 +78,6 @@ export function MapGroupSection({
         onDrop={(event) => {
           event.preventDefault();
           onDrop?.();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            onActivate();
-          }
         }}
       >
         <button
@@ -114,25 +109,40 @@ export function MapGroupSection({
           aria-pressed={isCurrent}
           onClick={(event) => {
             event.stopPropagation();
-            onActivate();
+            onSetCurrent();
           }}
         >
           {isCurrent ? <SquareCheckBig size={15} strokeWidth={2.4} /> : <Square size={15} strokeWidth={2} />}
         </button>
         {nameNode}
-        <button
-          className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
-          type="button"
-          title="编辑"
-          aria-label={`编辑 ${group.name}`}
-          aria-expanded={isEditOpen}
-          onClick={(event) => {
-            event.stopPropagation();
-            onEdit?.();
-          }}
-        >
-          <Settings size={15} strokeWidth={1.8} />
-        </button>
+        <div className="tree-row-actions map-group-actions">
+          <button
+            className={(group.displayVisible ?? true) ? 'map-group-visibility-button is-visible' : 'map-group-visibility-button'}
+            type="button"
+            title={(group.displayVisible ?? true) ? `隐藏 ${group.name}` : `显示 ${group.name}`}
+            aria-label={(group.displayVisible ?? true) ? `隐藏 ${group.name}` : `显示 ${group.name}`}
+            aria-pressed={group.displayVisible ?? true}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDisplayVisibilityChange(!(group.displayVisible ?? true));
+            }}
+          >
+            {(group.displayVisible ?? true) ? <Eye size={15} strokeWidth={1.9} /> : <EyeOff size={15} strokeWidth={1.9} />}
+          </button>
+          <button
+            className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
+            type="button"
+            title="编辑"
+            aria-label={`编辑 ${group.name}`}
+            aria-expanded={isEditOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit?.();
+            }}
+          >
+            <Settings size={15} strokeWidth={1.8} />
+          </button>
+        </div>
       </div>
       {panel}
       {isExpanded ? <div className="map-group-layers">{children}</div> : null}

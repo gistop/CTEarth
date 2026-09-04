@@ -458,6 +458,7 @@ export function MapPanel() {
   const cesiumSyncGenerationRef = useRef(0);
   const mapModeRef = useRef<MapViewMode>('planar');
   const digitizeMapVisibleRef = useRef(false);
+  const lastAutoFitRasterIdRef = useRef<string | null>(null);
   const { editingActive, status: digitizeStatus } = useDigitize();
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
   const { identifyActive } = useMapIdentify();
@@ -536,9 +537,9 @@ export function MapPanel() {
         maxZoom: 18,
         maxPitch: 85,
         attributionControl: false,
-        style: createOnlineMapStyle(DEFAULT_BASEMAP),
+        style: createOnlineMapStyle(mapCommandState.basemap),
       });
-      updateMapCommandState({ basemap: DEFAULT_BASEMAP, dragRotateEnabled: map.dragRotate.isEnabled() });
+      updateMapCommandState({ basemap: mapCommandState.basemap, dragRotateEnabled: map.dragRotate.isEnabled() });
 
       map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
       map.on('moveend', () => {
@@ -833,6 +834,7 @@ export function MapPanel() {
     }
 
     if (!raster) {
+      lastAutoFitRasterIdRef.current = null;
       return;
     }
 
@@ -854,7 +856,10 @@ export function MapPanel() {
     );
     setLayersVisibility(map, rasterLayerIds, rasterLayerVisibility[raster.id] ?? layerVisibility.raster);
     applyLayerOrder(map, layerOrder, layers, raster.id, Boolean(vectorOverlay));
-    fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
+    if (lastAutoFitRasterIdRef.current !== raster.id) {
+      fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
+      lastAutoFitRasterIdRef.current = raster.id;
+    }
   }, [layerOrder, layerVisibility.raster, layers, mapReady, raster, rasterLayerVisibility, vectorOverlay]);
 
   useEffect(() => {

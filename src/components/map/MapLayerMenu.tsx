@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Layers } from 'lucide-react';
-import { type BasemapId, useMapCommands } from './MapCommandContext';
+import { useMapCommands } from './MapCommandContext';
+import { useMapBasemapSelection } from './MapBasemapSelectionContext';
+import { basemapOptions } from './basemapOptions';
 import { cesiumImageryGroups, cesiumTerrainOptions } from './cesiumLayerOptions';
 
-const basemapOptions: { id: BasemapId; label: string }[] = [
-  { id: 'osm', label: 'OpenStreetMap' },
-  { id: 'tianditu', label: '天地图 WMTS' },
-  { id: 'esri', label: 'Esri World Imagery' },
-];
-
 export function MapLayerMenu() {
-  const { mapCommandState, setBasemap, setCesiumImagery, setCesiumTerrain } = useMapCommands();
+  const { mapCommandState, setCesiumImagery, setCesiumTerrain } = useMapCommands();
+  const { requestBasemapChange } = useMapBasemapSelection();
   const [isOpen, setIsOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -85,7 +82,7 @@ export function MapLayerMenu() {
                 title={option.label}
                 onClick={(event) => {
                   event.stopPropagation();
-                  setBasemap(option.id);
+                  requestBasemapChange(option.id);
                   setIsOpen(false);
                 }}
               >

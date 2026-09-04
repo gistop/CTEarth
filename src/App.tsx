@@ -57,6 +57,7 @@ import { MapPanel } from './components/MapPanel';
 import { CoordinateSystemControls as MapCoordinateSystemControls } from './components/map/CoordinateSystemControls';
 import { GlobeLocateSearchButton } from './components/map/GlobeLocateSearchButton';
 import { MapLayerMenu } from './components/map/MapLayerMenu';
+import { MapBasemapSelectionProvider } from './components/map/MapBasemapSelectionContext';
 import type { OpenLayersProjectionMapHandle } from './components/map/OpenLayersProjectionMap';
 import {
   AttributeTableProvider,
@@ -2856,13 +2857,14 @@ export default function App() {
     <GisProvider>
       <MapViewportProvider>
         <MapCommandProvider>
-          <MapSelectionProvider>
-          <MapIdentifyProvider>
-          <DigitizeProvider>
-            <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
-              <LayoutProvider>
-              <DockPanelActionsContext.Provider value={dockPanelActions}>
-                <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
+          <MapBasemapSelectionProvider>
+            <MapSelectionProvider>
+            <MapIdentifyProvider>
+            <DigitizeProvider>
+              <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
+                <LayoutProvider>
+                <DockPanelActionsContext.Provider value={dockPanelActions}>
+                  <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
                 <QuickAccessBar
                   isAiAssistantPanelVisible={isAiAssistantPanelVisible}
                   isRibbonCollapsed={isRibbonCollapsed}
@@ -2886,13 +2888,14 @@ export default function App() {
                   />
                 </main>
                 <StatusFooter />
-                </div>
-              </DockPanelActionsContext.Provider>
-              </LayoutProvider>
-            </AttributeTableProvider>
-          </DigitizeProvider>
-          </MapIdentifyProvider>
-          </MapSelectionProvider>
+                  </div>
+                </DockPanelActionsContext.Provider>
+                </LayoutProvider>
+              </AttributeTableProvider>
+            </DigitizeProvider>
+            </MapIdentifyProvider>
+            </MapSelectionProvider>
+          </MapBasemapSelectionProvider>
         </MapCommandProvider>
       </MapViewportProvider>
     </GisProvider>

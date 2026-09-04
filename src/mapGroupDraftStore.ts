@@ -9,6 +9,7 @@ export type WorkspaceMapGroupLayerItem = {
 export type WorkspaceMapGroup = {
   id: string;
   name: string;
+  displayVisible?: boolean;
   layerItems: WorkspaceMapGroupLayerItem[];
 };
 
