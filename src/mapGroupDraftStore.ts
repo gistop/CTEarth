@@ -4,6 +4,7 @@ export type WorkspaceMapGroupLayerItem = {
   instanceId: string;
   layerId: LayerOrderId;
   visible: boolean;
+  opacity?: number;
 };
 
 export type WorkspaceMapGroup = {

@@ -20,9 +20,10 @@ import type { BasemapId, DisplayCrsId } from './MapCommandContext';
 import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, useGis } from '../../gisStore';
 import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
 import { useMapViewport } from './MapViewportContext';
+import { useMapGroupRenderState } from '../../mapGroupRenderState';
 
-const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
-const CHINA_ZOOM = 3.6;
+const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
+const CHINA_ZOOM = 5.3;
 const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 
 type OpenLayersProjectionMapProps = {
@@ -48,11 +49,13 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   const uploadedSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const vectorOverlaySourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
-  const baseLayersRef = useRef<Record<BasemapId, TileLayer<OSM | XYZ>> | null>(null);
+  const vectorOverlayLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
+  const uploadedLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
+  const basemapLayersRef = useRef(new globalThis.Map<string, TileLayer<OSM | XYZ>>());
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
   const initialViewportBoundsRef = useRef(viewportBounds4326);
+  const mapGroupRenderState = useMapGroupRenderState();
   const {
-    basemapStyle,
     layerZoomRequest,
     layerVisibility,
     layers,
@@ -98,7 +101,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       return;
     }
 
-    const baseLayers = createBaseLayers(basemap);
     const rasterLayer = new ImageLayer<ImageStatic>({
       opacity: rasterStyle.opacity,
       visible: false,
@@ -115,9 +117,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       target: container,
       controls: defaultControls({ zoom: false }),
       layers: [
-        baseLayers.osm,
-        baseLayers.tianditu,
-        baseLayers.esri,
         rasterLayer,
         vectorOverlayLayer,
         uploadedLayer,
@@ -157,8 +156,9 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       });
     }
 
-    baseLayersRef.current = baseLayers;
     rasterLayerRef.current = rasterLayer;
+    vectorOverlayLayerRef.current = vectorOverlayLayer;
+    uploadedLayerRef.current = uploadedLayer;
     mapRef.current = map;
     setMapInstance(map);
 
@@ -172,8 +172,13 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       map.setTarget(undefined);
       mapRef.current = null;
       setMapInstance(null);
-      baseLayersRef.current = null;
+      basemapLayersRef.current.forEach((layer) => {
+        map.removeLayer(layer);
+      });
+      basemapLayersRef.current.clear();
       rasterLayerRef.current = null;
+      vectorOverlayLayerRef.current = null;
+      uploadedLayerRef.current = null;
     };
   }, [displayCrs, initialCenter, onCoordinateChange, projectionCode, setViewportBounds4326]);
 
@@ -192,17 +197,49 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   }, [visible]);
 
   useEffect(() => {
-    const baseLayers = baseLayersRef.current;
+    const map = mapRef.current;
 
-    if (!baseLayers) {
+    if (!map) {
       return;
     }
 
-    Object.entries(baseLayers).forEach(([id, layer]) => {
-      layer.setVisible(id === basemap && layerVisibility.basemap);
-      layer.setOpacity(basemapStyle.opacity);
+    const expectedIds = new Set<string>();
+
+    mapGroupRenderState.entries.forEach((entry) => {
+      const basemapId = entry.basemapId;
+
+      if (!basemapId) {
+        return;
+      }
+
+      openLayersBasemapLayerDefinitions[basemapId].forEach((definition) => {
+        const layerId = getOpenLayersBasemapLayerId(entry.id, definition.suffix);
+        expectedIds.add(layerId);
+
+        let layer = basemapLayersRef.current.get(layerId);
+
+        if (!layer) {
+          layer = createOpenLayersBasemapLayer(basemapId, definition.suffix);
+          map.addLayer(layer);
+          basemapLayersRef.current.set(layerId, layer);
+        } else {
+          layer.setSource(createOpenLayersBasemapSource(basemapId, definition.suffix));
+        }
+
+        layer.setVisible(entry.visible);
+        layer.setOpacity(entry.opacity ?? 1);
+      });
     });
-  }, [basemap, basemapStyle.opacity, layerVisibility.basemap]);
+
+    basemapLayersRef.current.forEach((layer, layerId) => {
+      if (expectedIds.has(layerId)) {
+        return;
+      }
+
+      map.removeLayer(layer);
+      basemapLayersRef.current.delete(layerId);
+    });
+  }, [mapGroupRenderState.entries]);
 
   useEffect(() => {
     const layer = rasterLayerRef.current;
@@ -325,6 +362,48 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     source.addFeatures(features);
   }, [layerVisibility.vectorOverlay, projectionCode, vectorOverlay, vectorOverlayStyle]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!map) {
+      return;
+    }
+
+    const zIndexByEntryId = new globalThis.Map<string, number>();
+    const topZIndex = mapGroupRenderState.entries.length;
+    let uploadedZIndex = 0;
+    let basemapZIndex = 0;
+
+    mapGroupRenderState.entries.forEach((entry, index) => {
+      zIndexByEntryId.set(entry.id, topZIndex - index);
+    });
+
+    mapGroupRenderState.entries.forEach((entry) => {
+      const basemapId = entry.basemapId;
+      const entryZIndex = zIndexByEntryId.get(entry.id) ?? 0;
+
+      if (!basemapId) {
+        if (entry.layerId.startsWith('uploaded:')) {
+          uploadedZIndex = Math.max(uploadedZIndex, entryZIndex);
+        }
+
+        return;
+      }
+
+      basemapZIndex = Math.max(basemapZIndex, entryZIndex);
+
+      openLayersBasemapLayerDefinitions[basemapId].forEach((definition) => {
+        basemapLayersRef.current.get(getOpenLayersBasemapLayerId(entry.id, definition.suffix))?.setZIndex(entryZIndex);
+      });
+    });
+
+    uploadedLayerRef.current?.setZIndex(uploadedZIndex || topZIndex + 1);
+    rasterLayerRef.current?.setZIndex(zIndexByEntryId.get(raster ? `raster:${raster.id}` : '') ?? 0);
+    vectorOverlayLayerRef.current?.setZIndex(zIndexByEntryId.get('vectorOverlay') ?? 0);
+
+    void basemapZIndex;
+  }, [mapGroupRenderState.entries, raster, vectorOverlay]);
+
   return (
     <>
       <div
@@ -337,30 +416,54 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   );
 });
 
-function createBaseLayers(activeBasemap: BasemapId): Record<BasemapId, TileLayer<OSM | XYZ>> {
-  return {
-    osm: new TileLayer({
-      source: new OSM({ attributions: 'OpenStreetMap contributors' }),
-      visible: activeBasemap === 'osm',
-    }),
-    tianditu: new TileLayer({
-      source: new XYZ({
+const openLayersBasemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource: () => OSM | XYZ }[]> = {
+  osm: [{
+    suffix: 'osm',
+    createSource: () => new OSM({ attributions: 'OpenStreetMap contributors' }),
+  }],
+  tianditu: [
+    {
+      suffix: 'tianditu-vec',
+      createSource: () => new XYZ({
         urls: createTiandituTiles('vec'),
         attributions: 'Tianditu',
       }),
-      visible: activeBasemap === 'tianditu',
-    }),
-    esri: new TileLayer({
-      source: new XYZ({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attributions: 'Tiles Esri',
+    },
+    {
+      suffix: 'tianditu-cva',
+      createSource: () => new XYZ({
+        urls: createTiandituTiles('cva'),
+        attributions: 'Tianditu',
       }),
-      visible: activeBasemap === 'esri',
+    },
+  ],
+  esri: [{
+    suffix: 'esri',
+    createSource: () => new XYZ({
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      attributions: 'Tiles Esri',
     }),
-  };
+  }],
+};
+
+function createOpenLayersBasemapLayer(basemapId: BasemapId, suffix: string) {
+  return new TileLayer({
+    source: createOpenLayersBasemapSource(basemapId, suffix),
+    visible: false,
+  });
 }
 
-function createTiandituTiles(layer: 'vec') {
+function createOpenLayersBasemapSource(basemapId: BasemapId, suffix: string) {
+  const definition = openLayersBasemapLayerDefinitions[basemapId].find((item) => item.suffix === suffix);
+
+  return definition?.createSource() ?? new OSM({ attributions: 'OpenStreetMap contributors' });
+}
+
+function getOpenLayersBasemapLayerId(renderId: string, suffix: string) {
+  return `projection-basemap-${sanitizeOpenLayersLayerId(renderId)}-${suffix}`;
+}
+
+function createTiandituTiles(layer: 'vec' | 'cva') {
   return Array.from(
     { length: 8 },
     (_, index) => (
@@ -370,6 +473,10 @@ function createTiandituTiles(layer: 'vec') {
       `&tk=${TIANDITU_TOKEN}`
     ),
   );
+}
+
+function sanitizeOpenLayersLayerId(id: string) {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 function zoomOpenLayersByDelta(map: Map | null, delta: number) {

@@ -25,14 +25,14 @@ import MultiPolygon from 'ol/geom/MultiPolygon.js';
 import Polygon from 'ol/geom/Polygon.js';
 import type { BasemapId } from '../map/MapCommandContext';
 import { displayLayerName, defaultUploadedLayerStyle, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
+import { useMapGroupRenderState } from '../../mapGroupRenderState';
 import { useDigitize } from './DigitizeContext';
 
-const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
-const CHINA_ZOOM = 3.6;
+const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
+const CHINA_ZOOM = 5.3;
 const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 
 type OpenLayersDigitizeMapProps = {
-  basemap: BasemapId;
   mapLibreMap: maplibregl.Map | null;
   visible: boolean;
 };
@@ -46,7 +46,7 @@ export type OpenLayersDigitizeMapHandle = {
 };
 
 export const OpenLayersDigitizeMap = forwardRef<OpenLayersDigitizeMapHandle, OpenLayersDigitizeMapProps>(
-function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
+function OpenLayersDigitizeMap({ mapLibreMap, visible }, ref) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const drawRef = useRef<Draw | null>(null);
@@ -64,10 +64,10 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
   const referenceSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const boundaryCacheRef = useRef<BoundaryCache | null>(null);
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
-  const baseLayersRef = useRef<Record<BasemapId, TileLayer<OSM | XYZ>> | null>(null);
+  const basemapLayersRef = useRef(new globalThis.Map<string, TileLayer<OSM | XYZ>>());
+  const mapGroupRenderState = useMapGroupRenderState();
   const {
     activeLayerId,
-    basemapStyle,
     layerVisibility,
     layers,
     raster,
@@ -138,7 +138,6 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
       minZoom: 2,
       maxZoom: 18,
     });
-    const baseLayers = createBaseLayers(basemap);
     const referenceLayer = new VectorLayer({
       source: referenceSourceRef.current,
       style: createReferenceStyle,
@@ -159,9 +158,6 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
       target: container,
       controls: defaultControls({ zoom: false }),
       layers: [
-        baseLayers.osm,
-        baseLayers.tianditu,
-        baseLayers.esri,
         rasterLayer,
         rasterAoiLayer,
         referenceLayer,
@@ -189,9 +185,8 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
       }
 
       syncToMapLibreFromOpenLayers(map, mapLibreMapRef.current, isSyncingToMapLibreRef);
-    });
+      });
 
-    baseLayersRef.current = baseLayers;
     rasterLayerRef.current = rasterLayer;
     mapRef.current = map;
     selectRef.current = select;
@@ -210,7 +205,7 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
       selectRef.current = null;
       editableSnapRef.current = null;
       referenceSnapRef.current = null;
-      baseLayersRef.current = null;
+      basemapLayersRef.current.clear();
       rasterLayerRef.current = null;
     };
   }, []);
@@ -296,17 +291,53 @@ function OpenLayersDigitizeMap({ basemap, mapLibreMap, visible }, ref) {
   }, [mapLibreMap, visible]);
 
   useEffect(() => {
-    const baseLayers = baseLayersRef.current;
+    const map = mapRef.current;
 
-    if (!baseLayers) {
+    if (!map) {
       return;
     }
 
-    Object.entries(baseLayers).forEach(([id, layer]) => {
-      layer.setVisible(id === basemap && layerVisibility.basemap);
-      layer.setOpacity(basemapStyle.opacity);
+    const expectedIds = new Set<string>();
+    const topZIndex = mapGroupRenderState.entries.length;
+
+    mapGroupRenderState.entries.forEach((entry, index) => {
+      const basemapId = entry.basemapId;
+
+      if (!basemapId) {
+        return;
+      }
+
+      const entryZIndex = index - topZIndex - 1;
+
+      basemapLayerDefinitions[basemapId].forEach((definition) => {
+        const layerId = getBasemapLayerId(entry.id, definition.suffix);
+        expectedIds.add(layerId);
+
+        let layer = basemapLayersRef.current.get(layerId);
+
+        if (!layer) {
+          layer = createBasemapLayer(basemapId, definition.suffix);
+          map.addLayer(layer);
+          basemapLayersRef.current.set(layerId, layer);
+        } else {
+          layer.setSource(createBasemapSource(basemapId, definition.suffix));
+        }
+
+        layer.setVisible(entry.visible && layerVisibility.basemap);
+        layer.setOpacity(entry.opacity ?? 1);
+        layer.setZIndex(entryZIndex);
+      });
     });
-  }, [basemap, basemapStyle.opacity, layerVisibility.basemap]);
+
+    basemapLayersRef.current.forEach((layer, layerId) => {
+      if (expectedIds.has(layerId)) {
+        return;
+      }
+
+      map.removeLayer(layer);
+      basemapLayersRef.current.delete(layerId);
+    });
+  }, [layerVisibility.basemap, mapGroupRenderState.entries]);
 
   useEffect(() => {
     const layer = rasterLayerRef.current;
@@ -524,7 +555,7 @@ function createBaseLayers(activeBasemap: BasemapId): Record<BasemapId, TileLayer
   };
 }
 
-function createTiandituTiles(layer: 'vec') {
+function createTiandituTiles(layer: 'vec' | 'cva') {
   return Array.from(
     { length: 8 },
     (_, index) => (
@@ -534,6 +565,57 @@ function createTiandituTiles(layer: 'vec') {
       `&tk=${TIANDITU_TOKEN}`
     ),
   );
+}
+
+const basemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource: () => OSM | XYZ }[]> = {
+  osm: [{
+    suffix: 'osm',
+    createSource: () => new OSM({ attributions: 'OpenStreetMap contributors' }),
+  }],
+  tianditu: [
+    {
+      suffix: 'tianditu-vec',
+      createSource: () => new XYZ({
+        urls: createTiandituTiles('vec'),
+        attributions: '天地图',
+      }),
+    },
+    {
+      suffix: 'tianditu-cva',
+      createSource: () => new XYZ({
+        urls: createTiandituTiles('cva'),
+        attributions: '天地图',
+      }),
+    },
+  ],
+  esri: [{
+    suffix: 'esri',
+    createSource: () => new XYZ({
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      attributions: 'Tiles Esri',
+    }),
+  }],
+};
+
+function createBasemapLayer(basemapId: BasemapId, suffix: string) {
+  return new TileLayer({
+    source: createBasemapSource(basemapId, suffix),
+    visible: false,
+  });
+}
+
+function createBasemapSource(basemapId: BasemapId, suffix: string) {
+  const definition = basemapLayerDefinitions[basemapId].find((item) => item.suffix === suffix);
+
+  return definition?.createSource() ?? new OSM({ attributions: 'OpenStreetMap contributors' });
+}
+
+function getBasemapLayerId(renderId: string, suffix: string) {
+  return `digitize-basemap-${sanitizeLayerId(renderId)}-${suffix}`;
+}
+
+function sanitizeLayerId(id: string) {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 function zoomOpenLayersByDelta(

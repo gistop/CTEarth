@@ -1814,6 +1814,11 @@ button {
   box-shadow: inset 0 2px 0 #1677b8;
 }
 
+.tree-row.is-drop-target-after {
+  border-bottom-color: #1677b8;
+  box-shadow: inset 0 -2px 0 #1677b8;
+}
+
 .tree-row.selected {
   border-color: #6ea8cf;
   background: #cfe7f7;

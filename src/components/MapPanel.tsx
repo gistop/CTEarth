@@ -10,21 +10,62 @@ import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumIm
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
+import { useMapGroupRenderState } from '../mapGroupRenderState';
+import type { UploadedLayer } from '../gisStore';
 
-const CHINA_CENTER: [number, number] = [104.1954, 35.8617];
-const CHINA_ZOOM = 3.6;
-const DEFAULT_BASEMAP: BasemapId = 'osm';
+const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
+const CHINA_ZOOM = 5.3;
 const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 const CESIUM_BASE_URL = '/cesium/';
 const TERRAIN_DEM_SOURCE_ID = 'terrain-dem';
 const TERRAIN_HILLSHADE_SOURCE_ID = 'terrain-hillshade-dem';
 const TERRAIN_HILLSHADE_LAYER_ID = 'terrain-hillshade';
 const TERRAIN_DEM_TILEJSON_URL = 'https://tiles.mapterhorn.com/tilejson.json';
+type MapLibreSourceSpecification = Parameters<maplibregl.Map['addSource']>[1];
 
-const basemapLayers: Record<BasemapId, string[]> = {
-  osm: ['basemap-osm'],
-  tianditu: ['basemap-tianditu-vec', 'basemap-tianditu-cva'],
-  esri: ['basemap-esri'],
+const basemapLayerDefinitions: Record<BasemapId, { suffix: string; sourceId: string; createSource: () => MapLibreSourceSpecification }[]> = {
+  osm: [{
+    suffix: 'osm',
+    sourceId: 'osm',
+    createSource: () => ({
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      attribution: 'OpenStreetMap contributors',
+    }),
+  }],
+  tianditu: [
+    {
+      suffix: 'tianditu-vec',
+      sourceId: 'tiandituVec',
+      createSource: () => ({
+        type: 'raster',
+        tiles: createTiandituTiles('vec'),
+        tileSize: 256,
+        attribution: 'Tianditu',
+      }),
+    },
+    {
+      suffix: 'tianditu-cva',
+      sourceId: 'tiandituCva',
+      createSource: () => ({
+        type: 'raster',
+        tiles: createTiandituTiles('cva'),
+        tileSize: 256,
+        attribution: 'Tianditu',
+      }),
+    },
+  ],
+  esri: [{
+    suffix: 'esri',
+    sourceId: 'esriImagery',
+    createSource: () => ({
+      type: 'raster',
+      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+      tileSize: 256,
+      attribution: 'Tiles Esri',
+    }),
+  }],
 };
 const rasterLayerIds = ['idw-interpolation'];
 const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
@@ -309,34 +350,10 @@ function getNominatimPoint(result: NominatimSearchResult) {
   return { lon, lat };
 }
 
-function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): maplibregl.StyleSpecification {
+function createOnlineMapStyle(): maplibregl.StyleSpecification {
   return {
     version: 8,
     sources: {
-      osm: {
-        type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-        tileSize: 256,
-        attribution: 'OpenStreetMap contributors',
-      },
-      tiandituVec: {
-        type: 'raster',
-        tiles: createTiandituTiles('vec'),
-        tileSize: 256,
-        attribution: 'Tianditu',
-      },
-      tiandituCva: {
-        type: 'raster',
-        tiles: createTiandituTiles('cva'),
-        tileSize: 256,
-        attribution: 'Tianditu',
-      },
-      esriImagery: {
-        type: 'raster',
-        tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-        tileSize: 256,
-        attribution: 'Tiles Esri',
-      },
       [TERRAIN_DEM_SOURCE_ID]: {
         type: 'raster-dem',
         url: TERRAIN_DEM_TILEJSON_URL,
@@ -349,38 +366,6 @@ function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): mapli
       },
     },
     layers: [
-      {
-        id: 'basemap-osm',
-        type: 'raster',
-        source: 'osm',
-        layout: {
-          visibility: activeBasemap === 'osm' ? 'visible' : 'none',
-        },
-      },
-      {
-        id: 'basemap-tianditu-vec',
-        type: 'raster',
-        source: 'tiandituVec',
-        layout: {
-          visibility: activeBasemap === 'tianditu' ? 'visible' : 'none',
-        },
-      },
-      {
-        id: 'basemap-tianditu-cva',
-        type: 'raster',
-        source: 'tiandituCva',
-        layout: {
-          visibility: activeBasemap === 'tianditu' ? 'visible' : 'none',
-        },
-      },
-      {
-        id: 'basemap-esri',
-        type: 'raster',
-        source: 'esriImagery',
-        layout: {
-          visibility: activeBasemap === 'esri' ? 'visible' : 'none',
-        },
-      },
       {
         id: TERRAIN_HILLSHADE_LAYER_ID,
         type: 'hillshade',
@@ -401,32 +386,180 @@ function createOnlineMapStyle(activeBasemap: BasemapId = DEFAULT_BASEMAP): mapli
   };
 }
 
-function setBasemapVisibility(map: maplibregl.Map, basemap: BasemapId, visible = true) {
-  Object.entries(basemapLayers).forEach(([id, layerIds]) => {
-    const isVisible = visible && id === basemap;
+function syncBasemapLayers(
+  map: maplibregl.Map,
+  entries: { id: string; basemapId?: BasemapId; visible: boolean; opacity?: number }[],
+  basemapVisible: boolean,
+) {
+  if (!map.isStyleLoaded()) {
+    logMapLibreLayerState(map, 'basemap sync skipped: style not loaded', entries, basemapVisible);
+    return;
+  }
 
-    layerIds.forEach((layerId) => {
+  const basemapEntries = entries.filter((entry) => entry.basemapId);
+  const expectedLayerIds = new Set<string>();
+  const expectedSourceIds = new Set<string>();
+
+  basemapEntries.forEach((entry) => {
+    basemapLayerDefinitions[entry.basemapId as BasemapId].forEach((definition) => {
+      const opacity = entry.opacity ?? 1;
+      const visible = entry.visible && basemapVisible;
+      const layerId = getBasemapRenderLayerId(entry.id, definition.suffix);
+      const sourceId = getBasemapRenderSourceId(entry.id, definition.suffix);
+      expectedLayerIds.add(layerId);
+      expectedSourceIds.add(sourceId);
+
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, definition.createSource());
+      }
+
+      const existingLayer = map.getLayer(layerId) as { source?: string } | undefined;
+
+      if (!existingLayer) {
+        map.addLayer({
+          id: layerId,
+          type: 'raster',
+          source: sourceId,
+          layout: {
+            visibility: visible ? 'visible' : 'none',
+          },
+        });
+      } else if (existingLayer.source !== sourceId) {
+        map.removeLayer(layerId);
+        map.addLayer({
+          id: layerId,
+          type: 'raster',
+          source: sourceId,
+          layout: {
+            visibility: visible ? 'visible' : 'none',
+          },
+        });
+      }
+
       if (map.getLayer(layerId)) {
-        map.setLayoutProperty(layerId, 'visibility', isVisible ? 'visible' : 'none');
+        map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+        map.setPaintProperty(layerId, 'raster-opacity', opacity);
       }
     });
   });
+
+  map.getStyle().layers
+    ?.map((layer) => layer.id)
+    .filter((layerId) => layerId.startsWith('map-group-basemap-'))
+    .filter((layerId) => !expectedLayerIds.has(layerId))
+    .forEach((layerId) => {
+      const existingLayer = map.getLayer(layerId) as { source?: string } | undefined;
+
+      if (map.getLayer(layerId)) {
+        map.removeLayer(layerId);
+      }
+
+      if (existingLayer?.source && !isSourceUsedByAnyLayer(map, existingLayer.source)) {
+        map.removeSource(existingLayer.source);
+      }
+    });
+
+  Object.keys(map.getStyle().sources)
+    .filter((sourceId) => sourceId.startsWith('map-group-basemap-source-'))
+    .filter((sourceId) => !expectedSourceIds.has(sourceId))
+    .forEach((sourceId) => {
+      if (!isSourceUsedByAnyLayer(map, sourceId)) {
+        map.removeSource(sourceId);
+      }
+    });
+
+  logMapLibreLayerState(map, 'basemap sync complete', entries, basemapVisible);
 }
 
-function setLayersVisibility(map: maplibregl.Map, layerIds: string[], visible: boolean) {
-  layerIds.forEach((layerId) => {
-    if (map.getLayer(layerId)) {
-      map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
-    }
+function logMapLibreLayerState(
+  map: maplibregl.Map,
+  reason: string,
+  entries: { id: string; basemapId?: BasemapId; visible: boolean; opacity?: number }[],
+  basemapVisible: boolean,
+) {
+  if (!shouldLogMapLibreLayers()) {
+    return;
+  }
+
+  const style = map.getStyle();
+  const layers = (style.layers ?? []).map((layer) => {
+    const layerWithSource = layer as {
+      id: string;
+      type?: string;
+      source?: string;
+      layout?: { visibility?: string };
+    };
+    const layerExists = Boolean(map.getLayer(layer.id));
+
+    return {
+      id: layer.id,
+      type: layer.type,
+      source: layerWithSource.source ?? '',
+      visibility: layerExists
+        ? map.getLayoutProperty(layer.id, 'visibility') ?? 'visible'
+        : layerWithSource.layout?.visibility ?? 'visible',
+      rasterOpacity: layerExists && layer.type === 'raster'
+        ? map.getPaintProperty(layer.id, 'raster-opacity')
+        : '',
+    };
   });
+  const sources = Object.entries(style.sources).map(([id, source]) => {
+    const sourceSpec = source as { type?: string; tiles?: string[]; url?: string };
+
+    return {
+      id,
+      type: sourceSpec.type ?? '',
+      url: sourceSpec.url ?? '',
+      tiles: sourceSpec.tiles?.join(', ') ?? '',
+    };
+  });
+  const basemapEntries = entries.map((entry) => ({
+    id: entry.id,
+    basemapId: entry.basemapId ?? '',
+    entryVisible: entry.visible,
+    globalBasemapVisible: basemapVisible,
+    renderedVisible: Boolean(entry.basemapId && entry.visible && basemapVisible),
+    opacity: entry.opacity ?? 1,
+  }));
+
+  console.groupCollapsed(`[CTEarth MapLibre] ${reason}`);
+  console.info('isStyleLoaded:', map.isStyleLoaded());
+  console.info('zoom:', map.getZoom(), 'center:', map.getCenter().toArray());
+  console.table(basemapEntries);
+  console.table(layers);
+  console.table(sources);
+  console.groupEnd();
 }
 
-function setBasemapOpacity(map: maplibregl.Map, opacity: number) {
-  Object.values(basemapLayers).flat().forEach((layerId) => {
-    if (map.getLayer(layerId)) {
-      map.setPaintProperty(layerId, 'raster-opacity', opacity);
-    }
-  });
+function shouldLogMapLibreLayers() {
+  if (import.meta.env.DEV) {
+    return true;
+  }
+
+  try {
+    return window.localStorage.getItem('ctearth.debugMapLibre') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function getBasemapRenderLayerId(renderId: string, suffix: string) {
+  return `map-group-basemap-${sanitizeLayerId(renderId)}-${suffix}`;
+}
+
+function getBasemapRenderSourceId(renderId: string, suffix: string) {
+  return `map-group-basemap-source-${sanitizeLayerId(renderId)}-${suffix}`;
+}
+
+function isSourceUsedByAnyLayer(map: maplibregl.Map, sourceId: string) {
+  return Boolean(map.getStyle().layers?.some((layer) => {
+    const candidate = layer as { source?: string };
+    return candidate.source === sourceId;
+  }));
+}
+
+function sanitizeLayerId(id: string) {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 function setTerrainMode(map: maplibregl.Map, enabled: boolean) {
@@ -464,22 +597,28 @@ export function MapPanel() {
   const { identifyActive } = useMapIdentify();
   const { selectionActive } = useMapSelection();
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
+  const mapGroupRenderState = useMapGroupRenderState();
   const {
     layer,
     layers,
     layerZoomRequest,
     rasterZoomRequest,
-    layerOrder,
     layerVisibility,
     uploadedLayerVisibility,
-    basemapStyle,
     raster,
     rasterLayerVisibility,
     rasterStyle,
     vectorOverlay,
     vectorOverlayStyle,
     uploadedLayerStyles,
+    workspaceDraftLoaded,
   } = useGis();
+  const layersRef = useRef(layers);
+  const rasterRef = useRef(raster);
+  const vectorOverlayRef = useRef(vectorOverlay);
+  const mapGroupEntriesRef = useRef(mapGroupRenderState.entries);
+  const basemapVisibleRef = useRef(layerVisibility.basemap);
+  const hasAppliedStartupViewportRef = useRef(false);
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('\u6b63\u5728\u521d\u59cb\u5316\u5728\u7ebf\u5730\u56fe');
   const [hasLoadedDigitizeMap, setHasLoadedDigitizeMap] = useState(false);
@@ -504,10 +643,50 @@ export function MapPanel() {
   }, [editingActive, mapCommandState.mapMode]);
 
   useEffect(() => {
+    mapGroupEntriesRef.current = mapGroupRenderState.entries;
+  }, [mapGroupRenderState.entries]);
+
+  useEffect(() => {
+    layersRef.current = layers;
+  }, [layers]);
+
+  useEffect(() => {
+    rasterRef.current = raster;
+  }, [raster]);
+
+  useEffect(() => {
+    vectorOverlayRef.current = vectorOverlay;
+  }, [vectorOverlay]);
+
+  useEffect(() => {
+    basemapVisibleRef.current = layerVisibility.basemap;
+  }, [layerVisibility.basemap]);
+
+  useEffect(() => {
     if (editingActive) {
       setHasLoadedDigitizeMap(true);
     }
   }, [editingActive]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+
+    if (!mapReady || !workspaceDraftLoaded || hasAppliedStartupViewportRef.current || !map) {
+      return;
+    }
+
+    hasAppliedStartupViewportRef.current = true;
+
+    const bounds = getStartupDataBounds(layers, raster, vectorOverlay);
+
+    if (!bounds) {
+      return;
+    }
+
+    if (!fitValidBounds(map, bounds, 0.14, 80, 700)) {
+      setStatus('结果图层坐标超出经纬度范围，已跳过自动定位');
+    }
+  }, [layers, mapReady, raster, vectorOverlay, workspaceDraftLoaded]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -515,6 +694,8 @@ export function MapPanel() {
     if (!container) {
       return;
     }
+
+    let syncBasemapFromState: (() => void) | null = null;
 
     const createMap = () => {
       if (mapRef.current) {
@@ -537,11 +718,28 @@ export function MapPanel() {
         maxZoom: 18,
         maxPitch: 85,
         attributionControl: false,
-        style: createOnlineMapStyle(mapCommandState.basemap),
+        style: createOnlineMapStyle(),
       });
       updateMapCommandState({ basemap: mapCommandState.basemap, dragRotateEnabled: map.dragRotate.isEnabled() });
 
       map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+      syncBasemapFromState = () => {
+        if (mapRef.current !== map) {
+          return;
+        }
+
+        syncMapGroupLayerOrder(
+          map,
+          mapGroupEntriesRef.current,
+          layersRef.current,
+          rasterRef.current?.id ?? null,
+          Boolean(vectorOverlayRef.current),
+          basemapVisibleRef.current,
+        );
+      };
+
+      map.on('styledata', syncBasemapFromState);
+      map.on('idle', syncBasemapFromState);
       map.on('moveend', () => {
         setViewportBounds4326(mapBoundsToLonLatExtent(map));
       });
@@ -556,6 +754,7 @@ export function MapPanel() {
           map.jumpTo({ center: CHINA_CENTER, zoom: CHINA_ZOOM, pitch: 0, bearing: 0 });
           setViewportBounds4326(mapBoundsToLonLatExtent(map));
         }
+        syncBasemapFromState?.();
         setMapReady(true);
         setStatus('');
       });
@@ -578,7 +777,9 @@ export function MapPanel() {
     return () => {
       const map = mapRef.current;
 
-      if (map) {
+      if (map && syncBasemapFromState) {
+        map.off('styledata', syncBasemapFromState);
+        map.off('idle', syncBasemapFromState);
         setViewportBounds4326(mapBoundsToLonLatExtent(map));
       }
 
@@ -789,19 +990,6 @@ export function MapPanel() {
       return;
     }
 
-    setBasemapVisibility(map, mapCommandState.basemap, layerVisibility.basemap);
-    setBasemapOpacity(map, basemapStyle.opacity);
-    setLayersVisibility(map, rasterLayerIds, Boolean(raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster)));
-    setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
-  }, [basemapStyle, layerVisibility, mapCommandState.basemap, mapReady, raster, rasterLayerVisibility]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!mapReady || !map) {
-      return;
-    }
-
     const expectedLayerIds = new Set(layers.map((item) => item.id));
     removeStaleUploadedLayers(map, expectedLayerIds);
 
@@ -814,9 +1002,24 @@ export function MapPanel() {
       setLayersVisibility(map, uploadedLayerIds(item.id), uploadedLayerVisibility[item.id] ?? true);
     });
 
-    applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, Boolean(vectorOverlay));
-
-  }, [layerOrder, layers, mapReady, raster, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay]);
+    syncMapGroupLayerOrder(
+      map,
+      mapGroupRenderState.entries,
+      layers,
+      raster?.id ?? null,
+      Boolean(vectorOverlay),
+      layerVisibility.basemap,
+    );
+  }, [
+    layers,
+    mapGroupRenderState.entries,
+    mapReady,
+    layerVisibility.basemap,
+    raster,
+    uploadedLayerStyles,
+    uploadedLayerVisibility,
+    vectorOverlay,
+  ]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -855,12 +1058,19 @@ export function MapPanel() {
       },
     );
     setLayersVisibility(map, rasterLayerIds, rasterLayerVisibility[raster.id] ?? layerVisibility.raster);
-    applyLayerOrder(map, layerOrder, layers, raster.id, Boolean(vectorOverlay));
+    syncMapGroupLayerOrder(
+      map,
+      mapGroupRenderState.entries,
+      layers,
+      raster?.id ?? null,
+      Boolean(vectorOverlay),
+      layerVisibility.basemap,
+    );
     if (lastAutoFitRasterIdRef.current !== raster.id) {
       fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
       lastAutoFitRasterIdRef.current = raster.id;
     }
-  }, [layerOrder, layerVisibility.raster, layers, mapReady, raster, rasterLayerVisibility, vectorOverlay]);
+  }, [layerVisibility.basemap, layerVisibility.raster, layers, mapGroupRenderState.entries, mapReady, raster, rasterLayerVisibility, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -922,14 +1132,21 @@ export function MapPanel() {
       },
     );
     setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
-    applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, true);
+    syncMapGroupLayerOrder(
+      map,
+      mapGroupRenderState.entries,
+      layers,
+      raster?.id ?? null,
+      Boolean(vectorOverlay),
+      layerVisibility.basemap,
+    );
 
     const bounds = getGeoJsonBounds(vectorOverlay.geojson);
 
     if (bounds && !fitValidBounds(map, bounds, 0.12, 80, 700)) {
       setStatus('结果图层坐标超出经纬度范围，已跳过自动定位');
     }
-  }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
+  }, [layerVisibility.basemap, layerVisibility.vectorOverlay, layers, mapGroupRenderState.entries, mapReady, raster, vectorOverlay, vectorOverlayStyle]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -940,16 +1157,6 @@ export function MapPanel() {
 
     setVectorOverlayPaint(map, vectorOverlayStyle);
   }, [mapReady, vectorOverlayStyle]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!mapReady || !map) {
-      return;
-    }
-
-    applyLayerOrder(map, layerOrder, layers, raster?.id ?? null, Boolean(vectorOverlay));
-  }, [layerOrder, layers, mapReady, raster, vectorOverlay]);
 
   const zoomIn = useCallback(() => {
     if (mapModeRef.current === 'globe') {
@@ -1027,9 +1234,8 @@ export function MapPanel() {
       return;
     }
 
-    setBasemapVisibility(map, basemap, layerVisibility.basemap);
     updateMapCommandState({ basemap });
-  }, [layerVisibility.basemap, updateMapCommandState]);
+  }, [updateMapCommandState]);
 
   const setCesiumImagery = useCallback((imagery: CesiumImageryId) => {
     updateMapCommandState({ cesiumImagery: imagery });
@@ -1198,7 +1404,6 @@ export function MapPanel() {
         <Suspense fallback={<div className="openlayers-digitize-map is-visible" />}>
           <OpenLayersDigitizeMap
             ref={digitizeMapRef}
-            basemap={mapCommandState.basemap}
             mapLibreMap={mapRef.current}
             visible={editingActive && mapCommandState.mapMode !== 'globe'}
           />
@@ -1399,34 +1604,19 @@ function uploadedIdFromLayerId(layerId: string) {
   return match?.[1] ?? null;
 }
 
-function applyLayerOrder(
+function syncMapGroupLayerOrder(
   map: maplibregl.Map,
-  layerOrder: string[],
+  entries: { id: string; layerId: string; basemapId?: BasemapId; visible: boolean; opacity?: number }[],
   uploadedLayers: { id: string }[],
   rasterId: string | null,
   hasVectorOverlay: boolean,
+  basemapVisible: boolean,
 ) {
-  const uploadedIds = new Set(uploadedLayers.map((item) => item.id));
-  const rasterOrderId = rasterId ? `raster:${rasterId}` : null;
-  const normalizedOrder = [
-    ...layerOrder,
-    ...uploadedLayers.map((item) => `uploaded:${item.id}`),
-    ...(hasVectorOverlay ? ['vectorOverlay'] : []),
-    ...(rasterOrderId ? [rasterOrderId] : []),
-    TERRAIN_HILLSHADE_LAYER_ID,
-    'basemap',
-  ];
-  const seen = new Set<string>();
-  const layerGroups = normalizedOrder
-    .filter((id) => {
-      if (seen.has(id)) {
-        return false;
-      }
+  syncBasemapLayers(map, entries, basemapVisible);
 
-      seen.add(id);
-      return true;
-    })
-    .map((id) => layerGroupIds(id, uploadedIds, rasterId, hasVectorOverlay))
+  const uploadedIds = new Set(uploadedLayers.map((item) => item.id));
+  const layerGroups = entries
+    .map((entry) => layerGroupIdsForEntry(entry, uploadedIds, rasterId, hasVectorOverlay))
     .filter((ids) => ids.length > 0);
 
   [...layerGroups].reverse().forEach((groupIds) => {
@@ -1438,29 +1628,94 @@ function applyLayerOrder(
   });
 }
 
-function layerGroupIds(id: string, uploadedIds: Set<string>, rasterId: string | null, hasVectorOverlay: boolean) {
-  if (id === 'basemap') {
-    return Object.values(basemapLayers).flat();
+function layerGroupIdsForEntry(
+  entry: { id: string; layerId: string; basemapId?: BasemapId },
+  uploadedIds: Set<string>,
+  rasterId: string | null,
+  hasVectorOverlay: boolean,
+) {
+  if (entry.layerId === 'basemap' && entry.basemapId) {
+    return getBasemapRenderLayerIds(entry.id, entry.basemapId);
   }
 
-  if (id === 'raster' || id === `raster:${rasterId}`) {
-    return rasterId ? rasterLayerIds : [];
-  }
-
-  if (id === 'vectorOverlay') {
+  if (entry.layerId === 'vectorOverlay') {
     return hasVectorOverlay ? vectorOverlayLayerIds : [];
   }
 
-  if (id === TERRAIN_HILLSHADE_LAYER_ID) {
-    return [TERRAIN_HILLSHADE_LAYER_ID];
-  }
-
-  if (id.startsWith('uploaded:')) {
-    const layerId = id.slice('uploaded:'.length);
+  if (entry.layerId.startsWith('uploaded:')) {
+    const layerId = entry.layerId.slice('uploaded:'.length);
     return uploadedIds.has(layerId) ? uploadedLayerIds(layerId) : [];
   }
 
+  if (entry.layerId.startsWith('raster:')) {
+    return rasterId && entry.layerId === `raster:${rasterId}` ? rasterLayerIds : [];
+  }
+
   return [];
+}
+
+function getBasemapRenderLayerIds(renderId: string, basemapId: BasemapId) {
+  return basemapLayerDefinitions[basemapId].map((definition) => getBasemapRenderLayerId(renderId, definition.suffix));
+}
+
+function setLayersVisibility(map: maplibregl.Map, layerIds: string[], visible: boolean) {
+  layerIds.forEach((layerId) => {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+    }
+  });
+}
+
+function getStartupDataBounds(
+  layers: UploadedLayer[],
+  raster: { coordinates: [[number, number], [number, number], [number, number], [number, number]] } | null,
+  vectorOverlay: { geojson: { features: unknown[] } } | null,
+) {
+  let bounds: [number, number, number, number] | null = null;
+
+  layers.forEach((layer) => {
+    bounds = combineBounds(bounds, getUploadedLayerBounds(layer));
+  });
+
+  if (raster) {
+    bounds = combineBounds(bounds, flattenBounds(boundsFromCoordinates(raster.coordinates)));
+  }
+
+  if (vectorOverlay) {
+    bounds = combineBounds(bounds, getGeoJsonBounds(vectorOverlay.geojson));
+  }
+
+  return bounds;
+}
+
+function getUploadedLayerBounds(layer: UploadedLayer) {
+  return layer.points.features.length > 0
+    ? getPointBounds(layer.points.features)
+    : getGeoJsonBounds(layer.geojson);
+}
+
+function combineBounds(
+  current: [number, number, number, number] | null,
+  next: [number, number, number, number] | null,
+) {
+  if (!current) {
+    return next;
+  }
+
+  if (!next) {
+    return current;
+  }
+
+  return [
+    Math.min(current[0], next[0]),
+    Math.min(current[1], next[1]),
+    Math.max(current[2], next[2]),
+    Math.max(current[3], next[3]),
+  ] as [number, number, number, number];
+}
+
+function flattenBounds(bounds: [[number, number], [number, number]]) {
+  return [bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1]] as [number, number, number, number];
 }
 
 function fitValidBounds(

@@ -121,8 +121,8 @@ const layoutExportFormats: {
   { id: 'pdf', label: 'PDF', renderIcon: () => <FileText size={18} strokeWidth={1.8} /> },
   { id: 'png', label: 'PNG', renderIcon: () => <FileImage size={18} strokeWidth={1.8} /> },
 ];
-const layoutPreviewCenter: [number, number] = [104.1954, 35.8617];
-const layoutPreviewZoom = 3.6;
+const layoutPreviewCenter: [number, number] = [10.4515, 51.1657];
+const layoutPreviewZoom = 5.3;
 const paperPresets: Record<PaperPresetId, { label: string; widthMm: number; heightMm: number }> = {
   'a4-landscape': { label: 'A4 横向', widthMm: 297, heightMm: 210 },
   'a4-portrait': { label: 'A4 纵向', widthMm: 210, heightMm: 297 },

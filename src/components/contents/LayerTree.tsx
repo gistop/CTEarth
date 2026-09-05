@@ -33,6 +33,10 @@ import {
   writeMapGroupDraft,
 } from '../../mapGroupDraftStore';
 import {
+  createMapGroupRenderState,
+  setMapGroupRenderState,
+} from '../../mapGroupRenderState';
+import {
   defaultBasemapStyle,
   defaultRasterStyle,
   defaultUploadedLayerStyle,
@@ -54,7 +58,7 @@ import {
 type LayerGeometryKind = 'point' | 'line' | 'polygon' | 'mixed' | 'empty';
 
 type LayerListItem =
-  | { id: string; kind: 'basemap'; label: string; checked: boolean; basemapId: BasemapId }
+  | { id: string; kind: 'basemap'; label: string; checked: boolean; basemapId: BasemapId; opacity: number }
   | { id: `uploaded:${string}`; kind: 'uploaded'; layer: UploadedLayer; label: string; checked: boolean; geometryKind: LayerGeometryKind }
   | { id: `raster:${string}`; kind: 'raster'; raster: RasterOverlay; label: string; checked: boolean }
   | { id: 'vectorOverlay'; kind: 'vectorOverlay'; label: string; checked: boolean; geometryKind: LayerGeometryKind };
@@ -78,6 +82,13 @@ type LayerDropTarget = {
   groupId: string;
   index: number | null;
 };
+type MapGroupDragState = {
+  groupId: string;
+};
+type MapGroupDropTarget = {
+  groupId: string;
+  position: 'before' | 'after';
+};
 type EditTarget =
   | { kind: 'group'; groupId: string }
   | { kind: 'layer'; groupId: string; layerInstanceKey: string; itemId: string; layerKind: Exclude<LayerListItem['kind'], 'basemap'> };
@@ -87,12 +98,14 @@ const defaultMapGroups: MapGroup[] = [{
   id: defaultMapGroupId,
   name: '地图',
   displayVisible: true,
-  layerItems: [createMapGroupLayerItem('basemap', defaultBasemapId)],
+  layerItems: [{ ...createMapGroupLayerItem('basemap', defaultBasemapId), visible: false }],
 }];
 
 export function LayerTree() {
   const [draggingItem, setDraggingItem] = useState<LayerDragState | null>(null);
   const [dropTarget, setDropTarget] = useState<LayerDropTarget | null>(null);
+  const [draggingMapGroup, setDraggingMapGroup] = useState<MapGroupDragState | null>(null);
+  const [mapGroupDropTarget, setMapGroupDropTarget] = useState<MapGroupDropTarget | null>(null);
   const [expandedEditTarget, setExpandedEditTarget] = useState<EditTarget | null>(null);
   const [mapGroups, setMapGroups] = useState<MapGroup[]>(defaultMapGroups);
   const [currentMapGroupId, setCurrentMapGroupId] = useState(defaultMapGroupId);
@@ -105,7 +118,6 @@ export function LayerTree() {
     rasters,
     vectorOverlay,
     message,
-    basemapStyle,
     rasterStyle,
     vectorOverlayStyle,
     uploadedLayerStyles,
@@ -121,7 +133,6 @@ export function LayerTree() {
     setLayerDrawOrder,
     setRasterLayerVisibility,
     setUploadedLayerVisibility,
-    setBasemapStyle,
     setRasterStyle,
     setVectorOverlayStyle,
     setUploadedLayerStyle,
@@ -143,6 +154,7 @@ export function LayerTree() {
   const renameValue = editValue;
   const setRenameValue = setEditValue;
   const setRenameTarget = setExpandedEditTarget;
+  const selectedBasemapItem = selectedItemId ? findSelectedBasemapItem(mapGroups, selectedItemId) : null;
 
   const layerItems = useMemo(
     () => buildLayerItems({
@@ -178,6 +190,7 @@ export function LayerTree() {
             label: `底图 · ${getBasemapLabel(groupItem.basemapId ?? defaultBasemapId)}`,
             checked: groupItem.visible,
             basemapId: groupItem.basemapId ?? defaultBasemapId,
+            opacity: groupItem.opacity ?? defaultBasemapStyle.opacity,
           }
           : itemById.get(groupItem.layerId);
 
@@ -376,6 +389,10 @@ export function LayerTree() {
     vectorOverlay,
     workspaceDraftLoaded,
   ]);
+
+  useEffect(() => {
+    setMapGroupRenderState(createMapGroupRenderState(mapGroups));
+  }, [mapGroups]);
 
   useEffect(() => {
     if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
@@ -610,6 +627,10 @@ export function LayerTree() {
     setMapGroupLayerItemVisibility(groupId, groupItem, visible);
   };
 
+  const handleBasemapOpacityChange = (groupId: string, groupItem: MapGroupLayerItem, opacity: number) => {
+    setMapGroupLayerItemOpacity(groupId, groupItem, opacity);
+  };
+
   const handleMapGroupVisibilityChange = (groupId: string, visible: boolean) => {
     setMapGroups((current) => current.map((group) => (
       group.id === groupId
@@ -636,8 +657,21 @@ export function LayerTree() {
               return { ...item, visible };
             }
 
-            if (visible && groupItem.layerId === 'basemap' && item.layerId === 'basemap') {
-              return { ...item, visible: false };
+            return item;
+          }),
+        }
+        : group
+    )));
+  };
+
+  const setMapGroupLayerItemOpacity = (groupId: string, groupItem: MapGroupLayerItem, opacity: number) => {
+    setMapGroups((current) => current.map((group) => (
+      group.id === groupId
+        ? {
+          ...group,
+          layerItems: group.layerItems.map((item) => {
+            if (item.instanceId === groupItem.instanceId) {
+              return { ...item, opacity };
             }
 
             return item;
@@ -648,16 +682,33 @@ export function LayerTree() {
   };
 
   const handleDeleteSelectedLayer = () => {
-    if (!selectedUploadedLayer) {
+    if (selectedUploadedLayer) {
+      if (!window.confirm(`删除图层 ${displayLayerName(selectedUploadedLayer.fileName)}？`)) {
+        return;
+      }
+
+      deleteUploadedLayer(selectedUploadedLayer.id);
+      setSelectedItemId(null);
+      closeEditPanel();
       return;
     }
 
-    if (!window.confirm(`删除图层 ${displayLayerName(selectedUploadedLayer.fileName)}？`)) {
-      return;
-    }
+    if (selectedBasemapItem) {
+      if (!window.confirm(`删除底图 · ${getBasemapLabel(selectedBasemapItem.basemapId)}？`)) {
+        return;
+      }
 
-    deleteUploadedLayer(selectedUploadedLayer.id);
-    closeEditPanel();
+      setMapGroups((current) => current.map((group) => (
+        group.id === selectedBasemapItem.groupId
+          ? {
+            ...group,
+            layerItems: group.layerItems.filter((item) => item.instanceId !== selectedBasemapItem.instanceId),
+          }
+          : group
+      )));
+      setSelectedItemId(null);
+      closeEditPanel();
+    }
   };
 
   const handleZoomToSelectedLayer = () => {
@@ -666,6 +717,10 @@ export function LayerTree() {
     }
 
     zoomToLayer(selectedUploadedLayer.id);
+  };
+
+  const syncMapGroupLayerOrder = (groups: MapGroup[]) => {
+    setLayerDrawOrder(getMapGroupLayerDrawOrder(groups));
   };
 
   const handleDrop = (target: LayerDropTarget) => {
@@ -680,9 +735,54 @@ export function LayerTree() {
   };
 
   const moveLayerItemBetweenGroups = (dragged: LayerDragState, target: LayerDropTarget) => {
-    setMapGroups((current) => moveLayerItemInMapGroups(current, dragged, target));
+    setMapGroups((current) => {
+      const nextGroups = moveLayerItemInMapGroups(current, dragged, target);
+      syncMapGroupLayerOrder(nextGroups);
+      return nextGroups;
+    });
     setSelectedItemId(dragged.layerId);
     closeEditPanel();
+  };
+
+  const handleMapGroupDragStart = (groupId: string) => {
+    setDraggingMapGroup({ groupId });
+    setMapGroupDropTarget(null);
+    setDraggingItem(null);
+    setDropTarget(null);
+    closeEditPanel();
+  };
+
+  const handleMapGroupDragEnd = () => {
+    setDraggingMapGroup(null);
+    setMapGroupDropTarget(null);
+  };
+
+  const handleMapGroupDragOver = (event: { preventDefault: () => void; currentTarget: HTMLDivElement; clientY: number }, groupId: string) => {
+    if (!draggingMapGroup) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+
+    setMapGroupDropTarget({ groupId, position });
+  };
+
+  const handleMapGroupDrop = (target: MapGroupDropTarget) => {
+    if (!draggingMapGroup) {
+      setMapGroupDropTarget(null);
+      return;
+    }
+
+    setMapGroups((current) => {
+      const nextGroups = moveMapGroupsInOrder(current, draggingMapGroup, target);
+      syncMapGroupLayerOrder(nextGroups);
+      return nextGroups;
+    });
+    setDraggingMapGroup(null);
+    setMapGroupDropTarget(null);
   };
 
   return (
@@ -772,7 +872,7 @@ export function LayerTree() {
           type="button"
           title="删除选中图层"
           aria-label="删除选中图层"
-          disabled={!selectedUploadedLayer}
+          disabled={!selectedUploadedLayer && !selectedBasemapItem}
           onClick={handleDeleteSelectedLayer}
         >
           <Trash2 size={18} />
@@ -802,10 +902,15 @@ export function LayerTree() {
             }
             group={group}
             isExpanded={!collapsedMapGroupIds.has(group.id)}
-            isDropTarget={isSameDropTarget(dropTarget, { groupId: group.id, index: null })}
+            isDragging={draggingMapGroup?.groupId === group.id}
+            isDropTarget={draggingItem ? isSameDropTarget(dropTarget, { groupId: group.id, index: null }) : mapGroupDropTarget?.groupId === group.id}
+            dropPosition={mapGroupDropTarget?.groupId === group.id ? mapGroupDropTarget.position : undefined}
             isCurrent={group.id === currentMapGroupId}
             isEditOpen={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id}
             onDisplayVisibilityChange={(visible) => handleMapGroupDisplayVisibilityChange(group.id, visible)}
+            onDragStart={() => handleMapGroupDragStart(group.id)}
+            onDragEnd={handleMapGroupDragEnd}
+            onDragOver={(event) => handleMapGroupDragOver(event, group.id)}
             nameNode={
               <InlineRenameLabel
                 value={expandedEditTarget?.kind === 'group' && expandedEditTarget.groupId === group.id ? editValue : group.name}
@@ -819,12 +924,25 @@ export function LayerTree() {
             }
             someVisible={someVisible}
             onDragEnter={() => {
-              if (draggingItem) {
+              if (draggingItem && !draggingMapGroup) {
                 setDropTarget({ groupId: group.id, index: null });
               }
             }}
             onEdit={() => openGroupEdit(group)}
-            onDrop={() => handleDrop({ groupId: group.id, index: null })}
+            onDrop={() => {
+              if (draggingItem && !draggingMapGroup) {
+                handleDrop({ groupId: group.id, index: null });
+                return;
+              }
+
+              if (draggingMapGroup) {
+                handleMapGroupDrop(
+                  mapGroupDropTarget?.groupId === group.id
+                    ? mapGroupDropTarget
+                    : { groupId: group.id, position: 'before' },
+                );
+              }
+            }}
             onSetCurrent={() => handleSetCurrentMapGroup(group.id)}
             onToggleExpanded={() => handleToggleMapGroupExpanded(group.id)}
             onVisibilityChange={(visible) => handleMapGroupVisibilityChange(group.id, visible)}
@@ -835,6 +953,7 @@ export function LayerTree() {
               const isEditOpen = expandedEditTarget?.kind === 'layer' && expandedEditTarget.layerInstanceKey === layerInstanceKey;
               const isDragging = isSameLayerDragState(draggingItem, { groupId: group.id, index: itemIndex });
               const isDropTarget = isSameDropTarget(dropTarget, { groupId: group.id, index: itemIndex });
+              const isLayerDragActive = Boolean(draggingItem) && !draggingMapGroup;
               const layerLabel = item.kind === 'basemap'
                 ? `底图 · ${getBasemapLabel(item.basemapId)}`
                 : item.label;
@@ -843,7 +962,6 @@ export function LayerTree() {
             <div className="layer-item-block" key={layerInstanceKey}>
               <LayerRow
                 badge={renderLayerBadge(item, {
-                  basemapStyle,
                   rasterStyle,
                   uploadedLayerStyles,
                   vectorOverlayStyle,
@@ -869,16 +987,26 @@ export function LayerTree() {
                 orderId={item.kind === 'basemap' ? 'basemap' : item.id}
                 onChange={(checked) => handleLayerItemVisibilityChange(group.id, groupItem, checked)}
                 onDragEnd={() => {
-                  setDraggingItem(null);
-                  setDropTarget(null);
+                  if (isLayerDragActive) {
+                    setDraggingItem(null);
+                    setDropTarget(null);
+                  }
                 }}
                 onDragEnter={() => {
-                  if (draggingItem && !isDragging) {
+                  if (isLayerDragActive && !isDragging) {
                     setDropTarget({ groupId: group.id, index: itemIndex });
                   }
                 }}
-                onDragStart={() => setDraggingItem({ groupId: group.id, index: itemIndex, instanceId: groupItem.instanceId, layerId: groupItem.layerId })}
-                onDrop={() => handleDrop({ groupId: group.id, index: itemIndex })}
+                onDragStart={() => {
+                  setDraggingItem({ groupId: group.id, index: itemIndex, instanceId: groupItem.instanceId, layerId: groupItem.layerId });
+                  setDraggingMapGroup(null);
+                  setMapGroupDropTarget(null);
+                }}
+                onDrop={() => {
+                  if (isLayerDragActive) {
+                    handleDrop({ groupId: group.id, index: itemIndex });
+                  }
+                }}
                 onDoubleClick={item.kind === 'uploaded'
                   ? () => {
                     setSelectedItemId(item.id);
@@ -914,7 +1042,6 @@ export function LayerTree() {
               {isEditOpen ? (
                 <LayerStylePanel
                   item={item}
-                  basemapStyle={basemapStyle}
                   rasterStyle={rasterStyle}
                   uploadedLayerStyles={uploadedLayerStyles}
                   vectorOverlayStyle={vectorOverlayStyle}
@@ -927,10 +1054,14 @@ export function LayerTree() {
                     } else if (item.kind === 'vectorOverlay') {
                       setVectorOverlayStyle(defaultVectorOverlayStyle);
                     } else {
-                      setBasemapStyle(defaultBasemapStyle);
+                      handleBasemapOpacityChange(group.id, groupItem, defaultBasemapStyle.opacity);
                     }
                   }}
-                  onUpdateBasemap={setBasemapStyle}
+                  onUpdateBasemap={(patch) => {
+                    if (typeof patch.opacity === 'number') {
+                      handleBasemapOpacityChange(group.id, groupItem, patch.opacity);
+                    }
+                  }}
                   onUpdateRaster={setRasterStyle}
                   onUpdateUploaded={setUploadedLayerStyle}
                   onUpdateVectorOverlay={setVectorOverlayStyle}
@@ -1061,7 +1192,6 @@ function LayerRow({
 
 function LayerStylePanel({
   item,
-  basemapStyle,
   rasterStyle,
   uploadedLayerStyles,
   vectorOverlayStyle,
@@ -1073,7 +1203,6 @@ function LayerStylePanel({
   onUpdateVectorOverlay,
 }: {
   item: LayerListItem;
-  basemapStyle: BasemapLayerStyle;
   rasterStyle: RasterLayerStyle;
   uploadedLayerStyles: Record<string, UploadedLayerStyle>;
   vectorOverlayStyle: VectorOverlayStyle;
@@ -1109,7 +1238,10 @@ function LayerStylePanel({
       ) : null}
 
       {item.kind === 'basemap' ? (
-        <BasemapStyleEditor style={basemapStyle} onChange={onUpdateBasemap} />
+        <BasemapStyleEditor
+          style={{ opacity: item.opacity }}
+          onChange={onUpdateBasemap}
+        />
       ) : null}
 
       <div className="layer-style-actions">
@@ -1247,7 +1379,6 @@ function RangeControl({
 function renderLayerBadge(
   item: LayerListItem,
   styles: {
-    basemapStyle: BasemapLayerStyle;
     rasterStyle: RasterLayerStyle;
     uploadedLayerStyles: Record<string, UploadedLayerStyle>;
     vectorOverlayStyle: VectorOverlayStyle;
@@ -1309,7 +1440,6 @@ function PolygonLayerBadgeIcon({ size = 16, strokeWidth = 2 }: { size?: number; 
 function layerBadgeMetaForItem(
   item: LayerListItem,
   styles: {
-    basemapStyle: BasemapLayerStyle;
     rasterStyle: RasterLayerStyle;
     uploadedLayerStyles: Record<string, UploadedLayerStyle>;
     vectorOverlayStyle: VectorOverlayStyle;
@@ -1322,7 +1452,7 @@ function layerBadgeMetaForItem(
         background:
           'linear-gradient(135deg, rgb(22 119 184 / 0%) 45%, rgb(22 119 184 / 45%) 45% 55%, rgb(22 119 184 / 0%) 55%), linear-gradient(#dbe9d4 0 44%, #c9dfec 44% 100%)',
         color: '#0f5d8e',
-        opacity: styles.basemapStyle.opacity,
+        opacity: item.opacity,
       },
       icon: MapIcon,
       title: '底图',
@@ -1487,6 +1617,7 @@ function createMapGroupLayerItem(layerId: MapGroupLayerItemId, basemapId = defau
     layerId,
     visible: true,
     basemapId: layerId === 'basemap' ? basemapId : undefined,
+    opacity: layerId === 'basemap' ? defaultBasemapStyle.opacity : undefined,
   };
 }
 
@@ -1519,6 +1650,7 @@ function findSelectedBasemapItem(groups: MapGroup[], selectedItemId: string) {
           groupId: group.id,
           instanceId: item.instanceId,
           basemapId: item.basemapId ?? defaultBasemapId,
+          opacity: item.opacity ?? defaultBasemapStyle.opacity,
           selectionId: `${group.id}:${item.instanceId}`,
         };
       }
@@ -1548,12 +1680,13 @@ function getTargetBasemapItem(groups: MapGroup[], currentMapGroupId: string, sel
     groupId: currentGroup.id,
     instanceId: currentBasemapItem.instanceId,
     basemapId: currentBasemapItem.basemapId ?? defaultBasemapId,
+    opacity: currentBasemapItem.opacity ?? defaultBasemapStyle.opacity,
     selectionId: `${currentGroup.id}:${currentBasemapItem.instanceId}`,
   };
 }
 
-function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId: string; basemapId: BasemapId; selectionId: string } | null {
-  let activeBasemapItem: { groupId: string; instanceId: string; basemapId: BasemapId; selectionId: string } | null = null;
+function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId: string; basemapId: BasemapId; opacity: number; selectionId: string } | null {
+  let activeBasemapItem: { groupId: string; instanceId: string; basemapId: BasemapId; opacity: number; selectionId: string } | null = null;
 
   groups.forEach((group) => {
     if (group.displayVisible === false) {
@@ -1569,6 +1702,7 @@ function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId
         groupId: group.id,
         instanceId: item.instanceId,
         basemapId: item.basemapId ?? defaultBasemapId,
+        opacity: item.opacity ?? defaultBasemapStyle.opacity,
         selectionId: `${group.id}:${item.instanceId}`,
       };
     });
@@ -1619,6 +1753,30 @@ function moveLayerItemInMapGroups(groups: MapGroup[], dragged: LayerDragState, t
 
     return { ...group, layerItems };
   });
+}
+
+function moveMapGroupsInOrder(groups: MapGroup[], dragged: MapGroupDragState, target: MapGroupDropTarget) {
+  const sourceIndex = groups.findIndex((group) => group.id === dragged.groupId);
+  const targetIndex = groups.findIndex((group) => group.id === target.groupId);
+
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return groups;
+  }
+
+  if (sourceIndex === targetIndex) {
+    return groups;
+  }
+
+  const nextGroups = [...groups];
+  const [movedGroup] = nextGroups.splice(sourceIndex, 1);
+  let insertIndex = target.position === 'before' ? targetIndex : targetIndex + 1;
+
+  if (sourceIndex < insertIndex) {
+    insertIndex -= 1;
+  }
+
+  nextGroups.splice(insertIndex, 0, movedGroup);
+  return nextGroups;
 }
 
 function withDuplicateLayerLabels(rows: MapGroupLayerRow[]) {
@@ -1679,17 +1837,22 @@ function normalizeMapGroups(groups: MapGroup[]) {
   return groups.map((group) => ({
     ...group,
     displayVisible: group.displayVisible ?? true,
+    layerItems: group.layerItems.map((item) => (
+      item.layerId === 'basemap'
+        ? { ...item, visible: item.visible ?? true, opacity: item.opacity ?? defaultBasemapStyle.opacity }
+        : item
+    )),
   }));
 }
 
 function getMapGroupLayerDrawOrder(groups: MapGroup[]): LayerOrderId[] {
   const orderedLayerIds: LayerOrderId[] = [];
-  let hasBasemap = false;
+  let basemapInsertIndex = -1;
 
   groups.forEach((group) => {
     group.layerItems.forEach((item) => {
       if (item.layerId === 'basemap') {
-        hasBasemap = true;
+        basemapInsertIndex = orderedLayerIds.length;
         return;
       }
 
@@ -1697,7 +1860,13 @@ function getMapGroupLayerDrawOrder(groups: MapGroup[]): LayerOrderId[] {
     });
   });
 
-  return hasBasemap ? [...orderedLayerIds, 'basemap'] : orderedLayerIds;
+  if (basemapInsertIndex < 0) {
+    return orderedLayerIds;
+  }
+
+  const nextLayerOrder = [...orderedLayerIds];
+  nextLayerOrder.splice(basemapInsertIndex, 0, 'basemap');
+  return nextLayerOrder;
 }
 
 function assignUnclaimedLayerItemsToCurrentGroup(groups: MapGroup[], currentGroupId: string, layerItemIds: MapGroupLayerItemId[]) {
@@ -1772,7 +1941,14 @@ function buildLayerItems({
     seen.add(id);
 
     if (id === 'basemap') {
-      items.push({ id, kind: 'basemap', label: '底图', checked: layerVisibility.basemap, basemapId: defaultBasemapId });
+      items.push({
+        id,
+        kind: 'basemap',
+        label: '底图',
+        checked: layerVisibility.basemap,
+        basemapId: defaultBasemapId,
+        opacity: defaultBasemapStyle.opacity,
+      });
       continue;
     }
 

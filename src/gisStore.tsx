@@ -2642,7 +2642,7 @@ function rasterToCanvas(raster: {
     image.data[index * 4] = color[0];
     image.data[index * 4 + 1] = color[1];
     image.data[index * 4 + 2] = color[2];
-    image.data[index * 4 + 3] = 188;
+    image.data[index * 4 + 3] = 255;
   }
 
   context.putImageData(image, 0, 0);

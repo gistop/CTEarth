@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type DragEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Settings, Square, SquareCheckBig } from 'lucide-react';
 import type { LayerOrderId } from '../../gisStore';
 import type { BasemapId } from '../map/basemapOptions';
@@ -10,6 +10,7 @@ export type MapGroupLayerItem = {
   layerId: MapGroupLayerItemId;
   visible: boolean;
   basemapId?: BasemapId;
+  opacity?: number;
 };
 
 export type MapGroup = {
@@ -26,10 +27,15 @@ type MapGroupSectionProps = {
   group: MapGroup;
   isExpanded: boolean;
   isDropTarget?: boolean;
+  dropPosition?: 'before' | 'after';
+  isDragging?: boolean;
   isCurrent: boolean;
   isEditOpen?: boolean;
   nameNode: ReactNode;
   someVisible: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnter?: () => void;
   onDrop?: () => void;
   onEdit?: () => void;
@@ -46,10 +52,15 @@ export function MapGroupSection({
   group,
   isExpanded,
   isDropTarget,
+  dropPosition,
+  isDragging,
   isCurrent,
   isEditOpen,
   nameNode,
   someVisible,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
   onDragEnter,
   onDrop,
   onEdit,
@@ -69,12 +80,35 @@ export function MapGroupSection({
   return (
     <section className={isCurrent ? 'map-group-section is-current' : 'map-group-section'}>
       <div
-        className={isDropTarget ? 'tree-row root map-group-row is-drop-target' : 'tree-row root map-group-row'}
+        className={[
+          'tree-row',
+          'root',
+          'map-group-row',
+          isDragging ? 'is-dragging' : '',
+          isDropTarget ? (dropPosition === 'after' ? 'is-drop-target-after' : 'is-drop-target') : '',
+        ].filter(Boolean).join(' ')}
+        draggable={Boolean(onDragStart)}
+        onDragStart={(event) => {
+          if (!onDragStart) {
+            event.preventDefault();
+            return;
+          }
+
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', group.id);
+          onDragStart();
+        }}
+        onDragEnd={() => {
+          onDragEnd?.();
+        }}
         onDragEnter={(event) => {
           event.preventDefault();
           onDragEnter?.();
         }}
-        onDragOver={(event) => event.preventDefault()}
+        onDragOver={(event) => {
+          event.preventDefault();
+          onDragOver?.(event);
+        }}
         onDrop={(event) => {
           event.preventDefault();
           onDrop?.();

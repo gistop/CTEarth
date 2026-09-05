@@ -18,12 +18,13 @@ import VectorSource from 'ol/source/Vector.js';
 import XYZ from 'ol/source/XYZ.js';
 import type Geometry from 'ol/geom/Geometry.js';
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from 'ol/style.js';
-import { useMapCommands, type BasemapId } from '../map/MapCommandContext';
-import { defaultUploadedLayerStyle, useGis, type LayerOrderId, type UploadedLayerStyle, type VectorOverlayStyle } from '../../gisStore';
+import type { BasemapId } from '../map/MapCommandContext';
+import { defaultUploadedLayerStyle, useGis, type UploadedLayerStyle, type VectorOverlayStyle } from '../../gisStore';
+import { useMapGroupRenderState } from '../../mapGroupRenderState';
 import { useLayout } from './LayoutPanel';
 
-const layoutPreviewCenter: [number, number] = [104.1954, 35.8617];
-const layoutPreviewZoom = 3.6;
+const layoutPreviewCenter: [number, number] = [10.4515, 51.1657];
+const layoutPreviewZoom = 5.3;
 
 type LayoutMapPreviewProps = {
   northArrowTarget: HTMLDivElement | null;
@@ -34,7 +35,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<Map | null>(null);
   const viewRef = useRef<View | null>(null);
-  const baseLayersRef = useRef<Record<BasemapId, TileLayer<OSM | XYZ>> | null>(null);
+  const basemapLayersRef = useRef(new globalThis.Map<string, TileLayer<OSM | XYZ>>());
   const graticuleLayerRef = useRef<Graticule | null>(null);
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
   const vectorOverlaySourceRef = useRef(new VectorSource<Feature<Geometry>>());
@@ -43,11 +44,9 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
   const scaleLineControlRef = useRef<ScaleLine | null>(null);
   const northArrowControlRef = useRef<Rotate | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
-  const { mapCommandState } = useMapCommands();
+  const mapGroupRenderState = useMapGroupRenderState();
   const { mapGraticuleVisible } = useLayout();
   const {
-    basemapStyle,
-    layerOrder,
     layerVisibility,
     layers,
     raster,
@@ -66,7 +65,6 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       return;
     }
 
-    const baseLayers = createLayoutBaseLayers(mapCommandState.basemap);
     const view = new View({
       center: fromLonLat(layoutPreviewCenter),
       zoom: layoutPreviewZoom,
@@ -95,9 +93,6 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
     const map = new Map({
       controls: defaultControls({ attribution: false, rotate: false, zoom: false }),
       layers: [
-        baseLayers.osm,
-        baseLayers.tianditu,
-        baseLayers.esri,
         graticuleLayer,
         rasterLayer,
         vectorOverlayLayer,
@@ -106,7 +101,6 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       view,
     });
 
-    baseLayersRef.current = baseLayers;
     graticuleLayerRef.current = graticuleLayer;
     rasterLayerRef.current = rasterLayer;
     vectorOverlayLayerRef.current = vectorOverlayLayer;
@@ -134,6 +128,10 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
         map.removeControl(northArrowControlRef.current);
         northArrowControlRef.current = null;
       }
+      basemapLayersRef.current.forEach((layer) => {
+        map.removeLayer(layer);
+      });
+      basemapLayersRef.current.clear();
       uploadedLayersRef.current.forEach(({ layer }) => {
         map.removeLayer(layer);
       });
@@ -141,12 +139,11 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       map.setTarget(undefined);
       mapRef.current = null;
       viewRef.current = null;
-      baseLayersRef.current = null;
       graticuleLayerRef.current = null;
       rasterLayerRef.current = null;
       vectorOverlayLayerRef.current = null;
     };
-  }, [mapCommandState.basemap, rasterStyle.opacity, vectorOverlayStyle]);
+  }, [rasterStyle.opacity, vectorOverlayStyle]);
 
   useEffect(() => {
     const graticuleLayer = graticuleLayerRef.current;
@@ -225,19 +222,49 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
   }, [northArrowTarget]);
 
   useEffect(() => {
-    const baseLayers = baseLayersRef.current;
     const map = mapRef.current;
 
-    if (!baseLayers || !map) {
+    if (!map) {
       return;
     }
 
-    Object.entries(baseLayers).forEach(([id, layer]) => {
-      const visible = id === mapCommandState.basemap && layerVisibility.basemap;
-      layer.setVisible(visible);
-      layer.setOpacity(basemapStyle.opacity);
+    const expectedIds = new Set<string>();
+
+    mapGroupRenderState.entries.forEach((entry) => {
+      const basemapId = entry.basemapId;
+
+      if (!basemapId) {
+        return;
+      }
+
+      layoutBasemapLayerDefinitions[basemapId].forEach((definition) => {
+        const layerId = getLayoutBasemapLayerId(entry.id, definition.suffix);
+        expectedIds.add(layerId);
+
+        let layer = basemapLayersRef.current.get(layerId);
+
+        if (!layer) {
+          layer = createLayoutBasemapLayer(basemapId, definition.suffix);
+          map.addLayer(layer);
+          basemapLayersRef.current.set(layerId, layer);
+        } else {
+          layer.setSource(createLayoutBasemapSource(basemapId, definition.suffix));
+        }
+
+        layer.setVisible(entry.visible);
+        layer.setOpacity(entry.opacity ?? 1);
+      });
     });
-  }, [basemapStyle.opacity, layerVisibility.basemap, mapCommandState.basemap]);
+
+    basemapLayersRef.current.forEach((layer, layerId) => {
+      if (expectedIds.has(layerId)) {
+        return;
+      }
+
+      map.removeLayer(layer);
+      basemapLayersRef.current.delete(layerId);
+    });
+  }, [mapGroupRenderState.entries]);
 
   useEffect(() => {
     const rasterLayer = rasterLayerRef.current;
@@ -353,37 +380,41 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
 
   useEffect(() => {
     const map = mapRef.current;
+
     if (!map) {
       return;
     }
 
-    const normalizedOrder = normalizeLayoutLayerOrder(
-      layerOrder,
-      layers.map((item) => item.id),
-      raster?.id ?? null,
-      Boolean(vectorOverlay),
-    );
-    const zIndexByLayerId = new globalThis.Map<LayerOrderId, number>();
-    const topZIndex = normalizedOrder.length;
+    const zIndexByEntryId = new globalThis.Map<string, number>();
+    const topZIndex = mapGroupRenderState.entries.length;
 
-    normalizedOrder.forEach((id, index) => {
-      zIndexByLayerId.set(id, topZIndex - index);
+    mapGroupRenderState.entries.forEach((entry, index) => {
+      zIndexByEntryId.set(entry.id, topZIndex - index);
     });
 
-    const basemapZIndex = zIndexByLayerId.get('basemap') ?? 0;
+    let basemapZIndex = 0;
 
-    Object.values(baseLayersRef.current ?? {}).forEach((layer) => {
-      layer.setZIndex(basemapZIndex);
+    mapGroupRenderState.entries.forEach((entry) => {
+      if (!entry.basemapId) {
+        return;
+      }
+
+      const entryZIndex = zIndexByEntryId.get(entry.id) ?? 0;
+      basemapZIndex = Math.max(basemapZIndex, entryZIndex);
+
+      layoutBasemapLayerDefinitions[entry.basemapId].forEach((definition) => {
+        basemapLayersRef.current.get(getLayoutBasemapLayerId(entry.id, definition.suffix))?.setZIndex(entryZIndex);
+      });
     });
 
     graticuleLayerRef.current?.setZIndex(basemapZIndex + 0.5);
-    rasterLayerRef.current?.setZIndex(zIndexByLayerId.get(raster ? `raster:${raster.id}` : 'raster') ?? zIndexByLayerId.get('raster') ?? 0);
-    vectorOverlayLayerRef.current?.setZIndex(zIndexByLayerId.get('vectorOverlay') ?? 0);
+    rasterLayerRef.current?.setZIndex(zIndexByEntryId.get(raster ? `raster:${raster.id}` : '') ?? 0);
+    vectorOverlayLayerRef.current?.setZIndex(zIndexByEntryId.get('vectorOverlay') ?? 0);
 
     uploadedLayersRef.current.forEach(({ layer }, layerId) => {
-      layer.setZIndex(zIndexByLayerId.get(`uploaded:${layerId}` as LayerOrderId) ?? topZIndex + 1);
+      layer.setZIndex(zIndexByEntryId.get(`uploaded:${layerId}`) ?? topZIndex + 1);
     });
-  }, [layerOrder, layers, raster, vectorOverlay]);
+  }, [mapGroupRenderState.entries, raster, vectorOverlay]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -444,29 +475,54 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
   return <div ref={containerRef} className="layout-map-preview-map" aria-hidden="true" />;
 }
 
-function createLayoutBaseLayers(activeBasemap: BasemapId): Record<BasemapId, TileLayer<OSM | XYZ>> {
-  return {
-    osm: new TileLayer({
-      source: new OSM({ attributions: 'OpenStreetMap contributors', crossOrigin: 'anonymous' }),
-      visible: activeBasemap === 'osm',
-    }),
-    tianditu: new TileLayer({
-      source: new XYZ({
+const layoutBasemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource: () => OSM | XYZ }[]> = {
+  osm: [{
+    suffix: 'osm',
+    createSource: () => new OSM({ attributions: 'OpenStreetMap contributors', crossOrigin: 'anonymous' }),
+  }],
+  tianditu: [
+    {
+      suffix: 'tianditu-vec',
+      createSource: () => new XYZ({
         urls: createLayoutTiandituTiles('vec'),
         crossOrigin: 'anonymous',
         attributions: '天地图',
       }),
-      visible: activeBasemap === 'tianditu',
-    }),
-    esri: new TileLayer({
-      source: new XYZ({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    },
+    {
+      suffix: 'tianditu-cva',
+      createSource: () => new XYZ({
+        urls: createLayoutTiandituTiles('cva'),
         crossOrigin: 'anonymous',
-        attributions: 'Tiles 漏 Esri',
+        attributions: '天地图',
       }),
-      visible: activeBasemap === 'esri',
+    },
+  ],
+  esri: [{
+    suffix: 'esri',
+    createSource: () => new XYZ({
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      crossOrigin: 'anonymous',
+      attributions: 'Tiles Esri',
     }),
-  };
+  }],
+};
+
+function createLayoutBasemapLayer(basemapId: BasemapId, suffix: string) {
+  return new TileLayer({
+    source: createLayoutBasemapSource(basemapId, suffix),
+    visible: false,
+  });
+}
+
+function createLayoutBasemapSource(basemapId: BasemapId, suffix: string) {
+  const definition = layoutBasemapLayerDefinitions[basemapId].find((item) => item.suffix === suffix);
+
+  return definition?.createSource() ?? new OSM({ attributions: 'OpenStreetMap contributors', crossOrigin: 'anonymous' });
+}
+
+function getLayoutBasemapLayerId(renderId: string, suffix: string) {
+  return `layout-basemap-${sanitizeLayoutLayerId(renderId)}-${suffix}`;
 }
 
 function createLayoutTiandituTiles(layer: 'vec' | 'cva') {
@@ -481,30 +537,8 @@ function createLayoutTiandituTiles(layer: 'vec' | 'cva') {
   );
 }
 
-function normalizeLayoutLayerOrder(
-  layerOrder: LayerOrderId[],
-  uploadedLayerIds: string[],
-  rasterId: string | null,
-  hasVectorOverlay: boolean,
-) {
-  const seen = new Set<LayerOrderId>();
-  const rasterOrderId = rasterId ? `raster:${rasterId}` as const : null;
-  const order = [
-    ...layerOrder,
-    ...uploadedLayerIds.map((id) => `uploaded:${id}` as const),
-    ...(hasVectorOverlay ? ['vectorOverlay' as const] : []),
-    ...(rasterOrderId ? [rasterOrderId] : []),
-    'basemap' as const,
-  ];
-
-  return order.filter((id) => {
-    if (seen.has(id)) {
-      return false;
-    }
-
-    seen.add(id);
-    return true;
-  });
+function sanitizeLayoutLayerId(id: string) {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 function createLayoutUploadedLayerStyle(style: UploadedLayerStyle) {
