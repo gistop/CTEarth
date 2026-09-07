@@ -26,6 +26,7 @@ import Polygon from 'ol/geom/Polygon.js';
 import type { BasemapId } from '../map/MapCommandContext';
 import { displayLayerName, defaultUploadedLayerStyle, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
 import { useMapGroupRenderState } from '../../mapGroupRenderState';
+import { getRasterBasemapDefinitions } from '../map/rasterBasemapSources';
 import { useDigitize } from './DigitizeContext';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
@@ -309,18 +310,18 @@ function OpenLayersDigitizeMap({ mapLibreMap, visible }, ref) {
 
       const entryZIndex = index - topZIndex - 1;
 
-      basemapLayerDefinitions[basemapId].forEach((definition) => {
+      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
         const layerId = getBasemapLayerId(entry.id, definition.suffix);
         expectedIds.add(layerId);
 
         let layer = basemapLayersRef.current.get(layerId);
 
         if (!layer) {
-          layer = createBasemapLayer(basemapId, definition.suffix);
+          layer = createBasemapLayer(definition);
           map.addLayer(layer);
           basemapLayersRef.current.set(layerId, layer);
         } else {
-          layer.setSource(createBasemapSource(basemapId, definition.suffix));
+          layer.setSource(createBasemapSource(definition));
         }
 
         layer.setVisible(entry.visible && layerVisibility.basemap);
@@ -597,17 +598,35 @@ const basemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource:
   }],
 };
 
-function createBasemapLayer(basemapId: BasemapId, suffix: string) {
+function createBasemapLayer(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
   return new TileLayer({
-    source: createBasemapSource(basemapId, suffix),
+    source: createBasemapSource(definition),
     visible: false,
   });
 }
 
-function createBasemapSource(basemapId: BasemapId, suffix: string) {
-  const definition = basemapLayerDefinitions[basemapId].find((item) => item.suffix === suffix);
+function createBasemapSource(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
+  if (definition.urls) {
+    return new XYZ({
+      urls: definition.urls,
+      attributions: definition.attribution,
+      tileSize: definition.tileSize,
+      minZoom: definition.minZoom,
+      maxZoom: definition.maxZoom,
+    });
+  }
 
-  return definition?.createSource() ?? new OSM({ attributions: 'OpenStreetMap contributors' });
+  if (definition.url) {
+    return new XYZ({
+      url: definition.url,
+      attributions: definition.attribution,
+      tileSize: definition.tileSize,
+      minZoom: definition.minZoom,
+      maxZoom: definition.maxZoom,
+    });
+  }
+
+  return new OSM({ attributions: definition.attribution });
 }
 
 function getBasemapLayerId(renderId: string, suffix: string) {

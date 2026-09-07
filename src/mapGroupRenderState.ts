@@ -2,6 +2,9 @@ import { useSyncExternalStore } from 'react';
 import type { MapGroup, MapGroupLayerItem } from './components/contents/MapGroupSection';
 import { defaultBasemapId } from './components/map/basemapOptions';
 import type { BasemapId } from './components/map/basemapOptions';
+import { defaultCesiumImageryId } from './components/map/cesiumLayerOptions';
+import type { CesiumImageryId } from './components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from './components/map/rasterBasemapSources';
 
 export type MapGroupRenderEntry = {
   id: string;
@@ -10,6 +13,8 @@ export type MapGroupRenderEntry = {
   layerId: MapGroupLayerItem['layerId'];
   visible: boolean;
   basemapId?: BasemapId;
+  basemapSourceKind?: BasemapSourceKind;
+  cesiumImageryId?: CesiumImageryId;
   opacity?: number;
 };
 
@@ -39,6 +44,8 @@ export function createMapGroupRenderState(groups: MapGroup[]): MapGroupRenderSta
         layerId: item.layerId,
         visible: group.displayVisible !== false && item.visible !== false,
         basemapId: item.layerId === 'basemap' ? (item.basemapId ?? defaultBasemapId) : undefined,
+        basemapSourceKind: item.layerId === 'basemap' ? (item.basemapSourceKind ?? 'basemap') : undefined,
+        cesiumImageryId: item.layerId === 'basemap' ? (item.cesiumImageryId ?? defaultCesiumImageryId) : undefined,
         opacity: item.layerId === 'basemap' ? (item.opacity ?? 1) : undefined,
       }))
     )),
@@ -98,6 +105,8 @@ function areMapGroupRenderStatesEqual(left: MapGroupRenderState, right: MapGroup
       && entry.layerId === other.layerId
       && entry.visible === other.visible
       && entry.basemapId === other.basemapId
+      && entry.basemapSourceKind === other.basemapSourceKind
+      && entry.cesiumImageryId === other.cesiumImageryId
       && entry.opacity === other.opacity;
   });
 }

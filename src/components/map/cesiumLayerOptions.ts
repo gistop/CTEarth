@@ -79,6 +79,18 @@ export const cesiumTerrainOptions = [
 export const defaultCesiumImageryId: CesiumImageryId = 'openStreetMap';
 export const defaultCesiumTerrainId: CesiumTerrainId = 'ellipsoid';
 
+export function getCesiumImageryLabel(imageryId: CesiumImageryId) {
+  for (const group of cesiumImageryGroups) {
+    const option = group.options.find((item) => item.id === imageryId);
+
+    if (option) {
+      return option.label;
+    }
+  }
+
+  return imageryId;
+}
+
 export async function createCesiumImageryProvider(Cesium: CesiumLayerNamespace, imageryId: CesiumImageryId) {
   switch (imageryId) {
     case 'ionBingAerial':

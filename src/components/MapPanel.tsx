@@ -7,6 +7,7 @@ import { MapFeatureIdentify } from './map/MapFeatureIdentify';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumLayerNamespace, type CesiumTerrainId } from './map/cesiumLayerOptions';
+import { getRasterBasemapDefinitions, type BasemapSourceKind, type RasterBasemapTileDefinition } from './map/rasterBasemapSources';
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
@@ -15,7 +16,6 @@ import type { UploadedLayer } from '../gisStore';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
-const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 const CESIUM_BASE_URL = '/cesium/';
 const TERRAIN_DEM_SOURCE_ID = 'terrain-dem';
 const TERRAIN_HILLSHADE_SOURCE_ID = 'terrain-hillshade-dem';
@@ -23,50 +23,6 @@ const TERRAIN_HILLSHADE_LAYER_ID = 'terrain-hillshade';
 const TERRAIN_DEM_TILEJSON_URL = 'https://tiles.mapterhorn.com/tilejson.json';
 type MapLibreSourceSpecification = Parameters<maplibregl.Map['addSource']>[1];
 
-const basemapLayerDefinitions: Record<BasemapId, { suffix: string; sourceId: string; createSource: () => MapLibreSourceSpecification }[]> = {
-  osm: [{
-    suffix: 'osm',
-    sourceId: 'osm',
-    createSource: () => ({
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: 'OpenStreetMap contributors',
-    }),
-  }],
-  tianditu: [
-    {
-      suffix: 'tianditu-vec',
-      sourceId: 'tiandituVec',
-      createSource: () => ({
-        type: 'raster',
-        tiles: createTiandituTiles('vec'),
-        tileSize: 256,
-        attribution: 'Tianditu',
-      }),
-    },
-    {
-      suffix: 'tianditu-cva',
-      sourceId: 'tiandituCva',
-      createSource: () => ({
-        type: 'raster',
-        tiles: createTiandituTiles('cva'),
-        tileSize: 256,
-        attribution: 'Tianditu',
-      }),
-    },
-  ],
-  esri: [{
-    suffix: 'esri',
-    sourceId: 'esriImagery',
-    createSource: () => ({
-      type: 'raster',
-      tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
-      tileSize: 256,
-      attribution: 'Tiles Esri',
-    }),
-  }],
-};
 const rasterLayerIds = ['idw-interpolation'];
 const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
 
@@ -88,6 +44,10 @@ type CesiumViewer = {
     removeAll: (destroy?: boolean) => void;
     addImageryProvider: (provider: unknown) => unknown;
   };
+  dataSources: {
+    add: (dataSource: unknown) => Promise<unknown>;
+    removeAll: (destroy?: boolean) => void;
+  };
   terrainProvider: unknown;
   scene: {
     backgroundColor: unknown;
@@ -102,9 +62,28 @@ type CesiumViewer = {
   resize?: () => void;
 };
 
+type CesiumImageryLayerLike = {
+  alpha: number;
+  show: boolean;
+};
+
+type CesiumDataSourceLike = {
+  show: boolean;
+};
+
+type CesiumLayerEntryState = {
+  imagery?: CesiumImageryLayerLike;
+  dataSource?: CesiumDataSourceLike;
+  raster?: unknown;
+};
+
 type CesiumNamespace = CesiumLayerNamespace & {
   Viewer: new (container: HTMLElement, options: Record<string, unknown>) => CesiumViewer;
   ImageryLayer: new (provider: unknown) => unknown;
+  SingleTileImageryProvider: new (options: Record<string, unknown>) => unknown;
+  GeoJsonDataSource: {
+    load: (data: unknown, options?: Record<string, unknown>) => Promise<unknown>;
+  };
   WebMapTileServiceImageryProvider: new (options: Record<string, unknown>) => unknown;
   Rectangle: {
     fromDegrees: (west: number, south: number, east: number, north: number) => unknown;
@@ -115,6 +94,8 @@ type CesiumNamespace = CesiumLayerNamespace & {
   Color: {
     LIGHTGREY: unknown;
     SKYBLUE: unknown;
+    fromAlpha: (color: unknown, alpha: number) => unknown;
+    fromCssColorString: (color: string) => unknown;
   };
   Ion?: {
     defaultAccessToken: string;
@@ -138,18 +119,6 @@ declare global {
 }
 
 let cesiumLoadPromise: Promise<CesiumNamespace> | null = null;
-
-function createTiandituTiles(layer: 'vec' | 'cva') {
-  return Array.from(
-    { length: 8 },
-    (_, index) => (
-      `https://t${index}.tianditu.gov.cn/${layer}_w/wmts?` +
-      `SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}` +
-      `&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}` +
-      `&tk=${TIANDITU_TOKEN}`
-    ),
-  );
-}
 
 function loadCesium() {
   if (window.Cesium) {
@@ -208,11 +177,7 @@ function loadCesium() {
 function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
   const viewer = new Cesium.Viewer(container, {
     animation: false,
-    baseLayer: new Cesium.ImageryLayer(
-      new Cesium.OpenStreetMapImageryProvider({
-        url: 'https://tile.openstreetmap.org/',
-      }),
-    ),
+    baseLayer: false,
     baseLayerPicker: false,
     fullscreenButton: false,
     geocoder: false,
@@ -265,6 +230,195 @@ async function applyCesiumTerrain(viewer: CesiumViewer, Cesium: CesiumNamespace,
   }
 
   viewer.terrainProvider = provider;
+}
+
+function createCesiumImageryProviderFromDefinition(
+  Cesium: CesiumNamespace,
+  definition: RasterBasemapTileDefinition,
+) {
+  if (definition.urls && definition.urls.length > 0) {
+    const templateUrl = definition.urls[0]
+      .replace(/\/t\d+\./, '/t{s}.')
+      .replace(/\{x\}/g, '{x}')
+      .replace(/\{y\}/g, '{y}')
+      .replace(/\{z\}/g, '{z}');
+
+    return new Cesium.UrlTemplateImageryProvider({
+      url: templateUrl,
+      subdomains: '01234567',
+      tileWidth: definition.tileSize ?? 256,
+      tileHeight: definition.tileSize ?? 256,
+      maximumLevel: definition.maxZoom,
+      minimumLevel: definition.minZoom,
+    });
+  }
+
+  if (definition.scheme === 'tms' && definition.url) {
+    return new Cesium.UrlTemplateImageryProvider({
+      url: definition.url.replace('{y}', '{reverseY}'),
+      tilingScheme: new Cesium.GeographicTilingScheme(),
+      tileWidth: definition.tileSize ?? 256,
+      tileHeight: definition.tileSize ?? 256,
+      maximumLevel: definition.maxZoom,
+      minimumLevel: definition.minZoom,
+    });
+  }
+
+  if (definition.url) {
+    return new Cesium.UrlTemplateImageryProvider({
+      url: definition.url,
+      tileWidth: definition.tileSize ?? 256,
+      tileHeight: definition.tileSize ?? 256,
+      maximumLevel: definition.maxZoom,
+      minimumLevel: definition.minZoom,
+    });
+  }
+
+  return new Cesium.OpenStreetMapImageryProvider({
+    url: 'https://tile.openstreetmap.org/',
+  });
+}
+
+function createCesiumRectangleFromCoordinates(
+  Cesium: CesiumNamespace,
+  coordinates: [[number, number], [number, number], [number, number], [number, number]],
+) {
+  const bounds = coordinates.reduce(
+    (current, [lon, lat]) => [
+      Math.min(current[0], lon),
+      Math.min(current[1], lat),
+      Math.max(current[2], lon),
+      Math.max(current[3], lat),
+    ] as [number, number, number, number],
+    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
+  );
+
+  return Cesium.Rectangle.fromDegrees(bounds[0], bounds[1], bounds[2], bounds[3]);
+}
+
+function createCesiumGeoJsonStyle(Cesium: CesiumNamespace, style: { fillColor?: string; fillOpacity?: number; lineColor?: string; lineWidth?: number; pointColor?: string; pointOpacity?: number; pointStrokeColor?: string; pointStrokeWidth?: number }) {
+  return {
+    clampToGround: true,
+    stroke: Cesium.Color.fromCssColorString(style.lineColor ?? '#2f6da5'),
+    strokeWidth: style.lineWidth ?? 2,
+    fill: Cesium.Color.fromAlpha(
+      Cesium.Color.fromCssColorString(style.fillColor ?? '#6b9bd2'),
+      style.fillOpacity ?? 0.22,
+    ),
+    markerColor: Cesium.Color.fromCssColorString(style.pointColor ?? '#f97316'),
+    markerSize: Math.max(Math.round((style.pointOpacity ?? 1) * 14), 8),
+    outlineColor: Cesium.Color.fromCssColorString(style.pointStrokeColor ?? '#ffffff'),
+    outlineWidth: style.pointStrokeWidth ?? 1,
+  };
+}
+
+async function syncCesiumScene(
+  viewer: CesiumViewer,
+  Cesium: CesiumNamespace,
+  params: {
+    entries: {
+      id: string;
+      layerId: string;
+      basemapId?: BasemapId;
+      basemapSourceKind?: BasemapSourceKind;
+      cesiumImageryId?: CesiumImageryId;
+      visible: boolean;
+      opacity?: number;
+    }[];
+    layerVisibility: { basemap: boolean; raster: boolean; vectorOverlay: boolean };
+    raster: { id: string; imageUrl: string; coordinates: [[number, number], [number, number], [number, number], [number, number]] } | null;
+    rasterLayerVisibility: Record<string, boolean>;
+    rasterStyle: { opacity: number };
+    layers: { id: string; geojson: { type: 'FeatureCollection'; features: unknown[] } }[];
+    uploadedLayerVisibility: Record<string, boolean>;
+    uploadedLayerStyles: Record<string, { pointColor: string; pointRadius: number; pointOpacity: number; pointStrokeColor: string; pointStrokeWidth: number; lineColor: string; lineWidth: number; lineOpacity: number; fillColor: string; fillOpacity: number }>;
+    vectorOverlay: { geojson: { type: 'FeatureCollection'; features: unknown[] } } | null;
+    vectorOverlayStyle: { fillColor: string; fillOpacity: number; lineColor: string; lineWidth: number };
+  },
+  isActive: () => boolean,
+) {
+  if (!isActive()) {
+    return;
+  }
+
+  viewer.imageryLayers.removeAll(true);
+  viewer.dataSources.removeAll(true);
+
+  params.entries.forEach((entry) => {
+    if (!entry.basemapId || !entry.visible || !params.layerVisibility.basemap) {
+      return;
+    }
+
+    getRasterBasemapDefinitions(entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId).forEach((definition) => {
+      const provider = createCesiumImageryProviderFromDefinition(Cesium, definition);
+      const imageryLayer = viewer.imageryLayers.addImageryProvider(provider) as CesiumImageryLayerLike;
+      imageryLayer.alpha = entry.opacity ?? 1;
+      imageryLayer.show = true;
+    });
+  });
+
+  if (!isActive()) {
+    return;
+  }
+
+  if (params.raster && (params.rasterLayerVisibility[params.raster.id] ?? params.layerVisibility.raster)) {
+    const imageryLayer = viewer.imageryLayers.addImageryProvider(new Cesium.SingleTileImageryProvider({
+      url: params.raster.imageUrl,
+      tileWidth: 256,
+      tileHeight: 256,
+      rectangle: createCesiumRectangleFromCoordinates(Cesium, params.raster.coordinates),
+    })) as CesiumImageryLayerLike;
+
+    imageryLayer.alpha = params.rasterStyle.opacity;
+    imageryLayer.show = true;
+  }
+
+  if (!isActive()) {
+    return;
+  }
+
+  if (params.vectorOverlay && params.layerVisibility.vectorOverlay) {
+    const dataSource = await Cesium.GeoJsonDataSource.load(
+      params.vectorOverlay.geojson,
+      createCesiumGeoJsonStyle(Cesium, params.vectorOverlayStyle),
+    ) as { show: boolean };
+    if (!isActive()) {
+      return;
+    }
+    dataSource.show = true;
+    await viewer.dataSources.add(dataSource);
+  }
+
+  for (const layer of params.layers) {
+    if (!isActive()) {
+      return;
+    }
+
+    if (!(params.uploadedLayerVisibility[layer.id] ?? true)) {
+      continue;
+    }
+
+    const dataSource = await Cesium.GeoJsonDataSource.load(
+      layer.geojson,
+      createCesiumGeoJsonStyle(Cesium, params.uploadedLayerStyles[layer.id] ?? {
+        pointColor: '#f97316',
+        pointRadius: 6,
+        pointOpacity: 1,
+        pointStrokeColor: '#17202a',
+        pointStrokeWidth: 1.5,
+        lineColor: '#f97316',
+        lineWidth: 2,
+        lineOpacity: 1,
+        fillColor: '#f97316',
+        fillOpacity: 0.22,
+      }),
+    ) as { show: boolean };
+    if (!isActive()) {
+      return;
+    }
+    dataSource.show = true;
+    await viewer.dataSources.add(dataSource);
+  }
 }
 
 function flyCesiumToChina(viewer: CesiumViewer, Cesium: CesiumNamespace, duration = 0.6) {
@@ -353,42 +507,68 @@ function getNominatimPoint(result: NominatimSearchResult) {
 function createOnlineMapStyle(): maplibregl.StyleSpecification {
   return {
     version: 8,
-    sources: {
-      [TERRAIN_DEM_SOURCE_ID]: {
-        type: 'raster-dem',
-        url: TERRAIN_DEM_TILEJSON_URL,
-        tileSize: 256,
-      },
-      [TERRAIN_HILLSHADE_SOURCE_ID]: {
-        type: 'raster-dem',
-        url: TERRAIN_DEM_TILEJSON_URL,
-        tileSize: 256,
-      },
-    },
+    sources: {},
     layers: [
       {
-        id: TERRAIN_HILLSHADE_LAYER_ID,
-        type: 'hillshade',
-        source: TERRAIN_HILLSHADE_SOURCE_ID,
-        layout: {
-          visibility: 'none',
-        },
+        id: 'online-map-background',
+        type: 'background',
         paint: {
-          'hillshade-method': 'standard',
-          'hillshade-illumination-direction': 315,
-          'hillshade-shadow-color': '#2f3340',
-          'hillshade-highlight-color': '#ffffff',
-          'hillshade-accent-color': '#2f3340',
-          'hillshade-exaggeration': 0.5,
+          'background-color': '#d7e8f7',
         },
       },
     ],
   };
 }
 
+function createTerrainSourceDefinition(): MapLibreSourceSpecification {
+  return {
+    type: 'raster-dem',
+    url: TERRAIN_DEM_TILEJSON_URL,
+    tileSize: 256,
+  };
+}
+
+function ensureTerrainSources(map: maplibregl.Map) {
+  if (!map.getSource(TERRAIN_DEM_SOURCE_ID)) {
+    map.addSource(TERRAIN_DEM_SOURCE_ID, createTerrainSourceDefinition());
+  }
+
+  if (!map.getSource(TERRAIN_HILLSHADE_SOURCE_ID)) {
+    map.addSource(TERRAIN_HILLSHADE_SOURCE_ID, createTerrainSourceDefinition());
+  }
+
+  if (!map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
+    const firstNonBackgroundLayerId = map.getStyle().layers?.find((layer) => layer.type !== 'background')?.id;
+
+    map.addLayer({
+      id: TERRAIN_HILLSHADE_LAYER_ID,
+      type: 'hillshade',
+      source: TERRAIN_HILLSHADE_SOURCE_ID,
+      layout: {
+        visibility: 'none',
+      },
+      paint: {
+        'hillshade-method': 'standard',
+        'hillshade-illumination-direction': 315,
+        'hillshade-shadow-color': '#2f3340',
+        'hillshade-highlight-color': '#ffffff',
+        'hillshade-accent-color': '#2f3340',
+        'hillshade-exaggeration': 0.5,
+      },
+    }, firstNonBackgroundLayerId);
+  }
+}
+
 function syncBasemapLayers(
   map: maplibregl.Map,
-  entries: { id: string; basemapId?: BasemapId; visible: boolean; opacity?: number }[],
+  entries: {
+    id: string;
+    basemapId?: BasemapId;
+    basemapSourceKind?: BasemapSourceKind;
+    cesiumImageryId?: CesiumImageryId;
+    visible: boolean;
+    opacity?: number;
+  }[],
   basemapVisible: boolean,
 ) {
   if (!map.isStyleLoaded()) {
@@ -401,7 +581,7 @@ function syncBasemapLayers(
   const expectedSourceIds = new Set<string>();
 
   basemapEntries.forEach((entry) => {
-    basemapLayerDefinitions[entry.basemapId as BasemapId].forEach((definition) => {
+    getRasterBasemapDefinitions(entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId).forEach((definition) => {
       const opacity = entry.opacity ?? 1;
       const visible = entry.visible && basemapVisible;
       const layerId = getBasemapRenderLayerId(entry.id, definition.suffix);
@@ -410,7 +590,7 @@ function syncBasemapLayers(
       expectedSourceIds.add(sourceId);
 
       if (!map.getSource(sourceId)) {
-        map.addSource(sourceId, definition.createSource());
+        map.addSource(sourceId, createMapLibreRasterSource(definition));
       }
 
       const existingLayer = map.getLayer(layerId) as { source?: string } | undefined;
@@ -474,7 +654,14 @@ function syncBasemapLayers(
 function logMapLibreLayerState(
   map: maplibregl.Map,
   reason: string,
-  entries: { id: string; basemapId?: BasemapId; visible: boolean; opacity?: number }[],
+  entries: {
+    id: string;
+    basemapId?: BasemapId;
+    basemapSourceKind?: BasemapSourceKind;
+    cesiumImageryId?: CesiumImageryId;
+    visible: boolean;
+    opacity?: number;
+  }[],
   basemapVisible: boolean,
 ) {
   if (!shouldLogMapLibreLayers()) {
@@ -516,6 +703,8 @@ function logMapLibreLayerState(
   const basemapEntries = entries.map((entry) => ({
     id: entry.id,
     basemapId: entry.basemapId ?? '',
+    sourceKind: entry.basemapSourceKind ?? 'basemap',
+    cesiumImageryId: entry.cesiumImageryId ?? '',
     entryVisible: entry.visible,
     globalBasemapVisible: basemapVisible,
     renderedVisible: Boolean(entry.basemapId && entry.visible && basemapVisible),
@@ -529,6 +718,18 @@ function logMapLibreLayerState(
   console.table(layers);
   console.table(sources);
   console.groupEnd();
+}
+
+function createMapLibreRasterSource(definition: RasterBasemapTileDefinition): MapLibreSourceSpecification {
+  return {
+    type: 'raster',
+    tiles: definition.urls ?? (definition.url ? [definition.url] : []),
+    tileSize: definition.tileSize ?? 256,
+    attribution: definition.attribution,
+    ...(definition.minZoom !== undefined ? { minzoom: definition.minZoom } : {}),
+    ...(definition.maxZoom !== undefined ? { maxzoom: definition.maxZoom } : {}),
+    ...(definition.scheme ? { scheme: definition.scheme } : {}),
+  };
 }
 
 function shouldLogMapLibreLayers() {
@@ -563,8 +764,12 @@ function sanitizeLayerId(id: string) {
 }
 
 function setTerrainMode(map: maplibregl.Map, enabled: boolean) {
-  if (!map.isStyleLoaded() || !map.getSource(TERRAIN_DEM_SOURCE_ID)) {
+  if (!map.isStyleLoaded()) {
     return false;
+  }
+
+  if (enabled && !map.getSource(TERRAIN_DEM_SOURCE_ID)) {
+    ensureTerrainSources(map);
   }
 
   if (map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
@@ -578,7 +783,7 @@ function setTerrainMode(map: maplibregl.Map, enabled: boolean) {
     }
     : null);
 
-  return true;
+  return enabled ? Boolean(map.getSource(TERRAIN_DEM_SOURCE_ID)) : true;
 }
 
 export function MapPanel() {
@@ -696,6 +901,7 @@ export function MapPanel() {
     }
 
     let syncBasemapFromState: (() => void) | null = null;
+    let markMapReady: (() => void) | null = null;
 
     const createMap = () => {
       if (mapRef.current) {
@@ -723,6 +929,14 @@ export function MapPanel() {
       updateMapCommandState({ basemap: mapCommandState.basemap, dragRotateEnabled: map.dragRotate.isEnabled() });
 
       map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
+      markMapReady = () => {
+        if (!map.isStyleLoaded()) {
+          return;
+        }
+
+        setMapReady(true);
+        setStatus((current) => (current === '\u6b63\u5728\u521d\u59cb\u5316\u5728\u7ebf\u5730\u56fe' ? '' : current));
+      };
       syncBasemapFromState = () => {
         if (mapRef.current !== map) {
           return;
@@ -738,6 +952,7 @@ export function MapPanel() {
         );
       };
 
+      map.on('styledata', markMapReady);
       map.on('styledata', syncBasemapFromState);
       map.on('idle', syncBasemapFromState);
       map.on('moveend', () => {
@@ -762,6 +977,7 @@ export function MapPanel() {
         setCoords(`${event.lngLat.lng.toFixed(5)}, ${event.lngLat.lat.toFixed(5)}`);
       });
 
+      markMapReady?.();
       mapRef.current = map;
     };
 
@@ -777,6 +993,9 @@ export function MapPanel() {
     return () => {
       const map = mapRef.current;
 
+      if (map && markMapReady) {
+        map.off('styledata', markMapReady);
+      }
       if (map && syncBasemapFromState) {
         map.off('styledata', syncBasemapFromState);
         map.off('idle', syncBasemapFromState);
@@ -895,6 +1114,16 @@ export function MapPanel() {
 
   useEffect(() => {
     if (mapCommandState.mapMode !== 'globe') {
+      const existing = cesiumRef.current;
+
+      if (existing && !existing.viewer.isDestroyed()) {
+        existing.viewer.imageryLayers.removeAll(true);
+        existing.viewer.dataSources.removeAll(true);
+        existing.viewer.scene.globe.show = false;
+        existing.viewer.resize?.();
+      }
+
+      setStatus('');
       return;
     }
 
@@ -939,23 +1168,34 @@ export function MapPanel() {
           return;
         }
 
+        cesium.viewer.scene.globe.show = true;
+
         const previous = cesiumSyncRef.current;
-        const imageryChanged = !previous || previous.imagery !== mapCommandState.cesiumImagery;
         const terrainChanged = !previous || previous.terrain !== mapCommandState.cesiumTerrain;
-
-        if (imageryChanged) {
-          await applyCesiumImagery(cesium.viewer, cesium.Cesium, mapCommandState.cesiumImagery);
-        }
-
-        if (isCancelled || syncGeneration !== cesiumSyncGenerationRef.current) {
-          return;
-        }
+        const isActive = () => !isCancelled && syncGeneration === cesiumSyncGenerationRef.current;
 
         if (terrainChanged) {
           await applyCesiumTerrain(cesium.viewer, cesium.Cesium, mapCommandState.cesiumTerrain);
         }
 
-        if (isCancelled || syncGeneration !== cesiumSyncGenerationRef.current) {
+        if (!isActive()) {
+          return;
+        }
+
+        await syncCesiumScene(cesium.viewer, cesium.Cesium, {
+          entries: mapGroupRenderState.entries,
+          layerVisibility,
+          raster,
+          rasterLayerVisibility,
+          rasterStyle,
+          layers,
+          uploadedLayerStyles,
+          uploadedLayerVisibility,
+          vectorOverlay,
+          vectorOverlayStyle,
+        }, isActive);
+
+        if (!isActive()) {
           return;
         }
 
@@ -981,7 +1221,7 @@ export function MapPanel() {
       isCancelled = true;
       cesiumSyncGenerationRef.current += 1;
     };
-  }, [mapCommandState.cesiumImagery, mapCommandState.cesiumTerrain, mapCommandState.mapMode]);
+  }, [layerVisibility, layers, mapCommandState.cesiumTerrain, mapCommandState.mapMode, mapGroupRenderState.entries, raster, rasterLayerVisibility, rasterStyle.opacity, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay, vectorOverlayStyle]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1606,7 +1846,7 @@ function uploadedIdFromLayerId(layerId: string) {
 
 function syncMapGroupLayerOrder(
   map: maplibregl.Map,
-  entries: { id: string; layerId: string; basemapId?: BasemapId; visible: boolean; opacity?: number }[],
+  entries: { id: string; layerId: string; basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId; visible: boolean; opacity?: number }[],
   uploadedLayers: { id: string }[],
   rasterId: string | null,
   hasVectorOverlay: boolean,
@@ -1629,13 +1869,13 @@ function syncMapGroupLayerOrder(
 }
 
 function layerGroupIdsForEntry(
-  entry: { id: string; layerId: string; basemapId?: BasemapId },
+  entry: { id: string; layerId: string; basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId },
   uploadedIds: Set<string>,
   rasterId: string | null,
   hasVectorOverlay: boolean,
 ) {
   if (entry.layerId === 'basemap' && entry.basemapId) {
-    return getBasemapRenderLayerIds(entry.id, entry.basemapId);
+    return getBasemapRenderLayerIds(entry.id, entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId);
   }
 
   if (entry.layerId === 'vectorOverlay') {
@@ -1654,8 +1894,8 @@ function layerGroupIdsForEntry(
   return [];
 }
 
-function getBasemapRenderLayerIds(renderId: string, basemapId: BasemapId) {
-  return basemapLayerDefinitions[basemapId].map((definition) => getBasemapRenderLayerId(renderId, definition.suffix));
+function getBasemapRenderLayerIds(renderId: string, basemapSourceKind: BasemapSourceKind | undefined, basemapId: BasemapId, cesiumImageryId: CesiumImageryId | undefined) {
+  return getRasterBasemapDefinitions(basemapSourceKind, basemapId, cesiumImageryId).map((definition) => getBasemapRenderLayerId(renderId, definition.suffix));
 }
 
 function setLayersVisibility(map: maplibregl.Map, layerIds: string[], visible: boolean) {

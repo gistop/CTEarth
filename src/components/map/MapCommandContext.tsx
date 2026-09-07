@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState, type
 import { type CesiumImageryId, type CesiumTerrainId, defaultCesiumImageryId, defaultCesiumTerrainId } from './cesiumLayerOptions';
 import { defaultBasemapId } from './basemapOptions';
 import type { BasemapId } from './basemapOptions';
+import type { BasemapSourceKind } from './rasterBasemapSources';
 export type { BasemapId } from './basemapOptions';
 export type DisplayCrsId = 'webMercator' | 'wgs84' | 'epsg32651';
 export type MapViewMode = 'planar' | 'terrain' | 'globe';
@@ -20,6 +21,7 @@ export type MapCommands = Record<MapCommand, () => void> & {
 
 export type MapCommandState = {
   basemap: BasemapId;
+  basemapSourceKind: BasemapSourceKind;
   cesiumImagery: CesiumImageryId;
   cesiumTerrain: CesiumTerrainId;
   displayCrs: DisplayCrsId;
@@ -44,6 +46,7 @@ type MapCommandContextValue = {
 const MapCommandContext = createContext<MapCommandContextValue | null>(null);
 const defaultMapCommandState: MapCommandState = {
   basemap: defaultBasemapId,
+  basemapSourceKind: 'basemap',
   cesiumImagery: defaultCesiumImageryId,
   cesiumTerrain: defaultCesiumTerrainId,
   displayCrs: 'webMercator',
@@ -75,12 +78,12 @@ export function MapCommandProvider({ children }: { children: ReactNode }) {
   const locateByQuery = useCallback((query: string) => commandsRef.current?.locateByQuery(query) ?? Promise.resolve(false), []);
 
   const setBasemap = useCallback((basemap: BasemapId) => {
-    setMapCommandState((current) => ({ ...current, basemap }));
+    setMapCommandState((current) => ({ ...current, basemap, basemapSourceKind: 'basemap' }));
     commandsRef.current?.setBasemap(basemap);
   }, []);
 
   const setCesiumImagery = useCallback((imagery: CesiumImageryId) => {
-    setMapCommandState((current) => ({ ...current, cesiumImagery: imagery }));
+    setMapCommandState((current) => ({ ...current, basemapSourceKind: 'imagery', cesiumImagery: imagery }));
     commandsRef.current?.setCesiumImagery(imagery);
   }, []);
 

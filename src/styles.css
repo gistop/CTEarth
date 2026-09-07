@@ -2082,6 +2082,18 @@ button {
   font-size: 12px;
 }
 
+.layer-basemap-select {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid #b9c4ce;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #263849;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
 .layer-range-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;

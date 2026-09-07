@@ -1,9 +1,15 @@
 import type { LayerOrderId } from './gisStore';
+import type { CesiumImageryId } from './components/map/cesiumLayerOptions';
+import type { BasemapId } from './components/map/basemapOptions';
+import type { BasemapSourceKind } from './components/map/rasterBasemapSources';
 
 export type WorkspaceMapGroupLayerItem = {
   instanceId: string;
   layerId: LayerOrderId;
   visible: boolean;
+  basemapId?: BasemapId;
+  basemapSourceKind?: BasemapSourceKind;
+  cesiumImageryId?: CesiumImageryId;
   opacity?: number;
 };
 

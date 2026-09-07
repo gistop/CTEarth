@@ -21,11 +21,10 @@ import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, useGis } f
 import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
 import { useMapViewport } from './MapViewportContext';
 import { useMapGroupRenderState } from '../../mapGroupRenderState';
+import { getRasterBasemapDefinitions } from './rasterBasemapSources';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
-const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
-
 type OpenLayersProjectionMapProps = {
   basemap: BasemapId;
   displayCrs: DisplayCrsId;
@@ -212,18 +211,18 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
         return;
       }
 
-      openLayersBasemapLayerDefinitions[basemapId].forEach((definition) => {
+      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
         const layerId = getOpenLayersBasemapLayerId(entry.id, definition.suffix);
         expectedIds.add(layerId);
 
         let layer = basemapLayersRef.current.get(layerId);
 
         if (!layer) {
-          layer = createOpenLayersBasemapLayer(basemapId, definition.suffix);
+          layer = createOpenLayersBasemapLayer(definition);
           map.addLayer(layer);
           basemapLayersRef.current.set(layerId, layer);
         } else {
-          layer.setSource(createOpenLayersBasemapSource(basemapId, definition.suffix));
+          layer.setSource(createOpenLayersBasemapSource(definition));
         }
 
         layer.setVisible(entry.visible);
@@ -392,7 +391,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
 
       basemapZIndex = Math.max(basemapZIndex, entryZIndex);
 
-      openLayersBasemapLayerDefinitions[basemapId].forEach((definition) => {
+      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
         basemapLayersRef.current.get(getOpenLayersBasemapLayerId(entry.id, definition.suffix))?.setZIndex(entryZIndex);
       });
     });
@@ -416,63 +415,40 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   );
 });
 
-const openLayersBasemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource: () => OSM | XYZ }[]> = {
-  osm: [{
-    suffix: 'osm',
-    createSource: () => new OSM({ attributions: 'OpenStreetMap contributors' }),
-  }],
-  tianditu: [
-    {
-      suffix: 'tianditu-vec',
-      createSource: () => new XYZ({
-        urls: createTiandituTiles('vec'),
-        attributions: 'Tianditu',
-      }),
-    },
-    {
-      suffix: 'tianditu-cva',
-      createSource: () => new XYZ({
-        urls: createTiandituTiles('cva'),
-        attributions: 'Tianditu',
-      }),
-    },
-  ],
-  esri: [{
-    suffix: 'esri',
-    createSource: () => new XYZ({
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      attributions: 'Tiles Esri',
-    }),
-  }],
-};
-
-function createOpenLayersBasemapLayer(basemapId: BasemapId, suffix: string) {
+function createOpenLayersBasemapLayer(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
   return new TileLayer({
-    source: createOpenLayersBasemapSource(basemapId, suffix),
+    source: createOpenLayersBasemapSource(definition),
     visible: false,
   });
 }
 
-function createOpenLayersBasemapSource(basemapId: BasemapId, suffix: string) {
-  const definition = openLayersBasemapLayerDefinitions[basemapId].find((item) => item.suffix === suffix);
+function createOpenLayersBasemapSource(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
+  if (definition.urls) {
+    return new XYZ({
+      urls: definition.urls,
+      attributions: definition.attribution,
+      tileSize: definition.tileSize,
+      minZoom: definition.minZoom,
+      maxZoom: definition.maxZoom,
+    });
+  }
 
-  return definition?.createSource() ?? new OSM({ attributions: 'OpenStreetMap contributors' });
+  if (definition.url) {
+    return new XYZ({
+      url: definition.url,
+      attributions: definition.attribution,
+      tileSize: definition.tileSize,
+      minZoom: definition.minZoom,
+      maxZoom: definition.maxZoom,
+      ...(definition.scheme ? { tileUrlFunction: undefined } : {}),
+    });
+  }
+
+  return new OSM({ attributions: definition.attribution });
 }
 
 function getOpenLayersBasemapLayerId(renderId: string, suffix: string) {
   return `projection-basemap-${sanitizeOpenLayersLayerId(renderId)}-${suffix}`;
-}
-
-function createTiandituTiles(layer: 'vec' | 'cva') {
-  return Array.from(
-    { length: 8 },
-    (_, index) => (
-      `https://t${index}.tianditu.gov.cn/${layer}_w/wmts?` +
-      `SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}` +
-      `&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}` +
-      `&tk=${TIANDITU_TOKEN}`
-    ),
-  );
 }
 
 function sanitizeOpenLayersLayerId(id: string) {

@@ -24,9 +24,11 @@ import { MapGroupEditPanel } from './MapGroupEditPanel';
 import { MapGroupSplitButton } from './MapGroupSplitButton';
 import { MapGroupSection, type MapGroup, type MapGroupLayerItem, type MapGroupLayerItemId } from './MapGroupSection';
 import { SaveAsSplitButton } from './SaveAsSplitButton';
-import { useMapCommands } from '../map/MapCommandContext';
+import { useMapCommands, type MapViewMode } from '../map/MapCommandContext';
 import { useMapBasemapSelection } from '../map/MapBasemapSelectionContext';
-import { defaultBasemapId, getBasemapLabel, type BasemapId } from '../map/basemapOptions';
+import { basemapOptions, defaultBasemapId, getBasemapLabel, type BasemapId } from '../map/basemapOptions';
+import { cesiumImageryGroups, defaultCesiumImageryId, getCesiumImageryLabel, type CesiumImageryId } from '../map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../map/rasterBasemapSources';
 import {
   deleteMapGroupDraft,
   readMapGroupDraft,
@@ -58,7 +60,7 @@ import {
 type LayerGeometryKind = 'point' | 'line' | 'polygon' | 'mixed' | 'empty';
 
 type LayerListItem =
-  | { id: string; kind: 'basemap'; label: string; checked: boolean; basemapId: BasemapId; opacity: number }
+  | { id: string; kind: 'basemap'; label: string; checked: boolean; basemapId: BasemapId; basemapSourceKind: BasemapSourceKind; cesiumImageryId: CesiumImageryId; opacity: number }
   | { id: `uploaded:${string}`; kind: 'uploaded'; layer: UploadedLayer; label: string; checked: boolean; geometryKind: LayerGeometryKind }
   | { id: `raster:${string}`; kind: 'raster'; raster: RasterOverlay; label: string; checked: boolean }
   | { id: 'vectorOverlay'; kind: 'vectorOverlay'; label: string; checked: boolean; geometryKind: LayerGeometryKind };
@@ -145,8 +147,8 @@ export function LayerTree() {
     zoomToLayer,
     zoomToRaster,
   } = useGis();
-  const { mapCommandState, setBasemap } = useMapCommands();
-  const { registerBasemapChangeHandler } = useMapBasemapSelection();
+  const { mapCommandState, setBasemap, setCesiumImagery } = useMapCommands();
+  const { registerBasemapChangeHandler, registerBasemapImageryChangeHandler } = useMapBasemapSelection();
   const { openAttributeTable } = useAttributeTable();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -187,9 +189,11 @@ export function LayerTree() {
           ? {
             id: `${group.id}:${groupItem.instanceId}`,
             kind: 'basemap' as const,
-            label: `底图 · ${getBasemapLabel(groupItem.basemapId ?? defaultBasemapId)}`,
+            label: `底图 · ${getMapGroupBasemapLabel(groupItem.basemapId ?? defaultBasemapId, groupItem.basemapSourceKind ?? (groupItem.cesiumImageryId ? 'imagery' : 'basemap'), groupItem.cesiumImageryId ?? defaultCesiumImageryId)}`,
             checked: groupItem.visible,
             basemapId: groupItem.basemapId ?? defaultBasemapId,
+            basemapSourceKind: groupItem.basemapSourceKind ?? (groupItem.cesiumImageryId ? 'imagery' : 'basemap'),
+            cesiumImageryId: groupItem.cesiumImageryId ?? defaultCesiumImageryId,
             opacity: groupItem.opacity ?? defaultBasemapStyle.opacity,
           }
           : itemById.get(groupItem.layerId);
@@ -257,22 +261,26 @@ export function LayerTree() {
         return;
       }
 
+      applyBasemapItemChange(targetBasemapItem.groupId, targetBasemapItem.instanceId, { basemapId, basemapSourceKind: 'basemap' });
       setBasemap(basemapId);
-      setMapGroups((current) => current.map((group) => (
-        group.id === targetBasemapItem.groupId
-          ? {
-            ...group,
-            layerItems: group.layerItems.map((item) => (
-              item.instanceId === targetBasemapItem.instanceId
-                ? { ...item, basemapId }
-                : item
-            )),
-          }
-          : group
-      )));
       setSelectedItemId(targetBasemapItem.selectionId);
     });
   }, [currentMapGroupId, mapGroups, registerBasemapChangeHandler, selectedItemId, setBasemap]);
+
+  useEffect(() => {
+    return registerBasemapImageryChangeHandler((imageryId) => {
+      const targetBasemapItem = getTargetBasemapItem(mapGroups, currentMapGroupId, selectedItemId);
+
+      if (!targetBasemapItem) {
+        setCesiumImagery(imageryId);
+        return;
+      }
+
+      applyBasemapItemChange(targetBasemapItem.groupId, targetBasemapItem.instanceId, { cesiumImageryId: imageryId, basemapSourceKind: 'imagery' });
+      setCesiumImagery(imageryId);
+      setSelectedItemId(targetBasemapItem.selectionId);
+    });
+  }, [currentMapGroupId, mapGroups, registerBasemapImageryChangeHandler, selectedItemId, setCesiumImagery]);
 
   useEffect(() => {
     if (!workspaceDraftLoaded || !mapGroupDraftLoaded) {
@@ -295,7 +303,17 @@ export function LayerTree() {
     if (activeBasemapItem.basemapId !== mapCommandState.basemap) {
       setBasemap(activeBasemapItem.basemapId);
     }
-  }, [layerVisibility.basemap, mapCommandState.basemap, mapGroupDraftLoaded, mapGroups, setBasemap, setLayerVisibility, workspaceDraftLoaded]);
+    if (activeBasemapItem.basemapSourceKind !== mapCommandState.basemapSourceKind) {
+      if (activeBasemapItem.basemapSourceKind === 'imagery') {
+        setCesiumImagery(activeBasemapItem.cesiumImageryId);
+      } else {
+        setBasemap(activeBasemapItem.basemapId);
+      }
+    }
+    if (activeBasemapItem.cesiumImageryId !== mapCommandState.cesiumImagery) {
+      setCesiumImagery(activeBasemapItem.cesiumImageryId);
+    }
+  }, [layerVisibility.basemap, mapCommandState.basemap, mapCommandState.basemapSourceKind, mapCommandState.cesiumImagery, mapGroupDraftLoaded, mapGroups, setBasemap, setCesiumImagery, setLayerVisibility, workspaceDraftLoaded]);
 
   useEffect(() => {
     if (!workspaceDraftLoaded) {
@@ -581,7 +599,7 @@ export function LayerTree() {
       id,
       name,
       displayVisible: true,
-      layerItems: [createMapGroupLayerItem('basemap', mapCommandState.basemap)],
+      layerItems: [createMapGroupLayerItem('basemap', mapCommandState.basemap, mapCommandState.basemapSourceKind, mapCommandState.cesiumImagery)],
     };
 
     setMapGroups((current) => [...current, nextGroup]);
@@ -590,7 +608,7 @@ export function LayerTree() {
   };
 
   const handleAddBasemapToCurrentMapGroup = () => {
-    setMapGroups((current) => addBasemapLayerItemToCurrentGroup(current, currentMapGroupId, mapCommandState.basemap));
+    setMapGroups((current) => addBasemapLayerItemToCurrentGroup(current, currentMapGroupId, mapCommandState.basemap, mapCommandState.basemapSourceKind, mapCommandState.cesiumImagery));
     closeEditPanel();
   };
 
@@ -627,8 +645,45 @@ export function LayerTree() {
     setMapGroupLayerItemVisibility(groupId, groupItem, visible);
   };
 
-  const handleBasemapOpacityChange = (groupId: string, groupItem: MapGroupLayerItem, opacity: number) => {
-    setMapGroupLayerItemOpacity(groupId, groupItem, opacity);
+  const applyBasemapItemChange = (
+    groupId: string,
+    instanceId: string,
+    patch: { basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId; opacity?: number },
+  ) => {
+    setMapGroups((current) => current.map((group) => (
+      group.id === groupId
+        ? {
+          ...group,
+          layerItems: group.layerItems.map((item) => (
+            item.instanceId === instanceId
+              ? {
+                ...item,
+                ...(typeof patch.opacity === 'number' ? { opacity: patch.opacity } : {}),
+                ...(patch.basemapId ? { basemapId: patch.basemapId } : {}),
+                ...(patch.basemapSourceKind ? { basemapSourceKind: patch.basemapSourceKind } : {}),
+                ...(patch.cesiumImageryId ? { cesiumImageryId: patch.cesiumImageryId } : {}),
+              }
+              : item
+          )),
+        }
+        : group
+    )));
+  };
+
+  const handleBasemapStyleChange = (
+    groupId: string,
+    groupItem: MapGroupLayerItem,
+    patch: Partial<BasemapLayerStyle> & { basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId },
+  ) => {
+    applyBasemapItemChange(groupId, groupItem.instanceId, patch);
+
+    if (patch.basemapId) {
+      setBasemap(patch.basemapId);
+    }
+
+    if (patch.basemapSourceKind === 'imagery' && patch.cesiumImageryId) {
+      setCesiumImagery(patch.cesiumImageryId);
+    }
   };
 
   const handleMapGroupVisibilityChange = (groupId: string, visible: boolean) => {
@@ -694,7 +749,7 @@ export function LayerTree() {
     }
 
     if (selectedBasemapItem) {
-      if (!window.confirm(`删除底图 · ${getBasemapLabel(selectedBasemapItem.basemapId)}？`)) {
+      if (!window.confirm(`删除底图 · ${getMapGroupBasemapLabel(selectedBasemapItem.basemapId, selectedBasemapItem.basemapSourceKind, selectedBasemapItem.cesiumImageryId)}？`)) {
         return;
       }
 
@@ -955,7 +1010,7 @@ export function LayerTree() {
               const isDropTarget = isSameDropTarget(dropTarget, { groupId: group.id, index: itemIndex });
               const isLayerDragActive = Boolean(draggingItem) && !draggingMapGroup;
               const layerLabel = item.kind === 'basemap'
-                ? `底图 · ${getBasemapLabel(item.basemapId)}`
+                ? `底图 · ${getMapGroupBasemapLabel(item.basemapId, item.basemapSourceKind, item.cesiumImageryId)}`
                 : item.label;
 
               return (
@@ -1054,13 +1109,15 @@ export function LayerTree() {
                     } else if (item.kind === 'vectorOverlay') {
                       setVectorOverlayStyle(defaultVectorOverlayStyle);
                     } else {
-                      handleBasemapOpacityChange(group.id, groupItem, defaultBasemapStyle.opacity);
+                      handleBasemapStyleChange(group.id, groupItem, {
+                        opacity: defaultBasemapStyle.opacity,
+                        basemapId: defaultBasemapId,
+                        cesiumImageryId: defaultCesiumImageryId,
+                      });
                     }
                   }}
                   onUpdateBasemap={(patch) => {
-                    if (typeof patch.opacity === 'number') {
-                      handleBasemapOpacityChange(group.id, groupItem, patch.opacity);
-                    }
+                    handleBasemapStyleChange(group.id, groupItem, patch);
                   }}
                   onUpdateRaster={setRasterStyle}
                   onUpdateUploaded={setUploadedLayerStyle}
@@ -1208,7 +1265,7 @@ function LayerStylePanel({
   vectorOverlayStyle: VectorOverlayStyle;
   onClose: () => void;
   onReset: () => void;
-  onUpdateBasemap: (patch: Partial<BasemapLayerStyle>) => void;
+  onUpdateBasemap: (patch: Partial<BasemapLayerStyle> & { basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId }) => void;
   onUpdateRaster: (patch: Partial<RasterLayerStyle>) => void;
   onUpdateUploaded: (id: string, patch: Partial<UploadedLayerStyle>) => void;
   onUpdateVectorOverlay: (patch: Partial<VectorOverlayStyle>) => void;
@@ -1240,6 +1297,9 @@ function LayerStylePanel({
       {item.kind === 'basemap' ? (
         <BasemapStyleEditor
           style={{ opacity: item.opacity }}
+          basemapId={item.basemapId}
+          basemapSourceKind={item.basemapSourceKind}
+          imageryId={item.cesiumImageryId}
           onChange={onUpdateBasemap}
         />
       ) : null}
@@ -1311,13 +1371,57 @@ function VectorOverlayStyleEditor({
 
 function BasemapStyleEditor({
   style,
+  basemapId,
+  basemapSourceKind,
+  imageryId,
   onChange,
 }: {
   style: BasemapLayerStyle;
-  onChange: (patch: Partial<BasemapLayerStyle>) => void;
+  basemapId: BasemapId;
+  basemapSourceKind: BasemapSourceKind;
+  imageryId: CesiumImageryId;
+  onChange: (patch: Partial<BasemapLayerStyle> & { basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId }) => void;
 }) {
+  const selectedValue = basemapSourceKind === 'imagery'
+    ? `imagery:${imageryId}`
+    : `basemap:${basemapId}`;
+
   return (
     <div className="layer-style-form">
+      <label className="layer-style-field">
+        <span>图源</span>
+        <select
+          className="layer-basemap-select"
+          value={selectedValue}
+          onChange={(event) => {
+            const [kind, rawValue] = event.target.value.split(':', 2);
+
+            if (kind === 'imagery') {
+              onChange({ cesiumImageryId: rawValue as CesiumImageryId, basemapSourceKind: 'imagery' });
+              return;
+            }
+
+            onChange({ basemapId: rawValue as BasemapId, basemapSourceKind: 'basemap' });
+          }}
+        >
+          <optgroup label="2D">
+            {basemapOptions.map((option) => (
+              <option key={option.id} value={`basemap:${option.id}`}>
+                {option.label}
+              </option>
+            ))}
+          </optgroup>
+          {cesiumImageryGroups.map((group) => (
+            <optgroup key={group.title} label={group.title}>
+              {group.options.map((option) => (
+                <option key={option.id} value={`imagery:${option.id}`}>
+                  {option.label}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
       <RangeControl label="透明度" value={style.opacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ opacity: value })} />
     </div>
   );
@@ -1611,18 +1715,31 @@ function createMapGroupId() {
   return `map-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function createMapGroupLayerItem(layerId: MapGroupLayerItemId, basemapId = defaultBasemapId): MapGroupLayerItem {
+function createMapGroupLayerItem(
+  layerId: MapGroupLayerItemId,
+  basemapId = defaultBasemapId,
+  basemapSourceKind: BasemapSourceKind = 'basemap',
+  cesiumImageryId = defaultCesiumImageryId,
+): MapGroupLayerItem {
   return {
     instanceId: `map-layer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     layerId,
     visible: true,
     basemapId: layerId === 'basemap' ? basemapId : undefined,
+    basemapSourceKind: layerId === 'basemap' ? basemapSourceKind : undefined,
+    cesiumImageryId: layerId === 'basemap' ? cesiumImageryId : undefined,
     opacity: layerId === 'basemap' ? defaultBasemapStyle.opacity : undefined,
   };
 }
 
-function addBasemapLayerItemToCurrentGroup(groups: MapGroup[], currentGroupId: string, basemapId: BasemapId) {
-  const nextBasemapItem = createMapGroupLayerItem('basemap', basemapId);
+function addBasemapLayerItemToCurrentGroup(
+  groups: MapGroup[],
+  currentGroupId: string,
+  basemapId: BasemapId,
+  basemapSourceKind: BasemapSourceKind,
+  cesiumImageryId: CesiumImageryId,
+) {
+  const nextBasemapItem = createMapGroupLayerItem('basemap', basemapId, basemapSourceKind, cesiumImageryId);
 
   return groups.map((group) => {
     if (group.id !== currentGroupId) {
@@ -1650,6 +1767,8 @@ function findSelectedBasemapItem(groups: MapGroup[], selectedItemId: string) {
           groupId: group.id,
           instanceId: item.instanceId,
           basemapId: item.basemapId ?? defaultBasemapId,
+          basemapSourceKind: item.basemapSourceKind ?? (item.cesiumImageryId ? 'imagery' : 'basemap'),
+          cesiumImageryId: item.cesiumImageryId ?? defaultCesiumImageryId,
           opacity: item.opacity ?? defaultBasemapStyle.opacity,
           selectionId: `${group.id}:${item.instanceId}`,
         };
@@ -1680,13 +1799,15 @@ function getTargetBasemapItem(groups: MapGroup[], currentMapGroupId: string, sel
     groupId: currentGroup.id,
     instanceId: currentBasemapItem.instanceId,
     basemapId: currentBasemapItem.basemapId ?? defaultBasemapId,
+    basemapSourceKind: currentBasemapItem.basemapSourceKind ?? (currentBasemapItem.cesiumImageryId ? 'imagery' : 'basemap'),
+    cesiumImageryId: currentBasemapItem.cesiumImageryId ?? defaultCesiumImageryId,
     opacity: currentBasemapItem.opacity ?? defaultBasemapStyle.opacity,
     selectionId: `${currentGroup.id}:${currentBasemapItem.instanceId}`,
   };
 }
 
-function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId: string; basemapId: BasemapId; opacity: number; selectionId: string } | null {
-  let activeBasemapItem: { groupId: string; instanceId: string; basemapId: BasemapId; opacity: number; selectionId: string } | null = null;
+function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId: string; basemapId: BasemapId; basemapSourceKind: BasemapSourceKind; cesiumImageryId: CesiumImageryId; opacity: number; selectionId: string } | null {
+  let activeBasemapItem: { groupId: string; instanceId: string; basemapId: BasemapId; basemapSourceKind: BasemapSourceKind; cesiumImageryId: CesiumImageryId; opacity: number; selectionId: string } | null = null;
 
   groups.forEach((group) => {
     if (group.displayVisible === false) {
@@ -1702,6 +1823,8 @@ function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId
         groupId: group.id,
         instanceId: item.instanceId,
         basemapId: item.basemapId ?? defaultBasemapId,
+        basemapSourceKind: item.basemapSourceKind ?? (item.cesiumImageryId ? 'imagery' : 'basemap'),
+        cesiumImageryId: item.cesiumImageryId ?? defaultCesiumImageryId,
         opacity: item.opacity ?? defaultBasemapStyle.opacity,
         selectionId: `${group.id}:${item.instanceId}`,
       };
@@ -1709,6 +1832,14 @@ function getActiveBasemapItem(groups: MapGroup[]): { groupId: string; instanceId
   });
 
   return activeBasemapItem;
+}
+
+function getMapGroupBasemapLabel(basemapId: BasemapId, basemapSourceKind: BasemapSourceKind, cesiumImageryId: CesiumImageryId) {
+  if (basemapSourceKind === 'imagery') {
+    return getCesiumImageryLabel(cesiumImageryId);
+  }
+
+  return getBasemapLabel(basemapId);
 }
 
 function isSameLayerDragState(left: LayerDragState | null, right: { groupId: string; index: number }) {
@@ -1839,7 +1970,14 @@ function normalizeMapGroups(groups: MapGroup[]) {
     displayVisible: group.displayVisible ?? true,
     layerItems: group.layerItems.map((item) => (
       item.layerId === 'basemap'
-        ? { ...item, visible: item.visible ?? true, opacity: item.opacity ?? defaultBasemapStyle.opacity }
+        ? {
+          ...item,
+          visible: item.visible ?? true,
+          basemapId: item.basemapId ?? defaultBasemapId,
+          basemapSourceKind: item.basemapSourceKind ?? 'basemap',
+          cesiumImageryId: item.cesiumImageryId ?? defaultCesiumImageryId,
+          opacity: item.opacity ?? defaultBasemapStyle.opacity,
+        }
         : item
     )),
   }));
@@ -1947,6 +2085,8 @@ function buildLayerItems({
         label: '底图',
         checked: layerVisibility.basemap,
         basemapId: defaultBasemapId,
+        basemapSourceKind: 'basemap',
+        cesiumImageryId: defaultCesiumImageryId,
         opacity: defaultBasemapStyle.opacity,
       });
       continue;

@@ -2,6 +2,8 @@ import { useEffect, useRef, type DragEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Settings, Square, SquareCheckBig } from 'lucide-react';
 import type { LayerOrderId } from '../../gisStore';
 import type { BasemapId } from '../map/basemapOptions';
+import type { CesiumImageryId } from '../map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../map/rasterBasemapSources';
 
 export type MapGroupLayerItemId = Exclude<LayerOrderId, 'raster'>;
 
@@ -10,6 +12,8 @@ export type MapGroupLayerItem = {
   layerId: MapGroupLayerItemId;
   visible: boolean;
   basemapId?: BasemapId;
+  basemapSourceKind?: BasemapSourceKind;
+  cesiumImageryId?: CesiumImageryId;
   opacity?: number;
 };
 

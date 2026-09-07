@@ -22,6 +22,7 @@ import type { BasemapId } from '../map/MapCommandContext';
 import { defaultUploadedLayerStyle, useGis, type UploadedLayerStyle, type VectorOverlayStyle } from '../../gisStore';
 import { useMapGroupRenderState } from '../../mapGroupRenderState';
 import { useLayout } from './LayoutPanel';
+import { getRasterBasemapDefinitions } from '../map/rasterBasemapSources';
 
 const layoutPreviewCenter: [number, number] = [10.4515, 51.1657];
 const layoutPreviewZoom = 5.3;
@@ -237,18 +238,18 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
         return;
       }
 
-      layoutBasemapLayerDefinitions[basemapId].forEach((definition) => {
+      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
         const layerId = getLayoutBasemapLayerId(entry.id, definition.suffix);
         expectedIds.add(layerId);
 
         let layer = basemapLayersRef.current.get(layerId);
 
         if (!layer) {
-          layer = createLayoutBasemapLayer(basemapId, definition.suffix);
+          layer = createLayoutBasemapLayer(definition);
           map.addLayer(layer);
           basemapLayersRef.current.set(layerId, layer);
         } else {
-          layer.setSource(createLayoutBasemapSource(basemapId, definition.suffix));
+          layer.setSource(createLayoutBasemapSource(definition));
         }
 
         layer.setVisible(entry.visible);
@@ -402,7 +403,7 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
       const entryZIndex = zIndexByEntryId.get(entry.id) ?? 0;
       basemapZIndex = Math.max(basemapZIndex, entryZIndex);
 
-      layoutBasemapLayerDefinitions[entry.basemapId].forEach((definition) => {
+      getRasterBasemapDefinitions(entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId).forEach((definition) => {
         basemapLayersRef.current.get(getLayoutBasemapLayerId(entry.id, definition.suffix))?.setZIndex(entryZIndex);
       });
     });
@@ -475,66 +476,42 @@ export function LayoutMapPreview({ northArrowTarget, scaleBarTarget }: LayoutMap
   return <div ref={containerRef} className="layout-map-preview-map" aria-hidden="true" />;
 }
 
-const layoutBasemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource: () => OSM | XYZ }[]> = {
-  osm: [{
-    suffix: 'osm',
-    createSource: () => new OSM({ attributions: 'OpenStreetMap contributors', crossOrigin: 'anonymous' }),
-  }],
-  tianditu: [
-    {
-      suffix: 'tianditu-vec',
-      createSource: () => new XYZ({
-        urls: createLayoutTiandituTiles('vec'),
-        crossOrigin: 'anonymous',
-        attributions: '天地图',
-      }),
-    },
-    {
-      suffix: 'tianditu-cva',
-      createSource: () => new XYZ({
-        urls: createLayoutTiandituTiles('cva'),
-        crossOrigin: 'anonymous',
-        attributions: '天地图',
-      }),
-    },
-  ],
-  esri: [{
-    suffix: 'esri',
-    createSource: () => new XYZ({
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      crossOrigin: 'anonymous',
-      attributions: 'Tiles Esri',
-    }),
-  }],
-};
-
-function createLayoutBasemapLayer(basemapId: BasemapId, suffix: string) {
+function createLayoutBasemapLayer(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
   return new TileLayer({
-    source: createLayoutBasemapSource(basemapId, suffix),
+    source: createLayoutBasemapSource(definition),
     visible: false,
   });
 }
 
-function createLayoutBasemapSource(basemapId: BasemapId, suffix: string) {
-  const definition = layoutBasemapLayerDefinitions[basemapId].find((item) => item.suffix === suffix);
+function createLayoutBasemapSource(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
+  if (definition.urls) {
+    return new XYZ({
+      urls: definition.urls,
+      crossOrigin: 'anonymous',
+      attributions: definition.attribution,
+      tileSize: definition.tileSize,
+      minZoom: definition.minZoom,
+      maxZoom: definition.maxZoom,
+    });
+  }
 
-  return definition?.createSource() ?? new OSM({ attributions: 'OpenStreetMap contributors', crossOrigin: 'anonymous' });
+  if (definition.url) {
+    return new XYZ({
+      url: definition.url,
+      crossOrigin: 'anonymous',
+      attributions: definition.attribution,
+      tileSize: definition.tileSize,
+      minZoom: definition.minZoom,
+      maxZoom: definition.maxZoom,
+      ...(definition.scheme ? { tileUrlFunction: undefined } : {}),
+    });
+  }
+
+  return new OSM({ attributions: definition.attribution, crossOrigin: 'anonymous' });
 }
 
 function getLayoutBasemapLayerId(renderId: string, suffix: string) {
   return `layout-basemap-${sanitizeLayoutLayerId(renderId)}-${suffix}`;
-}
-
-function createLayoutTiandituTiles(layer: 'vec' | 'cva') {
-  return Array.from(
-    { length: 8 },
-    (_, index) => (
-      `https://t${index}.tianditu.gov.cn/${layer}_w/wmts?` +
-      `SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}` +
-      `&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}` +
-      `&tk=fa7482bbcd44e52cb5fb76cde5e7c83e`
-    ),
-  );
 }
 
 function sanitizeLayoutLayerId(id: string) {
