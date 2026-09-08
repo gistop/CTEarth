@@ -57,6 +57,8 @@ import { MapPanel } from './components/MapPanel';
 import { CoordinateSystemControls as MapCoordinateSystemControls } from './components/map/CoordinateSystemControls';
 import { GlobeLocateSearchButton } from './components/map/GlobeLocateSearchButton';
 import { MapLayerMenu } from './components/map/MapLayerMenu';
+import { MapMeasureButton } from './components/map/MapMeasureButton';
+import { MapMeasureProvider } from './components/map/MapMeasureContext';
 import { MapBasemapSelectionProvider } from './components/map/MapBasemapSelectionContext';
 import type { OpenLayersProjectionMapHandle } from './components/map/OpenLayersProjectionMap';
 import {
@@ -2490,6 +2492,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
 
         return (
           <Fragment key={tool.command}>
+            {tool.command === 'resetNorth' ? <MapMeasureButton /> : null}
             <button
               className={isActive ? 'is-active' : undefined}
               type="button"
@@ -2858,6 +2861,7 @@ export default function App() {
       <MapViewportProvider>
         <MapCommandProvider>
           <MapBasemapSelectionProvider>
+            <MapMeasureProvider>
             <MapSelectionProvider>
             <MapIdentifyProvider>
             <DigitizeProvider>
@@ -2895,6 +2899,7 @@ export default function App() {
             </DigitizeProvider>
             </MapIdentifyProvider>
             </MapSelectionProvider>
+            </MapMeasureProvider>
           </MapBasemapSelectionProvider>
         </MapCommandProvider>
       </MapViewportProvider>

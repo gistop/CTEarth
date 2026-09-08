@@ -2335,6 +2335,323 @@ button {
   font-size: 12px;
 }
 
+.map-measure-panel {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 8;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  width: min(324px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: hidden;
+  border: 1px solid #cbd4dc;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 8px 18px rgb(23 32 42 / 16%);
+  color: #263544;
+}
+
+.map-measure-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 34px;
+  min-width: 0;
+  padding: 0 7px 0 10px;
+  border-bottom: 1px solid #e0e6ec;
+}
+
+.map-measure-panel-header > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #34495e;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.map-measure-panel-header button,
+.map-measure-footer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 24px;
+  min-width: 0;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #536273;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.map-measure-panel-header button {
+  width: 24px;
+  padding: 0;
+}
+
+.map-measure-panel-header button:hover,
+.map-measure-footer button:hover:not(:disabled),
+.map-measure-tabs button:hover,
+.map-measure-choice-group button:hover {
+  border-color: #b6d8ec;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.map-measure-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid #e0e6ec;
+}
+
+.map-measure-tabs button,
+.map-measure-choice-group button {
+  height: 28px;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: #34495e;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.map-measure-tabs button.is-selected,
+.map-measure-choice-group button.is-selected {
+  border-color: #a8cce4;
+  background: #dff0fb;
+  color: #0f5d8e;
+  font-weight: 600;
+}
+
+.map-measure-choice-group button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.map-measure-body {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 8px;
+}
+
+.map-measure-overview,
+.map-measure-mode {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.map-measure-overview-title,
+.map-measure-mode-title,
+.map-measure-result-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #6b7785;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.map-measure-overview-map {
+  position: relative;
+  width: 100%;
+  height: 128px;
+  overflow: hidden;
+  border: 1px solid #cfd8e2;
+  border-radius: 4px;
+  background: #d7e8f7;
+}
+
+.map-measure-overview-map .maplibregl-control-container {
+  display: none;
+}
+
+.map-measure-overview-map .cesium-viewer,
+.map-measure-overview-map .cesium-viewer-cesiumWidgetContainer,
+.map-measure-overview-map .cesium-widget,
+.map-measure-overview-map canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.map-measure-overview-map .cesium-viewer-bottom {
+  display: none;
+}
+
+.map-measure-overview-credits {
+  display: none;
+}
+
+.map-measure-overview-crosshair {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.map-measure-overview-crosshair::before,
+.map-measure-overview-crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgb(15 118 110 / 76%);
+}
+
+.map-measure-overview-crosshair::before {
+  top: 50%;
+  left: calc(50% - 7px);
+  width: 14px;
+  height: 1px;
+}
+
+.map-measure-overview-crosshair::after {
+  top: calc(50% - 7px);
+  left: 50%;
+  width: 1px;
+  height: 14px;
+}
+
+.map-measure-overview-readout {
+  min-height: 18px;
+  padding: 3px 6px;
+  border: 1px solid #e0e6ec;
+  border-radius: 3px;
+  background: #f6f9fb;
+  color: #526170;
+  font-size: 11px;
+  text-align: center;
+}
+
+.map-measure-choice-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.map-measure-coordinate-grid {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid #e0e6ec;
+  border-radius: 4px;
+  background: #f8fafb;
+}
+
+.map-measure-coordinate-grid label {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.map-measure-coordinate-grid label > span {
+  color: #758393;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.map-measure-coordinate-grid input {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 0 7px;
+  border: 1px solid #c5d0da;
+  border-radius: 3px;
+  background: #ffffff;
+  color: #263544;
+  font-size: 12px;
+  outline: 0;
+}
+
+.map-measure-coordinate-grid input:focus {
+  border-color: #8fc4e5;
+  box-shadow: 0 0 0 2px rgb(143 196 229 / 22%);
+}
+
+.map-measure-result {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid #e0e6ec;
+  border-radius: 4px;
+  background: #f8fafb;
+}
+
+.map-measure-result dl {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.map-measure-result dl > div {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.map-measure-result dt {
+  color: #758393;
+  font-size: 11px;
+}
+
+.map-measure-result dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #263544;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.map-measure-placeholder {
+  min-height: 48px;
+  padding: 8px;
+  border: 1px dashed #c8d4df;
+  border-radius: 4px;
+  background: #f8fafb;
+  color: #6b7785;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.map-measure-footer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 6px 7px;
+  border-top: 1px solid #e0e6ec;
+}
+
+.map-measure-footer button:last-child {
+  margin-left: auto;
+}
+
+.map-measure-footer button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.maplibregl-canvas.is-measuring-distance {
+  cursor: crosshair;
+}
+
 .map-identify-maplibre-popup .maplibregl-popup-content,
 .ol-overlay-container .map-identify-popup {
   padding: 0;

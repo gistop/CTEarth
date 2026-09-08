@@ -6,7 +6,10 @@ import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeM
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
-import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumLayerNamespace, type CesiumTerrainId } from './map/cesiumLayerOptions';
+import { MapMeasurePanel } from './map/MapMeasurePanel';
+import { useMapMeasure } from './map/MapMeasureContext';
+import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
+import { configureCesiumIonToken, loadCesium, type CesiumNamespace, type CesiumViewer } from './map/cesiumRuntime';
 import { getRasterBasemapDefinitions, type BasemapSourceKind, type RasterBasemapTileDefinition } from './map/rasterBasemapSources';
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
@@ -16,7 +19,6 @@ import type { UploadedLayer } from '../gisStore';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
-const CESIUM_BASE_URL = '/cesium/';
 const TERRAIN_DEM_SOURCE_ID = 'terrain-dem';
 const TERRAIN_HILLSHADE_SOURCE_ID = 'terrain-hillshade-dem';
 const TERRAIN_HILLSHADE_LAYER_ID = 'terrain-hillshade';
@@ -29,38 +31,6 @@ const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
 const OpenLayersDigitizeMap = lazy(() => (
   import('./digitize/OpenLayersDigitizeMap').then((module) => ({ default: module.OpenLayersDigitizeMap }))
 ));
-
-type CesiumViewer = {
-  camera: {
-    positionCartographic: { height: number };
-    zoomIn: (amount?: number) => void;
-    zoomOut: (amount?: number) => void;
-    flyTo: (options: { destination: unknown; duration?: number }) => void;
-  };
-  screenSpaceEventHandler: {
-    setInputAction: (callback: () => void, type: unknown) => void;
-  };
-  imageryLayers: {
-    removeAll: (destroy?: boolean) => void;
-    addImageryProvider: (provider: unknown) => unknown;
-  };
-  dataSources: {
-    add: (dataSource: unknown) => Promise<unknown>;
-    removeAll: (destroy?: boolean) => void;
-  };
-  terrainProvider: unknown;
-  scene: {
-    backgroundColor: unknown;
-    globe: {
-      baseColor: unknown;
-      enableLighting: boolean;
-      show: boolean;
-    };
-  };
-  destroy: () => void;
-  isDestroyed: () => boolean;
-  resize?: () => void;
-};
 
 type CesiumImageryLayerLike = {
   alpha: number;
@@ -77,102 +47,11 @@ type CesiumLayerEntryState = {
   raster?: unknown;
 };
 
-type CesiumNamespace = CesiumLayerNamespace & {
-  Viewer: new (container: HTMLElement, options: Record<string, unknown>) => CesiumViewer;
-  ImageryLayer: new (provider: unknown) => unknown;
-  SingleTileImageryProvider: new (options: Record<string, unknown>) => unknown;
-  GeoJsonDataSource: {
-    load: (data: unknown, options?: Record<string, unknown>) => Promise<unknown>;
-  };
-  WebMapTileServiceImageryProvider: new (options: Record<string, unknown>) => unknown;
-  Rectangle: {
-    fromDegrees: (west: number, south: number, east: number, north: number) => unknown;
-  };
-  Cartesian3: {
-    fromDegrees: (longitude: number, latitude: number, height: number) => unknown;
-  };
-  Color: {
-    LIGHTGREY: unknown;
-    SKYBLUE: unknown;
-    fromAlpha: (color: unknown, alpha: number) => unknown;
-    fromCssColorString: (color: string) => unknown;
-  };
-  Ion?: {
-    defaultAccessToken: string;
-  };
-  ScreenSpaceEventType: {
-    LEFT_DOUBLE_CLICK: unknown;
-  };
-};
-
 type NominatimSearchResult = {
   boundingbox?: [string, string, string, string];
   lat: string;
   lon: string;
 };
-
-declare global {
-  interface Window {
-    CESIUM_BASE_URL?: string;
-    Cesium?: CesiumNamespace;
-  }
-}
-
-let cesiumLoadPromise: Promise<CesiumNamespace> | null = null;
-
-function loadCesium() {
-  if (window.Cesium) {
-    return Promise.resolve(window.Cesium);
-  }
-
-  if (cesiumLoadPromise) {
-    return cesiumLoadPromise;
-  }
-
-  window.CESIUM_BASE_URL = CESIUM_BASE_URL;
-
-  cesiumLoadPromise = new Promise<CesiumNamespace>((resolve, reject) => {
-    const existingStyle = document.getElementById('cesium-widgets-css');
-
-    if (!existingStyle) {
-      const link = document.createElement('link');
-      link.id = 'cesium-widgets-css';
-      link.rel = 'stylesheet';
-      link.href = `${CESIUM_BASE_URL}Widgets/widgets.css`;
-      document.head.appendChild(link);
-    }
-
-    const existingScript = document.getElementById('cesium-runtime') as HTMLScriptElement | null;
-
-    if (existingScript) {
-      existingScript.addEventListener('load', () => {
-        if (window.Cesium) {
-          resolve(window.Cesium);
-        } else {
-          reject(new Error('Cesium runtime loaded without window.Cesium'));
-        }
-      }, { once: true });
-      existingScript.addEventListener('error', () => reject(new Error('Cesium runtime failed to load')), { once: true });
-      return;
-    }
-
-    const script = document.createElement('script');
-    script.id = 'cesium-runtime';
-    script.src = `${CESIUM_BASE_URL}Cesium.js`;
-    script.async = true;
-    script.onload = () => {
-      if (window.Cesium) {
-        resolve(window.Cesium);
-      } else {
-        reject(new Error('Cesium runtime loaded without window.Cesium'));
-      }
-    };
-    script.onerror = () => reject(new Error('Cesium runtime failed to load'));
-    document.body.appendChild(script);
-  });
-
-  return cesiumLoadPromise;
-}
 
 function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
   const viewer = new Cesium.Viewer(container, {
@@ -190,7 +69,8 @@ function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
     terrainProvider: new Cesium.EllipsoidTerrainProvider(),
   });
 
-  viewer.scene.globe.enableLighting = true;
+  viewer.scene.globe.enableLighting = false;
+  viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.globe.show = true;
   viewer.scene.backgroundColor = Cesium.Color.SKYBLUE;
   viewer.scene.globe.baseColor = Cesium.Color.LIGHTGREY;
@@ -201,14 +81,6 @@ function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
   flyCesiumToChina(viewer, Cesium, 1.6);
 
   return viewer;
-}
-
-function configureCesiumIonToken(Cesium: CesiumNamespace) {
-  const token = (import.meta.env.VITE_CESIUM_ION_TOKEN ?? '').trim();
-
-  if (token && Cesium.Ion) {
-    Cesium.Ion.defaultAccessToken = token;
-  }
 }
 
 async function applyCesiumImagery(viewer: CesiumViewer, Cesium: CesiumNamespace, imagery: CesiumImageryId) {
@@ -799,6 +671,7 @@ export function MapPanel() {
   const lastAutoFitRasterIdRef = useRef<string | null>(null);
   const { editingActive, status: digitizeStatus } = useDigitize();
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
+  const { isMeasureOpen, mode: measureMode } = useMapMeasure();
   const { identifyActive } = useMapIdentify();
   const { selectionActive } = useMapSelection();
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
@@ -828,8 +701,10 @@ export function MapPanel() {
   const [status, setStatus] = useState('\u6b63\u5728\u521d\u59cb\u5316\u5728\u7ebf\u5730\u56fe');
   const [hasLoadedDigitizeMap, setHasLoadedDigitizeMap] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-  const featureIdentifyActive = identifyActive && !editingActive && mapCommandState.mapMode !== 'globe';
-  const featureSelectionActive = selectionActive && !featureIdentifyActive && !editingActive && mapCommandState.mapMode !== 'globe';
+  const [cesiumScene, setCesiumScene] = useState<{ Cesium: CesiumNamespace; viewer: CesiumViewer } | null>(null);
+  const measureInteractionActive = isMeasureOpen && measureMode === 'distance';
+  const featureIdentifyActive = identifyActive && !editingActive && !measureInteractionActive && mapCommandState.mapMode !== 'globe';
+  const featureSelectionActive = selectionActive && !featureIdentifyActive && !editingActive && !measureInteractionActive && mapCommandState.mapMode !== 'globe';
   const selectionStatus = selectionActive
     ? mapCommandState.mapMode === 'globe'
       ? '\u9009\u62e9\u5de5\u5177\u6682\u4e0d\u652f\u6301\u4e09\u7ef4\u89c6\u56fe'
@@ -1010,6 +885,7 @@ export function MapPanel() {
         cesiumRef.current.viewer.destroy();
       }
       cesiumRef.current = null;
+      setCesiumScene(null);
       setMapReady(false);
     };
   }, []);
@@ -1116,13 +992,14 @@ export function MapPanel() {
     if (mapCommandState.mapMode !== 'globe') {
       const existing = cesiumRef.current;
 
-      if (existing && !existing.viewer.isDestroyed()) {
-        existing.viewer.imageryLayers.removeAll(true);
-        existing.viewer.dataSources.removeAll(true);
-        existing.viewer.scene.globe.show = false;
-        existing.viewer.resize?.();
-      }
+        if (existing && !existing.viewer.isDestroyed()) {
+          existing.viewer.imageryLayers.removeAll(true);
+          existing.viewer.dataSources.removeAll(true);
+          existing.viewer.scene.globe.show = false;
+          existing.viewer.resize?.();
+        }
 
+      setCesiumScene(null);
       setStatus('');
       return;
     }
@@ -1155,6 +1032,7 @@ export function MapPanel() {
             Cesium,
             viewer,
           };
+          setCesiumScene(cesiumRef.current);
           cesiumSyncRef.current = null;
         }
 
@@ -1168,6 +1046,7 @@ export function MapPanel() {
           return;
         }
 
+        setCesiumScene(cesium);
         cesium.viewer.scene.globe.show = true;
 
         const previous = cesiumSyncRef.current;
@@ -1650,6 +1529,7 @@ export function MapPanel() {
         </Suspense>
       ) : null}
       <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
+      <MapMeasurePanel cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       {editingActive || selectionStatus || status ? (
         <div className="map-status">{editingActive ? digitizeStatus : selectionStatus || status}</div>
       ) : null}
