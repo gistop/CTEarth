@@ -47,6 +47,7 @@ export type CesiumViewer = {
       };
     };
     pick?: (windowPosition: unknown) => { id?: unknown } | undefined;
+    pickPosition?: (windowPosition: unknown) => unknown;
     requestRender?: () => void;
     screenSpaceCameraController?: {
       enableInputs: boolean;
@@ -76,11 +77,13 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   Cartesian3: {
     new (x?: number, y?: number, z?: number): unknown;
     UNIT_X: unknown;
+    UNIT_Y: unknown;
     UNIT_Z: unknown;
     add: (left: unknown, right: unknown, result: unknown) => unknown;
     clone: (cartesian: unknown) => unknown;
     cross: (left: unknown, right: unknown, result: unknown) => unknown;
     distance: (left: unknown, right: unknown) => number;
+    dot: (left: unknown, right: unknown) => number;
     fromDegrees: (longitude: number, latitude: number, height: number) => unknown;
     fromRadians: (longitude: number, latitude: number, height: number) => unknown;
     magnitude: (cartesian: unknown) => number;

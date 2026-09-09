@@ -5,6 +5,12 @@ import { useMapCommands, type MapViewMode } from './MapCommandContext';
 import { useMapMeasure, type MeasureMode } from './MapMeasureContext';
 import { loadCesium, type CesiumNamespace, type CesiumViewer } from './cesiumRuntime';
 import { getRasterBasemapDefinitions, type RasterBasemapTileDefinition } from './rasterBasemapSources';
+import { DistanceMeasurementResults } from './DistanceMeasurementResults';
+import {
+  createDefaultDistanceMeasurementStyle,
+  type CompletedDistanceMeasurement,
+  type DistanceMeasurementStyle,
+} from './distanceMeasurement';
 
 type MeasurePoint = {
   height: number;
@@ -27,8 +33,7 @@ type DistanceDimensionAnnotation = {
 type DistanceDimensionDragState = {
   annotation: DistanceDimensionAnnotation | null;
   cursorWasEnabled: boolean | undefined;
-  startOffset: number;
-  startY: number;
+  lastY: number;
 };
 
 type MapMeasurePanelProps = {
@@ -62,6 +67,15 @@ const VERTICAL_AXIS_ABOVE_GROUND_METERS = 25_000;
 const CESIUM_LINE_TERRAIN_SAMPLE_SPACING_METERS = 250;
 const CESIUM_LINE_TERRAIN_SAMPLE_MIN_COUNT = 32;
 const CESIUM_LINE_TERRAIN_SAMPLE_MAX_COUNT = 192;
+const CESIUM_DIMENSION_DRAG_VIEW_GAIN = 0.2;
+const CESIUM_DIMENSION_DRAG_FINE_GAIN = 0.1;
+const CESIUM_DIMENSION_DRAG_DISTANCE_PIXELS = 1000;
+const CESIUM_DIMENSION_DRAG_MIN_DISTANCE_SCALE = 0.05;
+const CESIUM_DIMENSION_MAX_OFFSET_DISTANCE_RATIO = 0.5;
+const CESIUM_DIMENSION_MAX_OFFSET_DEFAULT_MULTIPLIER = 5;
+const CESIUM_DIMENSION_HANDLE_PIXEL_SIZE = 16;
+const CESIUM_DIMENSION_LINE_COLOR = '#46ddff';
+const CESIUM_DIMENSION_EXTENSION_COLOR = '#8ceaff';
 
 export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeasurePanelProps) {
   const { closeMeasure, isMeasureOpen, mode, setMode } = useMapMeasure();
@@ -76,11 +90,11 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
   const dimensionDragRef = useRef<DistanceDimensionDragState>({
     annotation: null,
     cursorWasEnabled: undefined,
-    startOffset: 0,
-    startY: 0,
+    lastY: 0,
   });
   const [distanceKind, setDistanceKind] = useState<DistanceKind>('surface');
   const [isDrawingFinished, setIsDrawingFinished] = useState(false);
+  const [completedMeasurements, setCompletedMeasurements] = useState<CompletedDistanceMeasurement[]>([]);
   const isDistanceMode = isMeasureOpen && mode === 'distance';
   const isDistanceReady = isDistanceMode && (
     (mapMode === 'globe' && Boolean(cesiumScene))
@@ -144,16 +158,28 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
   }, [locatorDraft]);
 
   const finish = useCallback(() => {
-    if (mapMode === 'globe' && locatorDraft && isSelectingHeight) {
-      confirmLocatorPoint();
-      return;
-    }
+    const pointsToCommit = mapMode === 'globe' && locatorDraft && isSelectingHeight
+      ? appendMeasurePoint(points, locatorDraft)
+      : points;
 
+    if (pointsToCommit.length >= 2 && !isDrawingFinished) {
+      setCompletedMeasurements((current) => [...current, {
+        id: `measurement-${Date.now()}-${current.length}`,
+        isVisible: true,
+        name: `测量 ${current.length + 1}`,
+        points: pointsToCommit.map((point) => ({ ...point })),
+        style: createDefaultDistanceMeasurementStyle(),
+        totalDistance: measureDistance(pointsToCommit, distanceKind),
+      }]);
+    }
+    if (pointsToCommit !== points) {
+      setPoints(pointsToCommit);
+    }
     setPreviewPoint(null);
     setLocatorDraft(null);
     setIsSelectingHeight(false);
-    setIsDrawingFinished(true);
-  }, [confirmLocatorPoint, isSelectingHeight, locatorDraft, mapMode]);
+    setIsDrawingFinished(pointsToCommit.length >= 2);
+  }, [distanceKind, isDrawingFinished, isSelectingHeight, locatorDraft, mapMode, points]);
 
   const handleOverviewPick = useCallback((point: MeasurePoint) => {
     const height = locatorCurrentHeightRef.current;
@@ -195,7 +221,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
   }, [isDistanceMode, mapMode]);
 
   useEffect(() => {
-    if (!cesiumScene || !isDistanceMode || mapMode !== 'globe') {
+    if (!cesiumScene || !isDistanceMode || mapMode !== 'globe' || isDrawingFinished) {
       return;
     }
 
@@ -337,7 +363,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
   }, [closeMeasure, finish, isDistanceReady, isDrawingFinished, map, mapMode, points.length]);
 
   useEffect(() => {
-    if (!cesiumScene || !isDistanceMode || mapMode !== 'globe') {
+    if (!cesiumScene || !isDistanceMode || mapMode !== 'globe' || isDrawingFinished) {
       return;
     }
 
@@ -350,6 +376,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
       distanceKind,
       isSelectingHeight,
       dimensionOffsetsRef.current,
+      undefined,
     );
 
     return () => {
@@ -357,7 +384,31 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
         cesiumScene.viewer.entities.remove(entity);
       });
     };
-  }, [cesiumScene, distanceKind, globePreviewPoint, isDistanceMode, isSelectingHeight, mapMode, points, previewResult, terrainRevision]);
+  }, [cesiumScene, distanceKind, globePreviewPoint, isDistanceMode, isDrawingFinished, isSelectingHeight, mapMode, points, previewResult, terrainRevision]);
+
+  useEffect(() => {
+    if (!cesiumScene || !isDistanceMode || mapMode !== 'globe') {
+      return;
+    }
+
+    const entities = completedMeasurements
+      .filter((measurement) => measurement.isVisible)
+      .flatMap((measurement) => createCesiumDistanceEntities(
+        cesiumScene.viewer,
+        cesiumScene.Cesium,
+        measurement.points,
+        null,
+        measurement.totalDistance,
+        'space',
+        false,
+        {},
+        measurement.style,
+      ));
+
+    return () => {
+      entities.forEach((entity) => cesiumScene.viewer.entities.remove(entity));
+    };
+  }, [cesiumScene, completedMeasurements, isDistanceMode, mapMode]);
 
   useEffect(() => {
     if (!cesiumScene || !isDistanceReady || mapMode !== 'globe') {
@@ -369,6 +420,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
     const previousCursor = viewer.canvas.style.cursor;
     const controller = viewer.scene.screenSpaceCameraController;
     const previousInputsEnabled = controller?.enableInputs;
+    let isFineAdjustment = false;
 
     viewer.canvas.style.cursor = isDrawingFinished ? '' : 'crosshair';
     if (controller && isSelectingHeight) {
@@ -378,7 +430,13 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
 
     handler.setInputAction((event) => {
       if (dimensionDragRef.current.annotation) {
-        updateDistanceDimensionDrag(viewer, event.endPosition, dimensionOffsetsRef.current, dimensionDragRef.current);
+        updateDistanceDimensionDrag(
+          viewer,
+          event.endPosition,
+          dimensionOffsetsRef.current,
+          dimensionDragRef.current,
+          isFineAdjustment,
+        );
         return;
       }
 
@@ -411,7 +469,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
 
     handler.setInputAction(() => {
       if (locatorDraft && isSelectingHeight && !isDrawingFinished) {
-        confirmLocatorPoint();
+        finish();
       } else if (points.length >= 2) {
         finish();
       }
@@ -419,13 +477,18 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
 
     handler.setInputAction(() => {
       if (locatorDraft && isSelectingHeight && !isDrawingFinished) {
-        confirmLocatorPoint();
+        finish();
       } else if (points.length >= 2) {
         finish();
       }
     }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        isFineAdjustment = true;
+        return;
+      }
+
       if (event.key !== 'Escape') {
         return;
       }
@@ -443,12 +506,26 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
       }
     };
 
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Shift') {
+        isFineAdjustment = false;
+      }
+    };
+
+    const handleWindowBlur = () => {
+      isFineAdjustment = false;
+    };
+
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
 
     return () => {
       endDistanceDimensionDrag(viewer, dimensionDragRef.current);
       handler.destroy();
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
       viewer.canvas.removeEventListener('contextmenu', preventDefault);
       viewer.canvas.style.cursor = previousCursor;
       if (controller && previousInputsEnabled !== undefined) {
@@ -514,6 +591,16 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
         ) : (
           <PlaceholderMeasureMode mode={mode} />
         )}
+        <DistanceMeasurementResults
+          measurements={completedMeasurements}
+          onRemove={(id) => setCompletedMeasurements((current) => current.filter((item) => item.id !== id))}
+          onStyleChange={(id, patch) => setCompletedMeasurements((current) => current.map((item) => (
+            item.id === id ? { ...item, style: { ...item.style, ...patch } } : item
+          )))}
+          onVisibilityChange={(id, isVisible) => setCompletedMeasurements((current) => current.map((item) => (
+            item.id === id ? { ...item, isVisible } : item
+          )))}
+        />
       </div>
 
       <footer className="map-measure-footer">
@@ -913,6 +1000,16 @@ function preventDefault(event: Event) {
   event.preventDefault();
 }
 
+function appendMeasurePoint(points: MeasurePoint[], nextPoint: MeasurePoint) {
+  const previous = points.at(-1);
+
+  if (previous && distanceBetweenSurfacePoints(previous, nextPoint) < 0.2) {
+    return points;
+  }
+
+  return [...points, nextPoint];
+}
+
 function pruneDimensionOffsets(dimensionOffsets: Record<string, number>, pointCount: number) {
   Object.keys(dimensionOffsets).forEach((key) => {
     const endIndex = Number(key.split(':')[1]);
@@ -997,8 +1094,22 @@ function syncCesiumOverviewFromCesiumGlobe(
     return null;
   }
 
+  const focus = getCesiumGlobeScreenCenter(mainViewer, Cesium);
+  const centerLon = focus?.lon ?? Cesium.Math.toDegrees((rectangle.west + rectangle.east) / 2);
+  const centerLat = focus?.lat ?? Cesium.Math.toDegrees((rectangle.south + rectangle.north) / 2);
+  const longitudeSpan = normalizeLongitudeSpan(
+    Cesium.Math.toDegrees(rectangle.east - rectangle.west),
+  );
+  const latitudeSpan = Cesium.Math.toDegrees(rectangle.north - rectangle.south);
+  const overviewRectangle = Cesium.Rectangle.fromDegrees(
+    clampLongitude(centerLon - longitudeSpan / 2),
+    clampLatitude(centerLat - latitudeSpan / 2),
+    clampLongitude(centerLon + longitudeSpan / 2),
+    clampLatitude(centerLat + latitudeSpan / 2),
+  );
+
   viewer.camera.setView({
-    destination: rectangle,
+    destination: overviewRectangle,
     orientation: {
       heading: 0,
       pitch: Cesium.Math.toRadians(-90),
@@ -1008,9 +1119,35 @@ function syncCesiumOverviewFromCesiumGlobe(
   viewer.scene.requestRender?.();
 
   return {
-    lat: Cesium.Math.toDegrees((rectangle.south + rectangle.north) / 2),
-    lon: Cesium.Math.toDegrees((rectangle.west + rectangle.east) / 2),
+    lat: centerLat,
+    lon: centerLon,
   };
+}
+
+function getCesiumGlobeScreenCenter(mainViewer: CesiumViewer, Cesium: CesiumNamespace) {
+  const canvas = mainViewer.canvas;
+  const screenCenter = new Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2);
+  const cartesian = mainViewer.scene.pickPosition?.(screenCenter)
+    ?? mainViewer.camera.pickEllipsoid?.(screenCenter, mainViewer.scene.globe.ellipsoid);
+
+  if (!cartesian) {
+    return null;
+  }
+
+  const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+
+  return {
+    lat: Cesium.Math.toDegrees(cartographic.latitude),
+    lon: Cesium.Math.toDegrees(cartographic.longitude),
+  };
+}
+
+function normalizeLongitudeSpan(span: number) {
+  if (!Number.isFinite(span)) {
+    return 0;
+  }
+
+  return span < 0 ? span + 360 : span;
 }
 
 function createOverviewImageryUrl(definition: RasterBasemapTileDefinition) {
@@ -1161,8 +1298,7 @@ function startDistanceDimensionDrag(
 
   dragState.annotation = annotation;
   dragState.cursorWasEnabled = controller?.enableInputs;
-  dragState.startOffset = annotation.offsetMeters;
-  dragState.startY = y;
+  dragState.lastY = y;
 
   if (controller) {
     controller.enableInputs = false;
@@ -1177,6 +1313,7 @@ function updateDistanceDimensionDrag(
   windowPosition: unknown,
   dimensionOffsets: Record<string, number>,
   dragState: DistanceDimensionDragState,
+  isFineAdjustment: boolean,
 ) {
   const y = getScreenY(windowPosition);
 
@@ -1184,12 +1321,32 @@ function updateDistanceDimensionDrag(
     return;
   }
 
-  const canvasHeight = Math.max(viewer.canvas.clientHeight || viewer.canvas.height, 1);
-  const metersPerPixel = Math.max(estimateCesiumViewRangeMeters(viewer) / canvasHeight, 0.1);
-  const nextOffset = dragState.startOffset + (dragState.startY - y) * metersPerPixel;
+  const annotation = dragState.annotation;
+  const deltaY = dragState.lastY - y;
+  dragState.lastY = y;
 
-  dragState.annotation.offsetMeters = nextOffset;
-  dimensionOffsets[dragState.annotation.id] = nextOffset;
+  if (deltaY === 0) {
+    return;
+  }
+
+  const canvasHeight = Math.max(viewer.canvas.clientHeight || viewer.canvas.height, 1);
+  const viewMetersPerPixel = Math.max(estimateCesiumViewRangeMeters(viewer) / canvasHeight, 0.1);
+  const distanceMetersPerPixel = Math.max(
+    annotation.distance / CESIUM_DIMENSION_DRAG_DISTANCE_PIXELS,
+    CESIUM_DIMENSION_DRAG_MIN_DISTANCE_SCALE,
+  );
+  const metersPerPixel = Math.min(
+    viewMetersPerPixel * CESIUM_DIMENSION_DRAG_VIEW_GAIN,
+    distanceMetersPerPixel,
+  );
+  const dragGain = isFineAdjustment ? CESIUM_DIMENSION_DRAG_FINE_GAIN : 1;
+  const nextOffset = clampDistanceDimensionOffset(
+    annotation.offsetMeters + deltaY * metersPerPixel * dragGain,
+    annotation.distance,
+  );
+
+  annotation.offsetMeters = nextOffset;
+  dimensionOffsets[annotation.id] = nextOffset;
   viewer.scene.requestRender?.();
 }
 
@@ -1318,13 +1475,15 @@ function createCesiumDistanceEntities(
   distanceKind: DistanceKind,
   isSelectingHeight: boolean,
   dimensionOffsets: Record<string, number>,
+  style: DistanceMeasurementStyle = createDefaultDistanceMeasurementStyle(),
 ) {
   const entities: unknown[] = [];
   const toCartesian = (point: MeasurePoint) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.height || 0);
   const linePoints = previewPoint && points.length > 0 ? [...points, previewPoint] : points;
+  const showUpperReferenceAxis = points.length < 2;
 
   points.forEach((point, index) => {
-    entities.push(...createCesiumVerticalAxisEntities(viewer, Cesium, point));
+    entities.push(...createCesiumVerticalAxisEntities(viewer, Cesium, point, showUpperReferenceAxis, style));
 
     entities.push(viewer.entities.add({
       label: createCesiumLabelOptions(Cesium, `P${index + 1}`),
@@ -1334,15 +1493,15 @@ function createCesiumDistanceEntities(
   });
 
   if (linePoints.length >= 2) {
-    entities.push(...createCesiumMeasuredLineEntities(viewer, Cesium, linePoints, distanceKind));
+    entities.push(...createCesiumMeasuredLineEntities(viewer, Cesium, linePoints, distanceKind, style));
   }
 
   if (points.length >= 2) {
-    entities.push(...createCesiumDistanceDimensionEntities(viewer, Cesium, points, dimensionOffsets));
+    entities.push(...createCesiumDistanceDimensionEntities(viewer, Cesium, points, dimensionOffsets, style));
   }
 
   if (previewPoint) {
-    entities.push(...createCesiumVerticalAxisEntities(viewer, Cesium, previewPoint));
+    entities.push(...createCesiumVerticalAxisEntities(viewer, Cesium, previewPoint, true, style));
 
     if (isSelectingHeight) {
       entities.push(createCesiumHeightPlaneEntity(viewer, Cesium, previewPoint));
@@ -1368,8 +1527,9 @@ function createCesiumMeasuredLineEntities(
   Cesium: CesiumNamespace,
   points: MeasurePoint[],
   distanceKind: DistanceKind,
+  style: DistanceMeasurementStyle,
 ) {
-  const orange = Cesium.Color.fromCssColorString('#e58a00');
+  const orange = Cesium.Color.fromCssColorString(style.aboveGroundColor);
 
   if (distanceKind === 'surface') {
     return [viewer.entities.add({
@@ -1385,11 +1545,11 @@ function createCesiumMeasuredLineEntities(
   const entities: unknown[] = [];
   const chunks = splitMeasureLineByGround(viewer, Cesium, points);
   const undergroundMaterial = new Cesium.PolylineDashMaterialProperty({
-    color: Cesium.Color.fromAlpha(orange, 0.52),
+    color: Cesium.Color.fromAlpha(Cesium.Color.fromCssColorString(style.belowGroundColor), 0.62),
     dashLength: 24,
   });
   const undergroundDepthMaterial = new Cesium.PolylineDashMaterialProperty({
-    color: Cesium.Color.fromAlpha(orange, 0.46),
+    color: Cesium.Color.fromAlpha(Cesium.Color.fromCssColorString(style.belowGroundColor), 0.5),
     dashLength: 24,
   });
   const undergroundHaloMaterial = new Cesium.PolylineDashMaterialProperty({
@@ -1409,7 +1569,7 @@ function createCesiumMeasuredLineEntities(
           depthFailMaterial: undergroundHaloMaterial,
           material: undergroundHaloMaterial,
           positions: chunk.points.map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.height || 0)),
-          width: 5,
+        width: style.belowGroundWidth + 3,
         },
       }));
     }
@@ -1420,19 +1580,20 @@ function createCesiumMeasuredLineEntities(
         depthFailMaterial: chunk.isBelowGround ? undergroundDepthMaterial : Cesium.Color.fromAlpha(orange, 0.62),
         material: chunk.isBelowGround ? undergroundMaterial : orange,
         positions: chunk.points.map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.height || 0)),
-        width: chunk.isBelowGround ? 2 : 3,
+        width: chunk.isBelowGround ? style.belowGroundWidth : style.aboveGroundWidth,
       },
     }));
   });
 
   chunks.crossings.forEach((point) => {
     entities.push(viewer.entities.add({
-      point: {
-        color: Cesium.Color.fromAlpha(Cesium.Color.fromCssColorString('#0f1418'), 0.22),
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        outlineColor: orange,
+      ellipsoid: {
+        fill: true,
+        material: Cesium.Color.fromAlpha(Cesium.Color.fromCssColorString(style.crossingColor), 0.9),
+        outline: true,
+        outlineColor: Cesium.Color.fromCssColorString('#fff1c2'),
         outlineWidth: 2,
-        pixelSize: 11,
+        radii: new Cesium.Cartesian3(style.crossingRadius, style.crossingRadius, style.crossingRadius),
       },
       position: Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.height || 0),
     }));
@@ -1557,11 +1718,22 @@ function createCesiumDistanceDimensionEntities(
   Cesium: CesiumNamespace,
   points: MeasurePoint[],
   dimensionOffsets: Record<string, number>,
+  style: DistanceMeasurementStyle,
 ) {
   const entities: unknown[] = [];
-  const green = Cesium.Color.fromCssColorString('#32d74b');
-  const mutedGreen = Cesium.Color.fromAlpha(green, 0.62);
-  const guideGreen = Cesium.Color.fromAlpha(green, 0.78);
+  const dimensionLineColor = Cesium.Color.fromCssColorString(style.dimensionColor);
+  const extensionLineColor = Cesium.Color.fromAlpha(
+    Cesium.Color.fromCssColorString(style.extensionColor),
+    0.82,
+  );
+  const dimensionLineMaterial = new Cesium.PolylineGlowMaterialProperty({
+    color: dimensionLineColor,
+    glowPower: 0.22,
+  });
+  const extensionLineMaterial = new Cesium.PolylineDashMaterialProperty({
+    color: extensionLineColor,
+    dashLength: 18,
+  });
 
   for (let index = 1; index < points.length; index += 1) {
     const startIndex = index;
@@ -1577,7 +1749,7 @@ function createCesiumDistanceDimensionEntities(
       endIndex,
       endPosition,
       id,
-      offsetMeters: dimensionOffsets[id] ?? Math.max(distance * 0.08, 25),
+      offsetMeters: dimensionOffsets[id] ?? getDefaultDistanceDimensionOffset(distance),
       startIndex,
       startPosition,
     };
@@ -1594,12 +1766,14 @@ function createCesiumDistanceDimensionEntities(
       viewer,
       Cesium,
       entities,
-      () => [annotation.startPosition, annotation.endPosition],
-      new Cesium.PolylineDashMaterialProperty({
-        color: mutedGreen,
-        dashLength: 16,
-      }),
-      1.5,
+      () => {
+        const geometry = computeDistanceDimensionGeometry(Cesium, annotation);
+
+        return [annotation.startPosition, geometry.startExtensionEnd];
+      },
+      extensionLineMaterial,
+      style.extensionWidth,
+      annotation,
     );
     addCesiumDimensionPolyline(
       viewer,
@@ -1608,28 +1782,11 @@ function createCesiumDistanceDimensionEntities(
       () => {
         const geometry = computeDistanceDimensionGeometry(Cesium, annotation);
 
-        return [annotation.startPosition, geometry.startTop];
+        return [annotation.endPosition, geometry.endExtensionEnd];
       },
-      new Cesium.PolylineDashMaterialProperty({
-        color: guideGreen,
-        dashLength: 16,
-      }),
-      1.5,
-    );
-    addCesiumDimensionPolyline(
-      viewer,
-      Cesium,
-      entities,
-      () => {
-        const geometry = computeDistanceDimensionGeometry(Cesium, annotation);
-
-        return [annotation.endPosition, geometry.endTop];
-      },
-      new Cesium.PolylineDashMaterialProperty({
-        color: guideGreen,
-        dashLength: 16,
-      }),
-      1.5,
+      extensionLineMaterial,
+      style.extensionWidth,
+      annotation,
     );
     addCesiumDimensionPolyline(
       viewer,
@@ -1640,8 +1797,9 @@ function createCesiumDistanceDimensionEntities(
 
         return [geometry.startTop, geometry.endTop];
       },
-      green,
-      2,
+      dimensionLineMaterial,
+      style.dimensionWidth,
+      annotation,
     );
 
     [0, 1].forEach((wingIndex) => {
@@ -1650,16 +1808,18 @@ function createCesiumDistanceDimensionEntities(
         Cesium,
         entities,
         () => createDistanceDimensionArrowPositions(Cesium, annotation, true, wingIndex),
-        green,
-        2,
+        dimensionLineMaterial,
+        style.dimensionWidth,
+        annotation,
       );
       addCesiumDimensionPolyline(
         viewer,
         Cesium,
         entities,
         () => createDistanceDimensionArrowPositions(Cesium, annotation, false, wingIndex),
-        green,
-        2,
+        dimensionLineMaterial,
+        style.dimensionWidth,
+        annotation,
       );
     });
 
@@ -1668,15 +1828,18 @@ function createCesiumDistanceDimensionEntities(
       position: new Cesium.CallbackProperty(() => (
         computeDistanceDimensionGeometry(Cesium, annotation).labelPosition
       ), false),
+      properties: {
+        measureDimensionAnnotation: annotation,
+      },
     }));
 
     entities.push(viewer.entities.add({
       point: {
-        color: green,
+        color: dimensionLineColor,
         disableDepthTestDistance: Number.POSITIVE_INFINITY,
         outlineColor: Cesium.Color.fromCssColorString('#ffffff'),
-        outlineWidth: 2,
-        pixelSize: 11,
+        outlineWidth: 3,
+        pixelSize: CESIUM_DIMENSION_HANDLE_PIXEL_SIZE,
       },
       position: new Cesium.CallbackProperty(() => (
         computeDistanceDimensionGeometry(Cesium, annotation).handlePosition
@@ -1690,6 +1853,20 @@ function createCesiumDistanceDimensionEntities(
   return entities;
 }
 
+function getDefaultDistanceDimensionOffset(distance: number) {
+  return Math.max(distance * 0.08, 25);
+}
+
+function clampDistanceDimensionOffset(offset: number, distance: number) {
+  const defaultOffset = getDefaultDistanceDimensionOffset(distance);
+  const maxOffset = Math.max(
+    distance * CESIUM_DIMENSION_MAX_OFFSET_DISTANCE_RATIO,
+    defaultOffset * CESIUM_DIMENSION_MAX_OFFSET_DEFAULT_MULTIPLIER,
+  );
+
+  return Math.min(Math.max(offset, 0), maxOffset);
+}
+
 function addCesiumDimensionPolyline(
   viewer: CesiumViewer,
   Cesium: CesiumNamespace,
@@ -1697,6 +1874,7 @@ function addCesiumDimensionPolyline(
   positions: () => unknown[],
   material: unknown,
   width: number,
+  annotation?: DistanceDimensionAnnotation,
 ) {
   entities.push(viewer.entities.add({
     polyline: {
@@ -1705,46 +1883,90 @@ function addCesiumDimensionPolyline(
       positions: new Cesium.CallbackProperty(positions, false),
       width,
     },
+    ...(annotation ? {
+      properties: {
+        measureDimensionAnnotation: annotation,
+      },
+    } : {}),
   }));
 }
 
 function computeDistanceDimensionGeometry(Cesium: CesiumNamespace, annotation: DistanceDimensionAnnotation) {
-  const startCartographic = Cesium.Cartographic.fromCartesian(annotation.startPosition);
-  const endCartographic = Cesium.Cartographic.fromCartesian(annotation.endPosition);
-  const dimensionHeight = Math.max(startCartographic.height, endCartographic.height) + annotation.offsetMeters;
-  const startTop = Cesium.Cartesian3.fromRadians(
-    startCartographic.longitude,
-    startCartographic.latitude,
-    dimensionHeight,
+  const midpoint = Cesium.Cartesian3.midpoint(
+    annotation.startPosition,
+    annotation.endPosition,
+    new Cesium.Cartesian3(),
   );
-  const endTop = Cesium.Cartesian3.fromRadians(
-    endCartographic.longitude,
-    endCartographic.latitude,
-    dimensionHeight,
-  );
-  const handlePosition = Cesium.Cartesian3.midpoint(startTop, endTop, new Cesium.Cartesian3());
-  const transform = Cesium.Transforms.eastNorthUpToFixedFrame(handlePosition);
+  const transform = Cesium.Transforms.eastNorthUpToFixedFrame(midpoint);
   const inverseTransform = Cesium.Matrix4.inverse(transform, new Cesium.Matrix4());
-  const startLocal = Cesium.Matrix4.multiplyByPoint(inverseTransform, startTop, new Cesium.Cartesian3());
-  const endLocal = Cesium.Matrix4.multiplyByPoint(inverseTransform, endTop, new Cesium.Cartesian3());
+  const startLocal = Cesium.Matrix4.multiplyByPoint(
+    inverseTransform,
+    annotation.startPosition,
+    new Cesium.Cartesian3(),
+  );
+  const endLocal = Cesium.Matrix4.multiplyByPoint(
+    inverseTransform,
+    annotation.endPosition,
+    new Cesium.Cartesian3(),
+  );
   const lineDirection = Cesium.Cartesian3.subtract(endLocal, startLocal, new Cesium.Cartesian3());
 
   Cesium.Cartesian3.normalize(lineDirection, lineDirection);
 
-  let perpendicular = Cesium.Cartesian3.cross(Cesium.Cartesian3.UNIT_Z, lineDirection, new Cesium.Cartesian3());
+  const projectPerpendicular = (direction: unknown) => {
+    const component = Cesium.Cartesian3.dot(direction, lineDirection);
+    const projected = Cesium.Cartesian3.subtract(
+      direction,
+      Cesium.Cartesian3.multiplyByScalar(lineDirection, component, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3(),
+    );
 
-  if (Cesium.Cartesian3.magnitude(perpendicular) < 1e-5) {
-    perpendicular = Cesium.Cartesian3.clone(Cesium.Cartesian3.UNIT_X);
-  } else {
-    Cesium.Cartesian3.normalize(perpendicular, perpendicular);
-  }
+    return Cesium.Cartesian3.magnitude(projected) < 1e-5
+      ? null
+      : Cesium.Cartesian3.normalize(projected, projected);
+  };
+
+  const perpendicular = projectPerpendicular(Cesium.Cartesian3.UNIT_Z)
+    ?? projectPerpendicular(Cesium.Cartesian3.UNIT_X)
+    ?? Cesium.Cartesian3.clone(Cesium.Cartesian3.UNIT_Y);
+  const offset = Cesium.Cartesian3.multiplyByScalar(
+    perpendicular,
+    annotation.offsetMeters,
+    new Cesium.Cartesian3(),
+  );
+  const startTopLocal = Cesium.Cartesian3.add(startLocal, offset, new Cesium.Cartesian3());
+  const endTopLocal = Cesium.Cartesian3.add(endLocal, offset, new Cesium.Cartesian3());
+  const startTop = Cesium.Matrix4.multiplyByPoint(transform, startTopLocal, new Cesium.Cartesian3());
+  const endTop = Cesium.Matrix4.multiplyByPoint(transform, endTopLocal, new Cesium.Cartesian3());
+  const handleLocal = Cesium.Cartesian3.midpoint(startTopLocal, endTopLocal, new Cesium.Cartesian3());
+  const handlePosition = Cesium.Matrix4.multiplyByPoint(transform, handleLocal, new Cesium.Cartesian3());
 
   const arrowLength = Math.max(Math.min(annotation.distance * 0.045, 300), 18);
   const arrowWidth = arrowLength * 0.45;
   const labelLift = Math.max(arrowLength * 0.55, 16);
+  const extensionOvershoot = Math.max(Math.min(arrowWidth * 0.6, 60), 8);
+  const extensionOffset = Cesium.Cartesian3.multiplyByScalar(
+    perpendicular,
+    extensionOvershoot,
+    new Cesium.Cartesian3(),
+  );
+  const startExtensionEnd = Cesium.Matrix4.multiplyByPoint(
+    transform,
+    Cesium.Cartesian3.add(startTopLocal, extensionOffset, new Cesium.Cartesian3()),
+    new Cesium.Cartesian3(),
+  );
+  const endExtensionEnd = Cesium.Matrix4.multiplyByPoint(
+    transform,
+    Cesium.Cartesian3.add(endTopLocal, extensionOffset, new Cesium.Cartesian3()),
+    new Cesium.Cartesian3(),
+  );
   const labelPosition = Cesium.Matrix4.multiplyByPoint(
     transform,
-    new Cesium.Cartesian3(0, 0, labelLift),
+    Cesium.Cartesian3.add(
+      handleLocal,
+      Cesium.Cartesian3.multiplyByScalar(perpendicular, labelLift, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3(),
+    ),
     new Cesium.Cartesian3(),
   );
 
@@ -1753,12 +1975,16 @@ function computeDistanceDimensionGeometry(Cesium: CesiumNamespace, annotation: D
     arrowWidth,
     endLocal,
     endTop,
+    endTopLocal,
+    endExtensionEnd,
     handlePosition,
     labelPosition,
     lineDirection,
     perpendicular,
     startLocal,
     startTop,
+    startTopLocal,
+    startExtensionEnd,
     transform,
   };
 }
@@ -1770,7 +1996,7 @@ function createDistanceDimensionArrowPositions(
   wingIndex: number,
 ) {
   const geometry = computeDistanceDimensionGeometry(Cesium, annotation);
-  const tipLocal = isStart ? geometry.startLocal : geometry.endLocal;
+  const tipLocal = isStart ? geometry.startTopLocal : geometry.endTopLocal;
   const inwardSign = isStart ? 1 : -1;
   const baseOffset = Cesium.Cartesian3.multiplyByScalar(
     geometry.lineDirection,
@@ -1791,9 +2017,15 @@ function createDistanceDimensionArrowPositions(
   ];
 }
 
-function createCesiumVerticalAxisEntities(viewer: CesiumViewer, Cesium: CesiumNamespace, point: MeasurePoint) {
+function createCesiumVerticalAxisEntities(
+  viewer: CesiumViewer,
+  Cesium: CesiumNamespace,
+  point: MeasurePoint,
+  includeUpperAxis: boolean,
+  style: DistanceMeasurementStyle,
+) {
   const groundHeight = getCesiumGroundHeight(viewer, Cesium, point);
-  const green = Cesium.Color.fromCssColorString('#32d74b');
+  const green = Cesium.Color.fromCssColorString(style.groundAnchorColor);
   const lowerMaterial = new Cesium.PolylineDashMaterialProperty({
     color: Cesium.Color.fromAlpha(green, 0.5),
     dashLength: 22,
@@ -1806,12 +2038,16 @@ function createCesiumVerticalAxisEntities(viewer: CesiumViewer, Cesium: CesiumNa
     color: green,
     glowPower: 0.18,
   });
+  const pointToGroundMaterial = new Cesium.PolylineGlowMaterialProperty({
+    color: Cesium.Color.fromAlpha(green, 0.9),
+    glowPower: 0.12,
+  });
 
-  return [
+  const entities = [
     viewer.entities.add({
       polyline: {
         clampToGround: false,
-        depthFailMaterial: lowerDepthMaterial,
+        depthFailMaterial: lowerMaterial,
         material: lowerMaterial,
         positions: createCesiumVerticalLinePositions(
           Cesium,
@@ -1819,10 +2055,37 @@ function createCesiumVerticalAxisEntities(viewer: CesiumViewer, Cesium: CesiumNa
           groundHeight - VERTICAL_AXIS_BELOW_GROUND_METERS,
           groundHeight,
         ),
-        width: 2,
+        width: style.belowGroundWidth,
       },
     }),
-    viewer.entities.add({
+  ];
+
+  entities.push(viewer.entities.add({
+    ellipsoid: {
+      fill: true,
+      material: Cesium.Color.fromAlpha(green, 0.92),
+      outline: true,
+      outlineColor: Cesium.Color.fromCssColorString('#ffffff'),
+      outlineWidth: 1,
+      radii: new Cesium.Cartesian3(style.groundAnchorRadius, style.groundAnchorRadius, style.groundAnchorRadius),
+    },
+    position: Cesium.Cartesian3.fromDegrees(point.lon, point.lat, groundHeight),
+  }));
+
+  if (!includeUpperAxis && point.height > groundHeight + 0.1) {
+    entities.push(viewer.entities.add({
+      polyline: {
+        clampToGround: false,
+        depthFailMaterial: pointToGroundMaterial,
+        material: pointToGroundMaterial,
+        positions: createCesiumVerticalLinePositions(Cesium, point, groundHeight, point.height),
+        width: style.aboveGroundWidth,
+      },
+    }));
+  }
+
+  if (includeUpperAxis) {
+    entities.push(viewer.entities.add({
       polyline: {
         clampToGround: false,
         depthFailMaterial: new Cesium.PolylineGlowMaterialProperty({
@@ -1838,8 +2101,10 @@ function createCesiumVerticalAxisEntities(viewer: CesiumViewer, Cesium: CesiumNa
         ),
         width: 4,
       },
-    }),
-  ];
+    }));
+  }
+
+  return entities;
 }
 
 function createCesiumVerticalLinePositions(Cesium: CesiumNamespace, point: MeasurePoint, startHeight: number, endHeight: number) {
@@ -1934,12 +2199,12 @@ function createCesiumLabelOptions(Cesium: CesiumNamespace, text: string) {
 
 function createCesiumDimensionLabelOptions(Cesium: CesiumNamespace, text: string) {
   return {
-    backgroundColor: Cesium.Color.fromAlpha(Cesium.Color.fromCssColorString('#0f1418'), 0.72),
+    backgroundColor: Cesium.Color.fromAlpha(Cesium.Color.fromCssColorString('#0b2730'), 0.88),
     disableDepthTestDistance: Number.POSITIVE_INFINITY,
-    fillColor: Cesium.Color.fromCssColorString('#32d74b'),
-    font: '700 14px "Segoe UI", "Microsoft YaHei", Arial, sans-serif',
-    outlineColor: Cesium.Color.fromCssColorString('#000000'),
-    outlineWidth: 3,
+    fillColor: Cesium.Color.fromCssColorString('#d9fbff'),
+    font: '700 15px "Segoe UI", "Microsoft YaHei", Arial, sans-serif',
+    outlineColor: Cesium.Color.fromCssColorString('#126477'),
+    outlineWidth: 2,
     pixelOffset: new Cesium.Cartesian2(0, -4),
     showBackground: true,
     text,
