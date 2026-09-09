@@ -8,6 +8,8 @@ import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { MapMeasurePanel } from './map/MapMeasurePanel';
 import { useMapMeasure } from './map/MapMeasureContext';
+import { MapSunlightPanel } from './map/MapSunlightPanel';
+import { useMapSunlight } from './map/MapSunlightContext';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
 import { configureCesiumIonToken, loadCesium, type CesiumNamespace, type CesiumViewer } from './map/cesiumRuntime';
 import { getRasterBasemapDefinitions, type BasemapSourceKind, type RasterBasemapTileDefinition } from './map/rasterBasemapSources';
@@ -65,11 +67,18 @@ function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
     navigationHelpButton: false,
     sceneModePicker: false,
     selectionIndicator: false,
+    shadows: true,
+    terrainShadows: Cesium.ShadowMode.ENABLED,
     timeline: false,
     terrainProvider: new Cesium.EllipsoidTerrainProvider(),
   });
 
-  viewer.scene.globe.enableLighting = false;
+  viewer.scene.globe.enableLighting = true;
+  viewer.scene.globe.shadows = Cesium.ShadowMode.ENABLED;
+  viewer.scene.shadowMap.enabled = true;
+  viewer.scene.postProcessStages.fxaa.enabled = true;
+  viewer.resolutionScale = Math.min(Math.max(window.devicePixelRatio || 1, 1), 1.5);
+  viewer.shadows = true;
   viewer.scene.globe.depthTestAgainstTerrain = true;
   viewer.scene.globe.show = true;
   viewer.scene.backgroundColor = Cesium.Color.SKYBLUE;
@@ -672,6 +681,7 @@ export function MapPanel() {
   const { editingActive, status: digitizeStatus } = useDigitize();
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
   const { isMeasureOpen, mode: measureMode } = useMapMeasure();
+  const { isSunlightOpen } = useMapSunlight();
   const { identifyActive } = useMapIdentify();
   const { selectionActive } = useMapSelection();
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
@@ -1515,7 +1525,7 @@ export function MapPanel() {
   useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
 
   return (
-    <section className="map-panel">
+    <section className={`map-panel${isSunlightOpen && mapCommandState.mapMode === 'globe' ? ' has-sunlight-control' : ''}`}>
       <div className={`map-canvas${mapCommandState.mapMode === 'globe' ? ' is-hidden' : ''}`} ref={containerRef} />
       <MapFeatureIdentify active={featureIdentifyActive} map={mapRef.current} mapReady={mapReady} />
       <MapFeatureSelection active={featureSelectionActive} map={mapRef.current} mapReady={mapReady} />
@@ -1529,6 +1539,7 @@ export function MapPanel() {
         </Suspense>
       ) : null}
       <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
+      <MapSunlightPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <MapMeasurePanel cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       {editingActive || selectionStatus || status ? (
         <div className="map-status">{editingActive ? digitizeStatus : selectionStatus || status}</div>

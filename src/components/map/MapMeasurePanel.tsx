@@ -64,6 +64,7 @@ const WGS84_F = 1 / 298.257223563;
 const WGS84_E2 = WGS84_F * (2 - WGS84_F);
 const VERTICAL_AXIS_BELOW_GROUND_METERS = 25_000;
 const VERTICAL_AXIS_ABOVE_GROUND_METERS = 25_000;
+const VERTICAL_AXIS_WIDTH_PIXELS = 2;
 const CESIUM_LINE_TERRAIN_SAMPLE_SPACING_METERS = 250;
 const CESIUM_LINE_TERRAIN_SAMPLE_MIN_COUNT = 32;
 const CESIUM_LINE_TERRAIN_SAMPLE_MAX_COUNT = 192;
@@ -2027,20 +2028,8 @@ function createCesiumVerticalAxisEntities(
   const groundHeight = getCesiumGroundHeight(viewer, Cesium, point);
   const green = Cesium.Color.fromCssColorString(style.groundAnchorColor);
   const lowerMaterial = new Cesium.PolylineDashMaterialProperty({
-    color: Cesium.Color.fromAlpha(green, 0.5),
-    dashLength: 22,
-  });
-  const lowerDepthMaterial = new Cesium.PolylineDashMaterialProperty({
-    color: Cesium.Color.fromAlpha(green, 0.68),
-    dashLength: 22,
-  });
-  const upperMaterial = new Cesium.PolylineGlowMaterialProperty({
     color: green,
-    glowPower: 0.18,
-  });
-  const pointToGroundMaterial = new Cesium.PolylineGlowMaterialProperty({
-    color: Cesium.Color.fromAlpha(green, 0.9),
-    glowPower: 0.12,
+    dashLength: 22,
   });
 
   const entities = [
@@ -2055,7 +2044,7 @@ function createCesiumVerticalAxisEntities(
           groundHeight - VERTICAL_AXIS_BELOW_GROUND_METERS,
           groundHeight,
         ),
-        width: style.belowGroundWidth,
+        width: VERTICAL_AXIS_WIDTH_PIXELS,
       },
     }),
   ];
@@ -2076,10 +2065,10 @@ function createCesiumVerticalAxisEntities(
     entities.push(viewer.entities.add({
       polyline: {
         clampToGround: false,
-        depthFailMaterial: pointToGroundMaterial,
-        material: pointToGroundMaterial,
+        depthFailMaterial: green,
+        material: green,
         positions: createCesiumVerticalLinePositions(Cesium, point, groundHeight, point.height),
-        width: style.aboveGroundWidth,
+        width: VERTICAL_AXIS_WIDTH_PIXELS,
       },
     }));
   }
@@ -2088,18 +2077,15 @@ function createCesiumVerticalAxisEntities(
     entities.push(viewer.entities.add({
       polyline: {
         clampToGround: false,
-        depthFailMaterial: new Cesium.PolylineGlowMaterialProperty({
-          color: Cesium.Color.fromAlpha(green, 0.82),
-          glowPower: 0.18,
-        }),
-        material: upperMaterial,
+        depthFailMaterial: green,
+        material: green,
         positions: createCesiumVerticalLinePositions(
           Cesium,
           point,
           groundHeight,
           groundHeight + VERTICAL_AXIS_ABOVE_GROUND_METERS,
         ),
-        width: 4,
+        width: VERTICAL_AXIS_WIDTH_PIXELS,
       },
     }));
   }

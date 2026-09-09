@@ -2335,6 +2335,119 @@ button {
   font-size: 12px;
 }
 
+.map-sunlight-panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 9;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(120px, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  max-width: 760px;
+  min-width: 0;
+  height: 42px;
+  margin: 0 auto;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border: 1px solid rgb(153 171 184 / 82%);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 94%);
+  box-shadow: 0 8px 20px rgb(23 32 42 / 18%);
+  color: #34495e;
+  backdrop-filter: blur(5px);
+}
+
+.map-sunlight-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  color: #805b12;
+  font-size: 12px;
+}
+
+.map-sunlight-heading strong {
+  font-weight: 650;
+}
+
+.map-sunlight-icon-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #536273;
+  cursor: pointer;
+}
+
+.map-sunlight-icon-button:hover {
+  border-color: #e3c77c;
+  background: #fff7da;
+  color: #805b12;
+}
+
+.map-sunlight-date input {
+  width: 116px;
+  height: 26px;
+  min-width: 0;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border: 1px solid #cbd4dc;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #34495e;
+  font: inherit;
+  font-size: 11px;
+}
+
+.map-sunlight-range {
+  display: grid;
+  grid-template-columns: auto minmax(80px, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #c17b0a;
+}
+
+.map-sunlight-range input {
+  width: 100%;
+  min-width: 0;
+  accent-color: #d18a12;
+  cursor: pointer;
+}
+
+.map-sunlight-time {
+  min-width: 40px;
+  color: #263544;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.map-panel.has-sunlight-control .map-status,
+.map-panel.has-sunlight-control .map-measure-panel {
+  top: 66px;
+}
+
+@media (max-width: 620px) {
+  .map-sunlight-panel {
+    grid-template-columns: auto auto minmax(90px, 1fr) auto auto;
+    gap: 5px;
+  }
+
+  .map-sunlight-heading strong,
+  .map-sunlight-date {
+    display: none;
+  }
+}
+
 .map-measure-panel {
   position: absolute;
   top: 12px;

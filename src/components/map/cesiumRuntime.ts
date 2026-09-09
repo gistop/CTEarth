@@ -16,6 +16,11 @@ export type CesiumViewer = {
     pickEllipsoid?: (windowPosition: unknown, ellipsoid?: unknown) => unknown;
   };
   canvas: HTMLCanvasElement;
+  clock: {
+    currentTime: unknown;
+    multiplier: number;
+    shouldAnimate: boolean;
+  };
   entities: {
     add: (options: Record<string, unknown>) => unknown;
     remove: (entity: unknown) => boolean;
@@ -33,6 +38,8 @@ export type CesiumViewer = {
     removeAll: (destroy?: boolean) => void;
   };
   terrainProvider: unknown;
+  resolutionScale: number;
+  shadows: boolean;
   scene: {
     backgroundColor: unknown;
     globe: {
@@ -41,6 +48,7 @@ export type CesiumViewer = {
       ellipsoid?: unknown;
       enableLighting: boolean;
       getHeight?: (cartographic: unknown) => number | undefined;
+      shadows?: unknown;
       show: boolean;
       tileLoadProgressEvent?: {
         addEventListener: (callback: (queuedTileCount: number) => void) => () => void;
@@ -48,7 +56,15 @@ export type CesiumViewer = {
     };
     pick?: (windowPosition: unknown) => { id?: unknown } | undefined;
     pickPosition?: (windowPosition: unknown) => unknown;
+    postProcessStages: {
+      fxaa: {
+        enabled: boolean;
+      };
+    };
     requestRender?: () => void;
+    shadowMap: {
+      enabled: boolean;
+    };
     screenSpaceCameraController?: {
       enableInputs: boolean;
       enableLook: boolean;
@@ -120,6 +136,7 @@ export type CesiumNamespace = CesiumLayerNamespace & {
     defaultAccessToken: string;
   };
   JulianDate: {
+    fromDate: (date: Date) => unknown;
     now: () => unknown;
   };
   Math: {
@@ -128,6 +145,9 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   };
   SceneMode: {
     SCENE2D: unknown;
+  };
+  ShadowMode: {
+    ENABLED: unknown;
   };
   ScreenSpaceEventHandler: new (canvas: HTMLCanvasElement) => {
     destroy: () => void;
