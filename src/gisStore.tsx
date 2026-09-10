@@ -21,6 +21,7 @@ import {
   type WorkspaceRasterLayer,
   type WorkspaceVectorLayer,
 } from './workspaceDraftStore';
+import { normalizeLayerOrder } from './features/layers/services/layerService';
 
 export type PointFeature = {
   type: 'Feature';
@@ -450,7 +451,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
   const setLayerDrawOrder = useCallback((order: LayerOrderId[]) => {
     setLayerOrder((current) => {
-      const nextOrder = uniqueLayerOrder(order);
+      const nextOrder = normalizeLayerOrder(order);
 
       return areLayerOrdersEqual(current, nextOrder) ? current : nextOrder;
     });
@@ -1755,20 +1756,6 @@ export function useGis() {
   }
 
   return value;
-}
-
-function uniqueLayerOrder(order: LayerOrderId[]) {
-  const seen = new Set<LayerOrderId>();
-  const uniqueOrder: LayerOrderId[] = [];
-
-  order.forEach((id) => {
-    if (!seen.has(id)) {
-      seen.add(id);
-      uniqueOrder.push(id);
-    }
-  });
-
-  return uniqueOrder;
 }
 
 function areLayerOrdersEqual(left: LayerOrderId[], right: LayerOrderId[]) {

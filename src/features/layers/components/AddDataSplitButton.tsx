@@ -1,6 +1,6 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ChevronDown, Cloud, FolderPlus, Link2 } from 'lucide-react';
-import { useGis } from '../../gisStore';
+import { useLayerStore } from '../stores/layerStore';
 
 export function AddDataSplitButton() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -16,7 +16,7 @@ export function AddDataSplitButton() {
     uploadGeoTiff,
     uploadGeoTiffUrl,
     uploadShapefileZip,
-  } = useGis();
+  } = useLayerStore();
 
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

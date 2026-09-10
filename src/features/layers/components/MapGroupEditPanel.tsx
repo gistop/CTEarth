@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import type { MapGroup } from './MapGroupSection';
+import type { MapGroup } from '../types';
 
 type MapGroupEditPanelProps = {
   group: MapGroup;

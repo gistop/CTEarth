@@ -11,27 +11,26 @@ import Modify from 'ol/interaction/Modify.js';
 import Select from 'ol/interaction/Select.js';
 import Snap from 'ol/interaction/Snap.js';
 import ImageLayer from 'ol/layer/Image.js';
-import TileLayer from 'ol/layer/Tile.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import { fromLonLat, toLonLat, transformExtent } from 'ol/proj.js';
 import ImageStatic from 'ol/source/ImageStatic.js';
-import OSM from 'ol/source/OSM.js';
 import VectorSource from 'ol/source/Vector.js';
-import XYZ from 'ol/source/XYZ.js';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style.js';
 import type { Coordinate } from 'ol/coordinate.js';
 import type Geometry from 'ol/geom/Geometry.js';
 import MultiPolygon from 'ol/geom/MultiPolygon.js';
 import Polygon from 'ol/geom/Polygon.js';
-import type { BasemapId } from '../map/MapCommandContext';
-import { displayLayerName, defaultUploadedLayerStyle, useGis, type GeoJsonFeatureCollection } from '../../gisStore';
+import { displayLayerName, defaultUploadedLayerStyle, type GeoJsonFeatureCollection } from '../../gisStore';
 import { useMapGroupRenderState } from '../../mapGroupRenderState';
-import { getRasterBasemapDefinitions } from '../map/rasterBasemapSources';
+import {
+  createOpenLayersLayerAdapter,
+  type OpenLayersBasemapLayer,
+  useLayerStore,
+} from '../../features/layers';
 import { useDigitize } from './DigitizeContext';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
-const TIANDITU_TOKEN = 'fa7482bbcd44e52cb5fb76cde5e7c83e';
 
 type OpenLayersDigitizeMapProps = {
   mapLibreMap: maplibregl.Map | null;
@@ -65,7 +64,7 @@ function OpenLayersDigitizeMap({ mapLibreMap, visible }, ref) {
   const referenceSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const boundaryCacheRef = useRef<BoundaryCache | null>(null);
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
-  const basemapLayersRef = useRef(new globalThis.Map<string, TileLayer<OSM | XYZ>>());
+  const basemapLayersRef = useRef(new globalThis.Map<string, OpenLayersBasemapLayer>());
   const mapGroupRenderState = useMapGroupRenderState();
   const {
     activeLayerId,
@@ -78,7 +77,7 @@ function OpenLayersDigitizeMap({ mapLibreMap, visible }, ref) {
     updateUploadedLayerGeoJson,
     vectorOverlay,
     vectorOverlayStyle,
-  } = useGis();
+  } = useLayerStore();
   const digitize = useDigitize();
   const editableLayer = layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null;
 
@@ -298,45 +297,13 @@ function OpenLayersDigitizeMap({ mapLibreMap, visible }, ref) {
       return;
     }
 
-    const expectedIds = new Set<string>();
-    const topZIndex = mapGroupRenderState.entries.length;
-
-    mapGroupRenderState.entries.forEach((entry, index) => {
-      const basemapId = entry.basemapId;
-
-      if (!basemapId) {
-        return;
-      }
-
-      const entryZIndex = index - topZIndex - 1;
-
-      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
-        const layerId = getBasemapLayerId(entry.id, definition.suffix);
-        expectedIds.add(layerId);
-
-        let layer = basemapLayersRef.current.get(layerId);
-
-        if (!layer) {
-          layer = createBasemapLayer(definition);
-          map.addLayer(layer);
-          basemapLayersRef.current.set(layerId, layer);
-        } else {
-          layer.setSource(createBasemapSource(definition));
-        }
-
-        layer.setVisible(entry.visible && layerVisibility.basemap);
-        layer.setOpacity(entry.opacity ?? 1);
-        layer.setZIndex(entryZIndex);
-      });
-    });
-
-    basemapLayersRef.current.forEach((layer, layerId) => {
-      if (expectedIds.has(layerId)) {
-        return;
-      }
-
-      map.removeLayer(layer);
-      basemapLayersRef.current.delete(layerId);
+    createOpenLayersLayerAdapter().sync({
+      map,
+      entries: mapGroupRenderState.entries,
+      basemapLayers: basemapLayersRef.current,
+      basemapLayerIdPrefix: 'digitize-basemap',
+      basemapVisible: layerVisibility.basemap,
+      stacking: 'background',
     });
   }, [layerVisibility.basemap, mapGroupRenderState.entries]);
 
@@ -532,110 +499,6 @@ function OpenLayersDigitizeMap({ mapLibreMap, visible }, ref) {
     />
   );
 });
-
-function createBaseLayers(activeBasemap: BasemapId): Record<BasemapId, TileLayer<OSM | XYZ>> {
-  return {
-    osm: new TileLayer({
-      source: new OSM({ attributions: 'OpenStreetMap contributors' }),
-      visible: activeBasemap === 'osm',
-    }),
-    tianditu: new TileLayer({
-      source: new XYZ({
-        urls: createTiandituTiles('vec'),
-        attributions: '天地图',
-      }),
-      visible: activeBasemap === 'tianditu',
-    }),
-    esri: new TileLayer({
-      source: new XYZ({
-        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-        attributions: 'Tiles © Esri',
-      }),
-      visible: activeBasemap === 'esri',
-    }),
-  };
-}
-
-function createTiandituTiles(layer: 'vec' | 'cva') {
-  return Array.from(
-    { length: 8 },
-    (_, index) => (
-      `https://t${index}.tianditu.gov.cn/${layer}_w/wmts?` +
-      `SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}` +
-      `&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}` +
-      `&tk=${TIANDITU_TOKEN}`
-    ),
-  );
-}
-
-const basemapLayerDefinitions: Record<BasemapId, { suffix: string; createSource: () => OSM | XYZ }[]> = {
-  osm: [{
-    suffix: 'osm',
-    createSource: () => new OSM({ attributions: 'OpenStreetMap contributors' }),
-  }],
-  tianditu: [
-    {
-      suffix: 'tianditu-vec',
-      createSource: () => new XYZ({
-        urls: createTiandituTiles('vec'),
-        attributions: '天地图',
-      }),
-    },
-    {
-      suffix: 'tianditu-cva',
-      createSource: () => new XYZ({
-        urls: createTiandituTiles('cva'),
-        attributions: '天地图',
-      }),
-    },
-  ],
-  esri: [{
-    suffix: 'esri',
-    createSource: () => new XYZ({
-      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      attributions: 'Tiles Esri',
-    }),
-  }],
-};
-
-function createBasemapLayer(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
-  return new TileLayer({
-    source: createBasemapSource(definition),
-    visible: false,
-  });
-}
-
-function createBasemapSource(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
-  if (definition.urls) {
-    return new XYZ({
-      urls: definition.urls,
-      attributions: definition.attribution,
-      tileSize: definition.tileSize,
-      minZoom: definition.minZoom,
-      maxZoom: definition.maxZoom,
-    });
-  }
-
-  if (definition.url) {
-    return new XYZ({
-      url: definition.url,
-      attributions: definition.attribution,
-      tileSize: definition.tileSize,
-      minZoom: definition.minZoom,
-      maxZoom: definition.maxZoom,
-    });
-  }
-
-  return new OSM({ attributions: definition.attribution });
-}
-
-function getBasemapLayerId(renderId: string, suffix: string) {
-  return `digitize-basemap-${sanitizeLayerId(renderId)}-${suffix}`;
-}
-
-function sanitizeLayerId(id: string) {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
-}
 
 function zoomOpenLayersByDelta(
   map: Map | null,

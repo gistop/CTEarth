@@ -1,9 +1,9 @@
-import { LayerTree } from './LayerTree';
+import { LayerList } from '../../features/layers';
 
 export function ContentsPanel() {
   return (
     <aside className="panel-shell contents-panel">
-      <LayerTree />
+      <LayerList />
     </aside>
   );
 }

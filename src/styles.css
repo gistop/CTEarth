@@ -1403,6 +1403,11 @@ button {
   background: transparent;
 }
 
+.panel-search:focus-within {
+  border-color: #1677b8;
+  box-shadow: 0 0 0 2px rgb(22 119 184 / 18%);
+}
+
 .contents-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -1940,6 +1945,9 @@ button {
 }
 
 .tree-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: #7a8794;
   cursor: grab;
 }

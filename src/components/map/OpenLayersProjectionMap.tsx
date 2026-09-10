@@ -7,21 +7,22 @@ import { defaults as defaultControls } from 'ol/control/defaults.js';
 import GeoJSON from 'ol/format/GeoJSON.js';
 import type Geometry from 'ol/geom/Geometry.js';
 import ImageLayer from 'ol/layer/Image.js';
-import TileLayer from 'ol/layer/Tile.js';
 import VectorLayer from 'ol/layer/Vector.js';
 import { transform, transformExtent } from 'ol/proj.js';
 import ImageStatic from 'ol/source/ImageStatic.js';
-import OSM from 'ol/source/OSM.js';
 import VectorSource from 'ol/source/Vector.js';
-import XYZ from 'ol/source/XYZ.js';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style.js';
 import type { Coordinate } from 'ol/coordinate.js';
 import type { BasemapId, DisplayCrsId } from './MapCommandContext';
-import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, useGis } from '../../gisStore';
+import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds } from '../../gisStore';
 import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
 import { useMapViewport } from './MapViewportContext';
 import { useMapGroupRenderState } from '../../mapGroupRenderState';
-import { getRasterBasemapDefinitions } from './rasterBasemapSources';
+import {
+  createOpenLayersLayerAdapter,
+  type OpenLayersBasemapLayer,
+  useLayerStore,
+} from '../../features/layers';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
@@ -50,7 +51,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
   const vectorOverlayLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const uploadedLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
-  const basemapLayersRef = useRef(new globalThis.Map<string, TileLayer<OSM | XYZ>>());
+  const basemapLayersRef = useRef(new globalThis.Map<string, OpenLayersBasemapLayer>());
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
   const initialViewportBoundsRef = useRef(viewportBounds4326);
   const mapGroupRenderState = useMapGroupRenderState();
@@ -66,7 +67,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     uploadedLayerVisibility,
     vectorOverlay,
     vectorOverlayStyle,
-  } = useGis();
+  } = useLayerStore();
   const projectionCode = projectionCodeForDisplayCrs(displayCrs);
   const initialCenter = useMemo(
     () => transform(CHINA_CENTER, 'EPSG:4326', projectionCode),
@@ -202,43 +203,20 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       return;
     }
 
-    const expectedIds = new Set<string>();
-
-    mapGroupRenderState.entries.forEach((entry) => {
-      const basemapId = entry.basemapId;
-
-      if (!basemapId) {
-        return;
-      }
-
-      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
-        const layerId = getOpenLayersBasemapLayerId(entry.id, definition.suffix);
-        expectedIds.add(layerId);
-
-        let layer = basemapLayersRef.current.get(layerId);
-
-        if (!layer) {
-          layer = createOpenLayersBasemapLayer(definition);
-          map.addLayer(layer);
-          basemapLayersRef.current.set(layerId, layer);
-        } else {
-          layer.setSource(createOpenLayersBasemapSource(definition));
-        }
-
-        layer.setVisible(entry.visible);
-        layer.setOpacity(entry.opacity ?? 1);
-      });
+    createOpenLayersLayerAdapter().sync({
+      map,
+      entries: mapGroupRenderState.entries,
+      basemapLayers: basemapLayersRef.current,
+      basemapLayerIdPrefix: 'projection-basemap',
+      stacking: 'ordered',
+      orderTargets: {
+        uploadedLayer: uploadedLayerRef.current,
+        rasterLayer: rasterLayerRef.current,
+        vectorOverlayLayer: vectorOverlayLayerRef.current,
+        rasterId: raster?.id,
+      },
     });
-
-    basemapLayersRef.current.forEach((layer, layerId) => {
-      if (expectedIds.has(layerId)) {
-        return;
-      }
-
-      map.removeLayer(layer);
-      basemapLayersRef.current.delete(layerId);
-    });
-  }, [mapGroupRenderState.entries]);
+  }, [mapGroupRenderState.entries, raster?.id]);
 
   useEffect(() => {
     const layer = rasterLayerRef.current;
@@ -361,48 +339,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     source.addFeatures(features);
   }, [layerVisibility.vectorOverlay, projectionCode, vectorOverlay, vectorOverlayStyle]);
 
-  useEffect(() => {
-    const map = mapRef.current;
-
-    if (!map) {
-      return;
-    }
-
-    const zIndexByEntryId = new globalThis.Map<string, number>();
-    const topZIndex = mapGroupRenderState.entries.length;
-    let uploadedZIndex = 0;
-    let basemapZIndex = 0;
-
-    mapGroupRenderState.entries.forEach((entry, index) => {
-      zIndexByEntryId.set(entry.id, topZIndex - index);
-    });
-
-    mapGroupRenderState.entries.forEach((entry) => {
-      const basemapId = entry.basemapId;
-      const entryZIndex = zIndexByEntryId.get(entry.id) ?? 0;
-
-      if (!basemapId) {
-        if (entry.layerId.startsWith('uploaded:')) {
-          uploadedZIndex = Math.max(uploadedZIndex, entryZIndex);
-        }
-
-        return;
-      }
-
-      basemapZIndex = Math.max(basemapZIndex, entryZIndex);
-
-      getRasterBasemapDefinitions(entry.basemapSourceKind, basemapId, entry.cesiumImageryId).forEach((definition) => {
-        basemapLayersRef.current.get(getOpenLayersBasemapLayerId(entry.id, definition.suffix))?.setZIndex(entryZIndex);
-      });
-    });
-
-    uploadedLayerRef.current?.setZIndex(uploadedZIndex || topZIndex + 1);
-    rasterLayerRef.current?.setZIndex(zIndexByEntryId.get(raster ? `raster:${raster.id}` : '') ?? 0);
-    vectorOverlayLayerRef.current?.setZIndex(zIndexByEntryId.get('vectorOverlay') ?? 0);
-
-    void basemapZIndex;
-  }, [mapGroupRenderState.entries, raster, vectorOverlay]);
-
   return (
     <>
       <div
@@ -414,46 +350,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     </>
   );
 });
-
-function createOpenLayersBasemapLayer(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
-  return new TileLayer({
-    source: createOpenLayersBasemapSource(definition),
-    visible: false,
-  });
-}
-
-function createOpenLayersBasemapSource(definition: { url?: string; urls?: string[]; attribution: string; tileSize?: number; minZoom?: number; maxZoom?: number; scheme?: 'xyz' | 'tms' }) {
-  if (definition.urls) {
-    return new XYZ({
-      urls: definition.urls,
-      attributions: definition.attribution,
-      tileSize: definition.tileSize,
-      minZoom: definition.minZoom,
-      maxZoom: definition.maxZoom,
-    });
-  }
-
-  if (definition.url) {
-    return new XYZ({
-      url: definition.url,
-      attributions: definition.attribution,
-      tileSize: definition.tileSize,
-      minZoom: definition.minZoom,
-      maxZoom: definition.maxZoom,
-      ...(definition.scheme ? { tileUrlFunction: undefined } : {}),
-    });
-  }
-
-  return new OSM({ attributions: definition.attribution });
-}
-
-function getOpenLayersBasemapLayerId(renderId: string, suffix: string) {
-  return `projection-basemap-${sanitizeOpenLayersLayerId(renderId)}-${suffix}`;
-}
-
-function sanitizeOpenLayersLayerId(id: string) {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
-}
 
 function zoomOpenLayersByDelta(map: Map | null, delta: number) {
   if (!map) {

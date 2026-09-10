@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { MapGroup, MapGroupLayerItem } from './components/contents/MapGroupSection';
+import type { MapGroup, MapGroupLayerItem } from './features/layers/types';
 import { defaultBasemapId } from './components/map/basemapOptions';
 import type { BasemapId } from './components/map/basemapOptions';
 import { defaultCesiumImageryId } from './components/map/cesiumLayerOptions';

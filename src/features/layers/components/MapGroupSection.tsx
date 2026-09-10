@@ -1,28 +1,8 @@
 import { useEffect, useRef, type DragEvent, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight, Eye, EyeOff, Settings, Square, SquareCheckBig } from 'lucide-react';
-import type { LayerOrderId } from '../../gisStore';
-import type { BasemapId } from '../map/basemapOptions';
-import type { CesiumImageryId } from '../map/cesiumLayerOptions';
-import type { BasemapSourceKind } from '../map/rasterBasemapSources';
+import type { MapGroup } from '../types';
 
-export type MapGroupLayerItemId = Exclude<LayerOrderId, 'raster'>;
-
-export type MapGroupLayerItem = {
-  instanceId: string;
-  layerId: MapGroupLayerItemId;
-  visible: boolean;
-  basemapId?: BasemapId;
-  basemapSourceKind?: BasemapSourceKind;
-  cesiumImageryId?: CesiumImageryId;
-  opacity?: number;
-};
-
-export type MapGroup = {
-  id: string;
-  name: string;
-  displayVisible?: boolean;
-  layerItems: MapGroupLayerItem[];
-};
+export type { MapGroup, MapGroupLayerItem, MapGroupLayerItemId } from '../types';
 
 type MapGroupSectionProps = {
   allVisible: boolean;
@@ -43,6 +23,8 @@ type MapGroupSectionProps = {
   onDragEnter?: () => void;
   onDrop?: () => void;
   onEdit?: () => void;
+  onMoveDown?: () => void;
+  onMoveUp?: () => void;
   onDisplayVisibilityChange: (visible: boolean) => void;
   onSetCurrent: () => void;
   onToggleExpanded: () => void;
@@ -68,6 +50,8 @@ export function MapGroupSection({
   onDragEnter,
   onDrop,
   onEdit,
+  onMoveDown,
+  onMoveUp,
   onDisplayVisibilityChange,
   onSetCurrent,
   onToggleExpanded,
@@ -91,8 +75,17 @@ export function MapGroupSection({
           isDragging ? 'is-dragging' : '',
           isDropTarget ? (dropPosition === 'after' ? 'is-drop-target-after' : 'is-drop-target') : '',
         ].filter(Boolean).join(' ')}
+        aria-expanded={isExpanded}
+        aria-keyshortcuts={onMoveUp || onMoveDown ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
+        aria-label={group.name}
+        aria-selected={isCurrent}
         draggable={Boolean(onDragStart)}
         onDragStart={(event) => {
+          if ((event.target as HTMLElement).closest('button, input, select, textarea')) {
+            event.preventDefault();
+            return;
+          }
+
           if (!onDragStart) {
             event.preventDefault();
             return;
@@ -117,6 +110,42 @@ export function MapGroupSection({
           event.preventDefault();
           onDrop?.();
         }}
+        onKeyDown={(event) => {
+          if (event.target !== event.currentTarget) {
+            return;
+          }
+
+          if (event.altKey && event.key === 'ArrowUp' && onMoveUp) {
+            event.preventDefault();
+            onMoveUp();
+            return;
+          }
+
+          if (event.altKey && event.key === 'ArrowDown' && onMoveDown) {
+            event.preventDefault();
+            onMoveDown();
+            return;
+          }
+
+          if (event.key === 'ArrowLeft' && isExpanded) {
+            event.preventDefault();
+            onToggleExpanded();
+            return;
+          }
+
+          if (event.key === 'ArrowRight' && !isExpanded) {
+            event.preventDefault();
+            onToggleExpanded();
+            return;
+          }
+
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onSetCurrent();
+          }
+        }}
+        role="treeitem"
+        tabIndex={0}
       >
         <button
           className="map-group-expand-button"

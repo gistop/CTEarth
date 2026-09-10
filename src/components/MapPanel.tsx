@@ -1,6 +1,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
-import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, useGis, type UploadedLayerStyle } from '../gisStore';
+import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type UploadedLayerStyle } from '../gisStore';
+import {
+  createCesiumLayerAdapter,
+  createMapLibreLayerAdapter,
+  useLayerStore,
+} from '../features/layers';
 import { useDigitize } from './digitize/DigitizeContext';
 import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeMap';
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
@@ -12,7 +17,6 @@ import { MapSunlightPanel } from './map/MapSunlightPanel';
 import { useMapSunlight } from './map/MapSunlightContext';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
 import { configureCesiumIonToken, loadCesium, type CesiumNamespace, type CesiumViewer } from './map/cesiumRuntime';
-import { getRasterBasemapDefinitions, type BasemapSourceKind, type RasterBasemapTileDefinition } from './map/rasterBasemapSources';
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
@@ -33,21 +37,6 @@ const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
 const OpenLayersDigitizeMap = lazy(() => (
   import('./digitize/OpenLayersDigitizeMap').then((module) => ({ default: module.OpenLayersDigitizeMap }))
 ));
-
-type CesiumImageryLayerLike = {
-  alpha: number;
-  show: boolean;
-};
-
-type CesiumDataSourceLike = {
-  show: boolean;
-};
-
-type CesiumLayerEntryState = {
-  imagery?: CesiumImageryLayerLike;
-  dataSource?: CesiumDataSourceLike;
-  raster?: unknown;
-};
 
 type NominatimSearchResult = {
   boundingbox?: [string, string, string, string];
@@ -111,195 +100,6 @@ async function applyCesiumTerrain(viewer: CesiumViewer, Cesium: CesiumNamespace,
   }
 
   viewer.terrainProvider = provider;
-}
-
-function createCesiumImageryProviderFromDefinition(
-  Cesium: CesiumNamespace,
-  definition: RasterBasemapTileDefinition,
-) {
-  if (definition.urls && definition.urls.length > 0) {
-    const templateUrl = definition.urls[0]
-      .replace(/\/t\d+\./, '/t{s}.')
-      .replace(/\{x\}/g, '{x}')
-      .replace(/\{y\}/g, '{y}')
-      .replace(/\{z\}/g, '{z}');
-
-    return new Cesium.UrlTemplateImageryProvider({
-      url: templateUrl,
-      subdomains: '01234567',
-      tileWidth: definition.tileSize ?? 256,
-      tileHeight: definition.tileSize ?? 256,
-      maximumLevel: definition.maxZoom,
-      minimumLevel: definition.minZoom,
-    });
-  }
-
-  if (definition.scheme === 'tms' && definition.url) {
-    return new Cesium.UrlTemplateImageryProvider({
-      url: definition.url.replace('{y}', '{reverseY}'),
-      tilingScheme: new Cesium.GeographicTilingScheme(),
-      tileWidth: definition.tileSize ?? 256,
-      tileHeight: definition.tileSize ?? 256,
-      maximumLevel: definition.maxZoom,
-      minimumLevel: definition.minZoom,
-    });
-  }
-
-  if (definition.url) {
-    return new Cesium.UrlTemplateImageryProvider({
-      url: definition.url,
-      tileWidth: definition.tileSize ?? 256,
-      tileHeight: definition.tileSize ?? 256,
-      maximumLevel: definition.maxZoom,
-      minimumLevel: definition.minZoom,
-    });
-  }
-
-  return new Cesium.OpenStreetMapImageryProvider({
-    url: 'https://tile.openstreetmap.org/',
-  });
-}
-
-function createCesiumRectangleFromCoordinates(
-  Cesium: CesiumNamespace,
-  coordinates: [[number, number], [number, number], [number, number], [number, number]],
-) {
-  const bounds = coordinates.reduce(
-    (current, [lon, lat]) => [
-      Math.min(current[0], lon),
-      Math.min(current[1], lat),
-      Math.max(current[2], lon),
-      Math.max(current[3], lat),
-    ] as [number, number, number, number],
-    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
-  );
-
-  return Cesium.Rectangle.fromDegrees(bounds[0], bounds[1], bounds[2], bounds[3]);
-}
-
-function createCesiumGeoJsonStyle(Cesium: CesiumNamespace, style: { fillColor?: string; fillOpacity?: number; lineColor?: string; lineWidth?: number; pointColor?: string; pointOpacity?: number; pointStrokeColor?: string; pointStrokeWidth?: number }) {
-  return {
-    clampToGround: true,
-    stroke: Cesium.Color.fromCssColorString(style.lineColor ?? '#2f6da5'),
-    strokeWidth: style.lineWidth ?? 2,
-    fill: Cesium.Color.fromAlpha(
-      Cesium.Color.fromCssColorString(style.fillColor ?? '#6b9bd2'),
-      style.fillOpacity ?? 0.22,
-    ),
-    markerColor: Cesium.Color.fromCssColorString(style.pointColor ?? '#f97316'),
-    markerSize: Math.max(Math.round((style.pointOpacity ?? 1) * 14), 8),
-    outlineColor: Cesium.Color.fromCssColorString(style.pointStrokeColor ?? '#ffffff'),
-    outlineWidth: style.pointStrokeWidth ?? 1,
-  };
-}
-
-async function syncCesiumScene(
-  viewer: CesiumViewer,
-  Cesium: CesiumNamespace,
-  params: {
-    entries: {
-      id: string;
-      layerId: string;
-      basemapId?: BasemapId;
-      basemapSourceKind?: BasemapSourceKind;
-      cesiumImageryId?: CesiumImageryId;
-      visible: boolean;
-      opacity?: number;
-    }[];
-    layerVisibility: { basemap: boolean; raster: boolean; vectorOverlay: boolean };
-    raster: { id: string; imageUrl: string; coordinates: [[number, number], [number, number], [number, number], [number, number]] } | null;
-    rasterLayerVisibility: Record<string, boolean>;
-    rasterStyle: { opacity: number };
-    layers: { id: string; geojson: { type: 'FeatureCollection'; features: unknown[] } }[];
-    uploadedLayerVisibility: Record<string, boolean>;
-    uploadedLayerStyles: Record<string, { pointColor: string; pointRadius: number; pointOpacity: number; pointStrokeColor: string; pointStrokeWidth: number; lineColor: string; lineWidth: number; lineOpacity: number; fillColor: string; fillOpacity: number }>;
-    vectorOverlay: { geojson: { type: 'FeatureCollection'; features: unknown[] } } | null;
-    vectorOverlayStyle: { fillColor: string; fillOpacity: number; lineColor: string; lineWidth: number };
-  },
-  isActive: () => boolean,
-) {
-  if (!isActive()) {
-    return;
-  }
-
-  viewer.imageryLayers.removeAll(true);
-  viewer.dataSources.removeAll(true);
-
-  params.entries.forEach((entry) => {
-    if (!entry.basemapId || !entry.visible || !params.layerVisibility.basemap) {
-      return;
-    }
-
-    getRasterBasemapDefinitions(entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId).forEach((definition) => {
-      const provider = createCesiumImageryProviderFromDefinition(Cesium, definition);
-      const imageryLayer = viewer.imageryLayers.addImageryProvider(provider) as CesiumImageryLayerLike;
-      imageryLayer.alpha = entry.opacity ?? 1;
-      imageryLayer.show = true;
-    });
-  });
-
-  if (!isActive()) {
-    return;
-  }
-
-  if (params.raster && (params.rasterLayerVisibility[params.raster.id] ?? params.layerVisibility.raster)) {
-    const imageryLayer = viewer.imageryLayers.addImageryProvider(new Cesium.SingleTileImageryProvider({
-      url: params.raster.imageUrl,
-      tileWidth: 256,
-      tileHeight: 256,
-      rectangle: createCesiumRectangleFromCoordinates(Cesium, params.raster.coordinates),
-    })) as CesiumImageryLayerLike;
-
-    imageryLayer.alpha = params.rasterStyle.opacity;
-    imageryLayer.show = true;
-  }
-
-  if (!isActive()) {
-    return;
-  }
-
-  if (params.vectorOverlay && params.layerVisibility.vectorOverlay) {
-    const dataSource = await Cesium.GeoJsonDataSource.load(
-      params.vectorOverlay.geojson,
-      createCesiumGeoJsonStyle(Cesium, params.vectorOverlayStyle),
-    ) as { show: boolean };
-    if (!isActive()) {
-      return;
-    }
-    dataSource.show = true;
-    await viewer.dataSources.add(dataSource);
-  }
-
-  for (const layer of params.layers) {
-    if (!isActive()) {
-      return;
-    }
-
-    if (!(params.uploadedLayerVisibility[layer.id] ?? true)) {
-      continue;
-    }
-
-    const dataSource = await Cesium.GeoJsonDataSource.load(
-      layer.geojson,
-      createCesiumGeoJsonStyle(Cesium, params.uploadedLayerStyles[layer.id] ?? {
-        pointColor: '#f97316',
-        pointRadius: 6,
-        pointOpacity: 1,
-        pointStrokeColor: '#17202a',
-        pointStrokeWidth: 1.5,
-        lineColor: '#f97316',
-        lineWidth: 2,
-        lineOpacity: 1,
-        fillColor: '#f97316',
-        fillOpacity: 0.22,
-      }),
-    ) as { show: boolean };
-    if (!isActive()) {
-      return;
-    }
-    dataSource.show = true;
-    await viewer.dataSources.add(dataSource);
-  }
 }
 
 function flyCesiumToChina(viewer: CesiumViewer, Cesium: CesiumNamespace, duration = 0.6) {
@@ -440,210 +240,6 @@ function ensureTerrainSources(map: maplibregl.Map) {
   }
 }
 
-function syncBasemapLayers(
-  map: maplibregl.Map,
-  entries: {
-    id: string;
-    basemapId?: BasemapId;
-    basemapSourceKind?: BasemapSourceKind;
-    cesiumImageryId?: CesiumImageryId;
-    visible: boolean;
-    opacity?: number;
-  }[],
-  basemapVisible: boolean,
-) {
-  if (!map.isStyleLoaded()) {
-    logMapLibreLayerState(map, 'basemap sync skipped: style not loaded', entries, basemapVisible);
-    return;
-  }
-
-  const basemapEntries = entries.filter((entry) => entry.basemapId);
-  const expectedLayerIds = new Set<string>();
-  const expectedSourceIds = new Set<string>();
-
-  basemapEntries.forEach((entry) => {
-    getRasterBasemapDefinitions(entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId).forEach((definition) => {
-      const opacity = entry.opacity ?? 1;
-      const visible = entry.visible && basemapVisible;
-      const layerId = getBasemapRenderLayerId(entry.id, definition.suffix);
-      const sourceId = getBasemapRenderSourceId(entry.id, definition.suffix);
-      expectedLayerIds.add(layerId);
-      expectedSourceIds.add(sourceId);
-
-      if (!map.getSource(sourceId)) {
-        map.addSource(sourceId, createMapLibreRasterSource(definition));
-      }
-
-      const existingLayer = map.getLayer(layerId) as { source?: string } | undefined;
-
-      if (!existingLayer) {
-        map.addLayer({
-          id: layerId,
-          type: 'raster',
-          source: sourceId,
-          layout: {
-            visibility: visible ? 'visible' : 'none',
-          },
-        });
-      } else if (existingLayer.source !== sourceId) {
-        map.removeLayer(layerId);
-        map.addLayer({
-          id: layerId,
-          type: 'raster',
-          source: sourceId,
-          layout: {
-            visibility: visible ? 'visible' : 'none',
-          },
-        });
-      }
-
-      if (map.getLayer(layerId)) {
-        map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
-        map.setPaintProperty(layerId, 'raster-opacity', opacity);
-      }
-    });
-  });
-
-  map.getStyle().layers
-    ?.map((layer) => layer.id)
-    .filter((layerId) => layerId.startsWith('map-group-basemap-'))
-    .filter((layerId) => !expectedLayerIds.has(layerId))
-    .forEach((layerId) => {
-      const existingLayer = map.getLayer(layerId) as { source?: string } | undefined;
-
-      if (map.getLayer(layerId)) {
-        map.removeLayer(layerId);
-      }
-
-      if (existingLayer?.source && !isSourceUsedByAnyLayer(map, existingLayer.source)) {
-        map.removeSource(existingLayer.source);
-      }
-    });
-
-  Object.keys(map.getStyle().sources)
-    .filter((sourceId) => sourceId.startsWith('map-group-basemap-source-'))
-    .filter((sourceId) => !expectedSourceIds.has(sourceId))
-    .forEach((sourceId) => {
-      if (!isSourceUsedByAnyLayer(map, sourceId)) {
-        map.removeSource(sourceId);
-      }
-    });
-
-  logMapLibreLayerState(map, 'basemap sync complete', entries, basemapVisible);
-}
-
-function logMapLibreLayerState(
-  map: maplibregl.Map,
-  reason: string,
-  entries: {
-    id: string;
-    basemapId?: BasemapId;
-    basemapSourceKind?: BasemapSourceKind;
-    cesiumImageryId?: CesiumImageryId;
-    visible: boolean;
-    opacity?: number;
-  }[],
-  basemapVisible: boolean,
-) {
-  if (!shouldLogMapLibreLayers()) {
-    return;
-  }
-
-  const style = map.getStyle();
-  const layers = (style.layers ?? []).map((layer) => {
-    const layerWithSource = layer as {
-      id: string;
-      type?: string;
-      source?: string;
-      layout?: { visibility?: string };
-    };
-    const layerExists = Boolean(map.getLayer(layer.id));
-
-    return {
-      id: layer.id,
-      type: layer.type,
-      source: layerWithSource.source ?? '',
-      visibility: layerExists
-        ? map.getLayoutProperty(layer.id, 'visibility') ?? 'visible'
-        : layerWithSource.layout?.visibility ?? 'visible',
-      rasterOpacity: layerExists && layer.type === 'raster'
-        ? map.getPaintProperty(layer.id, 'raster-opacity')
-        : '',
-    };
-  });
-  const sources = Object.entries(style.sources).map(([id, source]) => {
-    const sourceSpec = source as { type?: string; tiles?: string[]; url?: string };
-
-    return {
-      id,
-      type: sourceSpec.type ?? '',
-      url: sourceSpec.url ?? '',
-      tiles: sourceSpec.tiles?.join(', ') ?? '',
-    };
-  });
-  const basemapEntries = entries.map((entry) => ({
-    id: entry.id,
-    basemapId: entry.basemapId ?? '',
-    sourceKind: entry.basemapSourceKind ?? 'basemap',
-    cesiumImageryId: entry.cesiumImageryId ?? '',
-    entryVisible: entry.visible,
-    globalBasemapVisible: basemapVisible,
-    renderedVisible: Boolean(entry.basemapId && entry.visible && basemapVisible),
-    opacity: entry.opacity ?? 1,
-  }));
-
-  console.groupCollapsed(`[CTEarth MapLibre] ${reason}`);
-  console.info('isStyleLoaded:', map.isStyleLoaded());
-  console.info('zoom:', map.getZoom(), 'center:', map.getCenter().toArray());
-  console.table(basemapEntries);
-  console.table(layers);
-  console.table(sources);
-  console.groupEnd();
-}
-
-function createMapLibreRasterSource(definition: RasterBasemapTileDefinition): MapLibreSourceSpecification {
-  return {
-    type: 'raster',
-    tiles: definition.urls ?? (definition.url ? [definition.url] : []),
-    tileSize: definition.tileSize ?? 256,
-    attribution: definition.attribution,
-    ...(definition.minZoom !== undefined ? { minzoom: definition.minZoom } : {}),
-    ...(definition.maxZoom !== undefined ? { maxzoom: definition.maxZoom } : {}),
-    ...(definition.scheme ? { scheme: definition.scheme } : {}),
-  };
-}
-
-function shouldLogMapLibreLayers() {
-  if (import.meta.env.DEV) {
-    return true;
-  }
-
-  try {
-    return window.localStorage.getItem('ctearth.debugMapLibre') === '1';
-  } catch {
-    return false;
-  }
-}
-
-function getBasemapRenderLayerId(renderId: string, suffix: string) {
-  return `map-group-basemap-${sanitizeLayerId(renderId)}-${suffix}`;
-}
-
-function getBasemapRenderSourceId(renderId: string, suffix: string) {
-  return `map-group-basemap-source-${sanitizeLayerId(renderId)}-${suffix}`;
-}
-
-function isSourceUsedByAnyLayer(map: maplibregl.Map, sourceId: string) {
-  return Boolean(map.getStyle().layers?.some((layer) => {
-    const candidate = layer as { source?: string };
-    return candidate.source === sourceId;
-  }));
-}
-
-function sanitizeLayerId(id: string) {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
-}
-
 function setTerrainMode(map: maplibregl.Map, enabled: boolean) {
   if (!map.isStyleLoaded()) {
     return false;
@@ -700,7 +296,7 @@ export function MapPanel() {
     vectorOverlayStyle,
     uploadedLayerStyles,
     workspaceDraftLoaded,
-  } = useGis();
+  } = useLayerStore();
   const layersRef = useRef(layers);
   const rasterRef = useRef(raster);
   const vectorOverlayRef = useRef(vectorOverlay);
@@ -827,14 +423,14 @@ export function MapPanel() {
           return;
         }
 
-        syncMapGroupLayerOrder(
+        createMapLibreLayerAdapter().sync({
           map,
-          mapGroupEntriesRef.current,
-          layersRef.current,
-          rasterRef.current?.id ?? null,
-          Boolean(vectorOverlayRef.current),
-          basemapVisibleRef.current,
-        );
+          entries: mapGroupEntriesRef.current,
+          uploadedLayers: layersRef.current,
+          rasterId: rasterRef.current?.id ?? null,
+          hasVectorOverlay: Boolean(vectorOverlayRef.current),
+          basemapVisible: basemapVisibleRef.current,
+        });
       };
 
       map.on('styledata', markMapReady);
@@ -1071,7 +667,11 @@ export function MapPanel() {
           return;
         }
 
-        await syncCesiumScene(cesium.viewer, cesium.Cesium, {
+        const cesiumLayerAdapter = createCesiumLayerAdapter();
+        await cesiumLayerAdapter.sync({
+          viewer: cesium.viewer,
+          Cesium: cesium.Cesium,
+          isActive,
           entries: mapGroupRenderState.entries,
           layerVisibility,
           raster,
@@ -1082,7 +682,7 @@ export function MapPanel() {
           uploadedLayerVisibility,
           vectorOverlay,
           vectorOverlayStyle,
-        }, isActive);
+        });
 
         if (!isActive()) {
           return;
@@ -1131,14 +731,14 @@ export function MapPanel() {
       setLayersVisibility(map, uploadedLayerIds(item.id), uploadedLayerVisibility[item.id] ?? true);
     });
 
-    syncMapGroupLayerOrder(
+    createMapLibreLayerAdapter().sync({
       map,
-      mapGroupRenderState.entries,
-      layers,
-      raster?.id ?? null,
-      Boolean(vectorOverlay),
-      layerVisibility.basemap,
-    );
+      entries: mapGroupRenderState.entries,
+      uploadedLayers: layers,
+      rasterId: raster?.id ?? null,
+      hasVectorOverlay: Boolean(vectorOverlay),
+      basemapVisible: layerVisibility.basemap,
+    });
   }, [
     layers,
     mapGroupRenderState.entries,
@@ -1187,14 +787,14 @@ export function MapPanel() {
       },
     );
     setLayersVisibility(map, rasterLayerIds, rasterLayerVisibility[raster.id] ?? layerVisibility.raster);
-    syncMapGroupLayerOrder(
+    createMapLibreLayerAdapter().sync({
       map,
-      mapGroupRenderState.entries,
-      layers,
-      raster?.id ?? null,
-      Boolean(vectorOverlay),
-      layerVisibility.basemap,
-    );
+      entries: mapGroupRenderState.entries,
+      uploadedLayers: layers,
+      rasterId: raster?.id ?? null,
+      hasVectorOverlay: Boolean(vectorOverlay),
+      basemapVisible: layerVisibility.basemap,
+    });
     if (lastAutoFitRasterIdRef.current !== raster.id) {
       fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
       lastAutoFitRasterIdRef.current = raster.id;
@@ -1261,14 +861,14 @@ export function MapPanel() {
       },
     );
     setLayersVisibility(map, vectorOverlayLayerIds, layerVisibility.vectorOverlay);
-    syncMapGroupLayerOrder(
+    createMapLibreLayerAdapter().sync({
       map,
-      mapGroupRenderState.entries,
-      layers,
-      raster?.id ?? null,
-      Boolean(vectorOverlay),
-      layerVisibility.basemap,
-    );
+      entries: mapGroupRenderState.entries,
+      uploadedLayers: layers,
+      rasterId: raster?.id ?? null,
+      hasVectorOverlay: Boolean(vectorOverlay),
+      basemapVisible: layerVisibility.basemap,
+    });
 
     const bounds = getGeoJsonBounds(vectorOverlay.geojson);
 
@@ -1733,60 +1333,6 @@ function removeStaleUploadedLayers(map: maplibregl.Map, expectedLayerIds: Set<st
 function uploadedIdFromLayerId(layerId: string) {
   const match = /^uploaded-layer-(.+)-(fill|line|circle|label)$/.exec(layerId);
   return match?.[1] ?? null;
-}
-
-function syncMapGroupLayerOrder(
-  map: maplibregl.Map,
-  entries: { id: string; layerId: string; basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId; visible: boolean; opacity?: number }[],
-  uploadedLayers: { id: string }[],
-  rasterId: string | null,
-  hasVectorOverlay: boolean,
-  basemapVisible: boolean,
-) {
-  syncBasemapLayers(map, entries, basemapVisible);
-
-  const uploadedIds = new Set(uploadedLayers.map((item) => item.id));
-  const layerGroups = entries
-    .map((entry) => layerGroupIdsForEntry(entry, uploadedIds, rasterId, hasVectorOverlay))
-    .filter((ids) => ids.length > 0);
-
-  [...layerGroups].reverse().forEach((groupIds) => {
-    groupIds.forEach((id) => {
-      if (map.getLayer(id)) {
-        map.moveLayer(id);
-      }
-    });
-  });
-}
-
-function layerGroupIdsForEntry(
-  entry: { id: string; layerId: string; basemapId?: BasemapId; basemapSourceKind?: BasemapSourceKind; cesiumImageryId?: CesiumImageryId },
-  uploadedIds: Set<string>,
-  rasterId: string | null,
-  hasVectorOverlay: boolean,
-) {
-  if (entry.layerId === 'basemap' && entry.basemapId) {
-    return getBasemapRenderLayerIds(entry.id, entry.basemapSourceKind, entry.basemapId, entry.cesiumImageryId);
-  }
-
-  if (entry.layerId === 'vectorOverlay') {
-    return hasVectorOverlay ? vectorOverlayLayerIds : [];
-  }
-
-  if (entry.layerId.startsWith('uploaded:')) {
-    const layerId = entry.layerId.slice('uploaded:'.length);
-    return uploadedIds.has(layerId) ? uploadedLayerIds(layerId) : [];
-  }
-
-  if (entry.layerId.startsWith('raster:')) {
-    return rasterId && entry.layerId === `raster:${rasterId}` ? rasterLayerIds : [];
-  }
-
-  return [];
-}
-
-function getBasemapRenderLayerIds(renderId: string, basemapSourceKind: BasemapSourceKind | undefined, basemapId: BasemapId, cesiumImageryId: CesiumImageryId | undefined) {
-  return getRasterBasemapDefinitions(basemapSourceKind, basemapId, cesiumImageryId).map((definition) => getBasemapRenderLayerId(renderId, definition.suffix));
 }
 
 function setLayersVisibility(map: maplibregl.Map, layerIds: string[], visible: boolean) {
