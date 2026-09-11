@@ -53,7 +53,9 @@ src/
 - 工作区布局、面板、工具栏
 - 可被多个业务复用的展示组件
 
-图层专属组件应放在 `features/layers/components/`，而不是继续增加到全局 `components/`。
+功能模块及其专属 UI 组件应放在同一 Feature 模块内。
+
+只有跨多个功能模块复用、且与具体业务无关的通用组件，才放入 `src/components` 或 `src/shared`。
 
 ### `features/`
 
@@ -68,6 +70,17 @@ src/features/<feature-name>/
 ├─ types.ts                 # 该业务的领域类型
 └─ index.ts                 # 对外公开的稳定入口
 ```
+
+当前地图显示与视图控制模块位于 `src/features/maps/`：
+
+```text
+src/features/maps/
+├─ components/               # 地图工作区、投影视图和共享地图 UI
+├─ services/                 # 视口范围、坐标检索等纯业务服务
+└─ index.ts                  # 地图模块公开入口
+```
+
+MapLibre、OpenLayers 和 Cesium 的实例生命周期只允许在地图运行时组件中处理；图层同步仍统一委托给 `src/features/layers/adapters/`。
 
 ### `services/`
 
@@ -154,6 +167,7 @@ adapters   → types / 地图引擎 API
 - LayerList 直接调用 MapLibre、Cesium 或 OpenLayers 实例
 - 通用组件依赖具体图层业务
 - 业务模块通过深层路径访问另一个模块的内部文件
+- 地图工具栏或其他业务组件绕过 `features/maps/index.ts` 访问地图运行时内部文件
 
 跨模块访问应优先使用目标模块的 `index.ts` 公开入口。
 
@@ -190,3 +204,5 @@ adapters   → types / 地图引擎 API
 4. 新的 MapLibre、Cesium、OpenLayers 同步逻辑放入 `src/features/layers/adapters/`。
 5. 旧组件只保留兼容入口，不再继续堆积新的业务逻辑。
 6. 每次迁移后运行 TypeScript 编译和生产构建。
+
+地图显示与视图控制模块的新增代码应放入 `src/features/maps/`，跨引擎导航通过 `MapCommandContext` 注册能力，视口范围和坐标检索优先复用 `services/` 下的纯函数。

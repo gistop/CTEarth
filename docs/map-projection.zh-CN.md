@@ -26,11 +26,14 @@ CTEarth 同时使用多个地图引擎，是因为不同工作流对渲染、编
 
 相关源码文件：
 
-- `src/components/MapPanel.tsx`
+- `src/features/maps/components/MapPanel.tsx`
 - `src/components/digitize/OpenLayersDigitizeMap.tsx`
 - `src/components/layout/LayoutMapPreview.tsx`
-- `src/components/map/OpenLayersProjectionMap.tsx`
-- `src/components/map/MapCommandContext.tsx`
+- `src/features/maps/components/map/OpenLayersProjectionMap.tsx`
+- `src/features/maps/components/map/MapCommandContext.tsx`
+- `src/features/maps/components/MapViewportFrame.tsx`
+- `src/features/maps/services/mapViewportService.ts`
+- `src/features/maps/services/mapSearchService.ts`
 - `src/geoParquet.ts`
 - `src/gisStore.tsx`
 

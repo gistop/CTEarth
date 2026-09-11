@@ -1,6 +1,6 @@
 import type { MapGroupRenderEntry } from '../../../mapGroupRenderState';
-import { getRasterBasemapDefinitions } from '../../../components/map/rasterBasemapSources';
-import type { CesiumNamespace, CesiumViewer } from '../../../components/map/cesiumRuntime';
+import { getRasterBasemapDefinitions } from '../../maps/components/map/rasterBasemapSources';
+import type { CesiumNamespace, CesiumViewer } from '../../maps/components/map/cesiumRuntime';
 import type { LayerEngineAdapter } from './layerAdapterTypes';
 
 type CesiumImageryLayerLike = {

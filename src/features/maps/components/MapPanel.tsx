@@ -1,16 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
-import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type UploadedLayerStyle } from '../gisStore';
+import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type UploadedLayerStyle } from '../../../gisStore';
 import {
   createCesiumLayerAdapter,
   createMapLibreLayerAdapter,
   useLayerStore,
-} from '../features/layers';
-import { useDigitize } from './digitize/DigitizeContext';
-import type { OpenLayersDigitizeMapHandle } from './digitize/OpenLayersDigitizeMap';
+} from '../../layers';
+import { useDigitize } from '../../../components/digitize/DigitizeContext';
+import type { OpenLayersDigitizeMapHandle } from '../../../components/digitize/OpenLayersDigitizeMap';
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
-import { type BasemapId, type DisplayCrsId, type MapViewMode, useMapCommands } from './map/MapCommandContext';
+import { type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { MapMeasurePanel } from './map/MapMeasurePanel';
 import { useMapMeasure } from './map/MapMeasureContext';
 import { MapSunlightPanel } from './map/MapSunlightPanel';
@@ -20,22 +20,21 @@ import { configureCesiumIonToken, loadCesium, type CesiumNamespace, type CesiumV
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
-import { useMapGroupRenderState } from '../mapGroupRenderState';
-import type { UploadedLayer } from '../gisStore';
+import { useMapGroupRenderState } from '../../../mapGroupRenderState';
+import type { UploadedLayer } from '../../../gisStore';
+import { MapViewportFrame } from './MapViewportFrame';
+import { combineMapBounds, padMapBounds } from '../services/mapViewportService';
+import { logMapTerrainDiagnostics } from '../services/mapTerrainDiagnostics';
+import { setMapLibreTerrainMode } from '../services/mapTerrainModeService';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
-const TERRAIN_DEM_SOURCE_ID = 'terrain-dem';
-const TERRAIN_HILLSHADE_SOURCE_ID = 'terrain-hillshade-dem';
-const TERRAIN_HILLSHADE_LAYER_ID = 'terrain-hillshade';
-const TERRAIN_DEM_TILEJSON_URL = 'https://tiles.mapterhorn.com/tilejson.json';
-type MapLibreSourceSpecification = Parameters<maplibregl.Map['addSource']>[1];
 
 const rasterLayerIds = ['idw-interpolation'];
 const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
 
 const OpenLayersDigitizeMap = lazy(() => (
-  import('./digitize/OpenLayersDigitizeMap').then((module) => ({ default: module.OpenLayersDigitizeMap }))
+  import('../../../components/digitize/OpenLayersDigitizeMap').then((module) => ({ default: module.OpenLayersDigitizeMap }))
 ));
 
 type NominatimSearchResult = {
@@ -201,68 +200,6 @@ function createOnlineMapStyle(): maplibregl.StyleSpecification {
   };
 }
 
-function createTerrainSourceDefinition(): MapLibreSourceSpecification {
-  return {
-    type: 'raster-dem',
-    url: TERRAIN_DEM_TILEJSON_URL,
-    tileSize: 256,
-  };
-}
-
-function ensureTerrainSources(map: maplibregl.Map) {
-  if (!map.getSource(TERRAIN_DEM_SOURCE_ID)) {
-    map.addSource(TERRAIN_DEM_SOURCE_ID, createTerrainSourceDefinition());
-  }
-
-  if (!map.getSource(TERRAIN_HILLSHADE_SOURCE_ID)) {
-    map.addSource(TERRAIN_HILLSHADE_SOURCE_ID, createTerrainSourceDefinition());
-  }
-
-  if (!map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
-    const firstNonBackgroundLayerId = map.getStyle().layers?.find((layer) => layer.type !== 'background')?.id;
-
-    map.addLayer({
-      id: TERRAIN_HILLSHADE_LAYER_ID,
-      type: 'hillshade',
-      source: TERRAIN_HILLSHADE_SOURCE_ID,
-      layout: {
-        visibility: 'none',
-      },
-      paint: {
-        'hillshade-method': 'standard',
-        'hillshade-illumination-direction': 315,
-        'hillshade-shadow-color': '#2f3340',
-        'hillshade-highlight-color': '#ffffff',
-        'hillshade-accent-color': '#2f3340',
-        'hillshade-exaggeration': 0.5,
-      },
-    }, firstNonBackgroundLayerId);
-  }
-}
-
-function setTerrainMode(map: maplibregl.Map, enabled: boolean) {
-  if (!map.isStyleLoaded()) {
-    return false;
-  }
-
-  if (enabled && !map.getSource(TERRAIN_DEM_SOURCE_ID)) {
-    ensureTerrainSources(map);
-  }
-
-  if (map.getLayer(TERRAIN_HILLSHADE_LAYER_ID)) {
-    map.setLayoutProperty(TERRAIN_HILLSHADE_LAYER_ID, 'visibility', enabled ? 'visible' : 'none');
-  }
-
-  map.setTerrain(enabled
-    ? {
-      source: TERRAIN_DEM_SOURCE_ID,
-      exaggeration: 1.15,
-    }
-    : null);
-
-  return enabled ? Boolean(map.getSource(TERRAIN_DEM_SOURCE_ID)) : true;
-}
-
 export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
@@ -302,6 +239,7 @@ export function MapPanel() {
   const vectorOverlayRef = useRef(vectorOverlay);
   const mapGroupEntriesRef = useRef(mapGroupRenderState.entries);
   const basemapVisibleRef = useRef(layerVisibility.basemap);
+  const mapCommandStateRef = useRef(mapCommandState);
   const hasAppliedStartupViewportRef = useRef(false);
   const [coords, setCoords] = useState(`${CHINA_CENTER[0]}, ${CHINA_CENTER[1]}`);
   const [status, setStatus] = useState('\u6b63\u5728\u521d\u59cb\u5316\u5728\u7ebf\u5730\u56fe');
@@ -323,6 +261,10 @@ export function MapPanel() {
     mapModeRef.current = mapCommandState.mapMode;
     digitizeMapVisibleRef.current = editingActive && mapCommandState.mapMode !== 'globe';
   }, [editingActive, mapCommandState.mapMode]);
+
+  useEffect(() => {
+    mapCommandStateRef.current = mapCommandState;
+  }, [mapCommandState]);
 
   useEffect(() => {
     digitizeMapVisibleRef.current = editingActive && mapCommandState.mapMode !== 'globe';
@@ -504,13 +446,13 @@ export function MapPanel() {
     }
 
     if (mapCommandState.mapMode === 'globe') {
-      setTerrainMode(map, false);
+      setMapLibreTerrainMode(map, false);
       setStatus('');
       return;
     }
 
     if (mapCommandState.mapMode === 'terrain') {
-      const terrainEnabled = setTerrainMode(map, true);
+      const terrainEnabled = setMapLibreTerrainMode(map, true);
 
       map.easeTo({
         pitch: 60,
@@ -524,7 +466,7 @@ export function MapPanel() {
       return;
     }
 
-    setTerrainMode(map, false);
+    setMapLibreTerrainMode(map, false);
     map.easeTo({
       pitch: 0,
       bearing: 0,
@@ -956,24 +898,6 @@ export function MapPanel() {
     mapRef.current?.resetNorthPitch();
   }, []);
 
-  const setBasemap = useCallback((basemap: BasemapId) => {
-    const map = mapRef.current;
-
-    if (!map) {
-      return;
-    }
-
-    updateMapCommandState({ basemap });
-  }, [updateMapCommandState]);
-
-  const setCesiumImagery = useCallback((imagery: CesiumImageryId) => {
-    updateMapCommandState({ cesiumImagery: imagery });
-  }, [updateMapCommandState]);
-
-  const setCesiumTerrain = useCallback((terrain: CesiumTerrainId) => {
-    updateMapCommandState({ cesiumTerrain: terrain });
-  }, [updateMapCommandState]);
-
   const toggleDragRotate = useCallback(() => {
     const map = mapRef.current;
 
@@ -990,10 +914,6 @@ export function MapPanel() {
     updateMapCommandState({ dragRotateEnabled: map.dragRotate.isEnabled() });
   }, [updateMapCommandState]);
 
-  const setMapMode = useCallback((mapMode: MapViewMode) => {
-    updateMapCommandState({ mapMode });
-  }, [updateMapCommandState]);
-
   const syncViewport = useCallback(() => {
     const map = mapRef.current;
 
@@ -1002,10 +922,19 @@ export function MapPanel() {
     }
   }, [setViewportBounds4326]);
 
-  const setDisplayCrs = useCallback((displayCrs: DisplayCrsId) => {
-    syncViewport();
-    updateMapCommandState({ displayCrs, mapMode: displayCrs !== 'webMercator' ? 'planar' : mapModeRef.current });
-  }, [syncViewport, updateMapCommandState]);
+  const inspectTerrain = useCallback(() => {
+    const currentMapCommandState = mapCommandStateRef.current;
+
+    logMapTerrainDiagnostics({
+      map: mapRef.current,
+      mapMode: mapModeRef.current,
+      displayCrs: currentMapCommandState.displayCrs,
+      basemap: currentMapCommandState.basemap,
+      basemapSourceKind: currentMapCommandState.basemapSourceKind,
+      basemapVisible: basemapVisibleRef.current,
+      mapGroupEntries: mapGroupEntriesRef.current,
+    });
+  }, []);
 
   const locateByQuery = useCallback(async (query: string) => {
     const trimmed = query.trim();
@@ -1110,22 +1039,22 @@ export function MapPanel() {
       zoomIn,
       zoomOut,
       resetNorth,
-      setBasemap,
-      setCesiumImagery,
-      setCesiumTerrain,
-      setDisplayCrs,
-      setMapMode,
       syncViewport,
       toggleDragRotate,
       locate,
+      inspectTerrain,
     }),
-    [locate, locateByQuery, resetNorth, setBasemap, setCesiumImagery, setCesiumTerrain, setDisplayCrs, setMapMode, syncViewport, toggleDragRotate, zoomIn, zoomOut],
+    [inspectTerrain, locate, locateByQuery, resetNorth, syncViewport, toggleDragRotate, zoomIn, zoomOut],
   );
 
   useEffect(() => registerMapCommands(mapCommands), [mapCommands, registerMapCommands]);
 
   return (
-    <section className={`map-panel${isSunlightOpen && mapCommandState.mapMode === 'globe' ? ' has-sunlight-control' : ''}`}>
+    <MapViewportFrame
+      sunlightOpen={isSunlightOpen && mapCommandState.mapMode === 'globe'}
+      status={editingActive ? digitizeStatus : selectionStatus || status}
+      readout={coords}
+    >
       <div className={`map-canvas${mapCommandState.mapMode === 'globe' ? ' is-hidden' : ''}`} ref={containerRef} />
       <MapFeatureIdentify active={featureIdentifyActive} map={mapRef.current} mapReady={mapReady} />
       <MapFeatureSelection active={featureSelectionActive} map={mapRef.current} mapReady={mapReady} />
@@ -1141,11 +1070,7 @@ export function MapPanel() {
       <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
       <MapSunlightPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <MapMeasurePanel cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
-      {editingActive || selectionStatus || status ? (
-        <div className="map-status">{editingActive ? digitizeStatus : selectionStatus || status}</div>
-      ) : null}
-      <div className="map-readout">{coords}</div>
-    </section>
+    </MapViewportFrame>
   );
 }
 
@@ -1351,15 +1276,15 @@ function getStartupDataBounds(
   let bounds: [number, number, number, number] | null = null;
 
   layers.forEach((layer) => {
-    bounds = combineBounds(bounds, getUploadedLayerBounds(layer));
+    bounds = combineMapBounds(bounds, getUploadedLayerBounds(layer));
   });
 
   if (raster) {
-    bounds = combineBounds(bounds, flattenBounds(boundsFromCoordinates(raster.coordinates)));
+    bounds = combineMapBounds(bounds, flattenBounds(boundsFromCoordinates(raster.coordinates)));
   }
 
   if (vectorOverlay) {
-    bounds = combineBounds(bounds, getGeoJsonBounds(vectorOverlay.geojson));
+    bounds = combineMapBounds(bounds, getGeoJsonBounds(vectorOverlay.geojson));
   }
 
   return bounds;
@@ -1369,26 +1294,6 @@ function getUploadedLayerBounds(layer: UploadedLayer) {
   return layer.points.features.length > 0
     ? getPointBounds(layer.points.features)
     : getGeoJsonBounds(layer.geojson);
-}
-
-function combineBounds(
-  current: [number, number, number, number] | null,
-  next: [number, number, number, number] | null,
-) {
-  if (!current) {
-    return next;
-  }
-
-  if (!next) {
-    return current;
-  }
-
-  return [
-    Math.min(current[0], next[0]),
-    Math.min(current[1], next[1]),
-    Math.max(current[2], next[2]),
-    Math.max(current[3], next[3]),
-  ] as [number, number, number, number];
 }
 
 function flattenBounds(bounds: [[number, number], [number, number]]) {
@@ -1402,9 +1307,11 @@ function fitValidBounds(
   padding: number,
   duration: number,
 ) {
-  const paddedBounds = padBounds(bounds, ratio);
+  const paddedBounds = padMapBounds(bounds, ratio);
 
-  return paddedBounds ? fitValidLngLatBounds(map, paddedBounds, padding, duration) : false;
+  return paddedBounds
+    ? fitValidLngLatBounds(map, [[paddedBounds[0], paddedBounds[1]], [paddedBounds[2], paddedBounds[3]]], padding, duration)
+    : false;
 }
 
 function fitValidLngLatBounds(
@@ -1425,22 +1332,6 @@ function fitValidLngLatBounds(
   }
 }
 
-function padBounds(bounds: [number, number, number, number], ratio: number): [[number, number], [number, number]] | null {
-  const [minLon, minLat, maxLon, maxLat] = bounds;
-
-  if (!bounds.every(Number.isFinite) || minLon > maxLon || minLat > maxLat || minLat < -90 || maxLat > 90) {
-    return null;
-  }
-
-  const lonPad = Math.max((maxLon - minLon) * ratio, 0.01);
-  const latPad = Math.max((maxLat - minLat) * ratio, 0.01);
-
-  return [
-    [minLon - lonPad, clampLatitude(minLat - latPad)],
-    [maxLon + lonPad, clampLatitude(maxLat + latPad)],
-  ];
-}
-
 function isValidLngLatBounds(bounds: [[number, number], [number, number]]) {
   const [[west, south], [east, north]] = bounds;
 
@@ -1450,10 +1341,6 @@ function isValidLngLatBounds(bounds: [[number, number], [number, number]]) {
     && north >= -90
     && north <= 90
     && south <= north;
-}
-
-function clampLatitude(value: number) {
-  return Math.max(-90, Math.min(90, value));
 }
 
 function boundsFromCoordinates(

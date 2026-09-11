@@ -23,13 +23,13 @@ import { LayerBadge } from './LayerBadge';
 import { LayerRow } from './LayerRow';
 import { LayerStylePanel } from './LayerStylePanel';
 import type { LayerGeometryKind, LayerListItem, MapGroupLayerRow } from './layerViewTypes';
-import { useMapCommands } from '../../../components/map/MapCommandContext';
-import { useMapBasemapSelection } from '../../../components/map/MapBasemapSelectionContext';
+import { useMapCommands } from '../../maps/components/map/MapCommandContext';
+import { useMapBasemapSelection } from '../../maps/components/map/MapBasemapSelectionContext';
 import { useLayerStore, type LayerStore } from '../stores/layerStore';
 import { useMapGroupStore } from '../stores/mapGroupStore';
-import { defaultBasemapId, type BasemapId } from '../../../components/map/basemapOptions';
-import { defaultCesiumImageryId, type CesiumImageryId } from '../../../components/map/cesiumLayerOptions';
-import type { BasemapSourceKind } from '../../../components/map/rasterBasemapSources';
+import { defaultBasemapId, type BasemapId } from '../../maps/components/map/basemapOptions';
+import { defaultCesiumImageryId, type CesiumImageryId } from '../../maps/components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../../maps/components/map/rasterBasemapSources';
 import {
   addBasemapLayerItemToCurrentGroup,
   createMapGroupId,

@@ -3,7 +3,7 @@ import type Feature from 'ol/Feature.js';
 import type Map from 'ol/Map.js';
 import Overlay from 'ol/Overlay.js';
 import type Geometry from 'ol/geom/Geometry.js';
-import { useGis } from '../../gisStore';
+import { useGis } from '../../../../gisStore';
 import { createIdentifyPopupElement, getIdentifiedFeature } from './identifyFeature';
 
 type OpenLayersFeatureIdentifyProps = {

@@ -1,11 +1,11 @@
 import type { LayerOrderId } from '../../../gisStore';
-import { defaultBasemapId, getBasemapLabel, type BasemapId } from '../../../components/map/basemapOptions';
+import { defaultBasemapId, getBasemapLabel, type BasemapId } from '../../maps/components/map/basemapOptions';
 import {
   defaultCesiumImageryId,
   getCesiumImageryLabel,
   type CesiumImageryId,
-} from '../../../components/map/cesiumLayerOptions';
-import type { BasemapSourceKind } from '../../../components/map/rasterBasemapSources';
+} from '../../maps/components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../../maps/components/map/rasterBasemapSources';
 import type { MapGroup, MapGroupLayerItem, MapGroupLayerItemId } from '../types';
 
 export const DEFAULT_MAP_GROUP_ID = 'map-1';

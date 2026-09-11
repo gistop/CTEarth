@@ -3,7 +3,7 @@ import type { MapGroupRenderEntry } from '../../../mapGroupRenderState';
 import {
   getRasterBasemapDefinitions,
   type RasterBasemapTileDefinition,
-} from '../../../components/map/rasterBasemapSources';
+} from '../../maps/components/map/rasterBasemapSources';
 import type { LayerEngineAdapter } from './layerAdapterTypes';
 
 const RASTER_LAYER_IDS = ['idw-interpolation'];
@@ -263,10 +263,8 @@ function logMapLibreLayerState(
 }
 
 function shouldLogMapLibreLayers() {
-  if (import.meta.env.DEV) {
-    return true;
-  }
-
+  // Map synchronization runs frequently (styledata/idle). Keep diagnostics
+  // opt-in so normal development and production consoles stay quiet.
   try {
     return window.localStorage.getItem('ctearth.debugMapLibre') === '1';
   } catch {

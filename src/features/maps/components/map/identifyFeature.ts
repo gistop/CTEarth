@@ -1,4 +1,4 @@
-import { displayLayerName, type UploadedLayer } from '../../gisStore';
+import { displayLayerName, type UploadedLayer } from '../../../../gisStore';
 
 export type IdentifiedFeature = {
   field: string;

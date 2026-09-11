@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
-import { useGis } from '../../gisStore';
+import { useGis } from '../../../../gisStore';
 import { createIdentifyPopupElement, getIdentifiedFeature } from './identifyFeature';
 
 type MapFeatureIdentifyProps = {

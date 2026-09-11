@@ -1,7 +1,7 @@
 import type { LayerOrderId } from '../../gisStore';
-import type { BasemapId } from '../../components/map/basemapOptions';
-import type { CesiumImageryId } from '../../components/map/cesiumLayerOptions';
-import type { BasemapSourceKind } from '../../components/map/rasterBasemapSources';
+import type { BasemapId } from '../maps/components/map/basemapOptions';
+import type { CesiumImageryId } from '../maps/components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../maps/components/map/rasterBasemapSources';
 
 /**
  * Canonical identifiers used by the layer management feature.

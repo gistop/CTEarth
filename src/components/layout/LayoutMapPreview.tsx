@@ -18,11 +18,11 @@ import VectorSource from 'ol/source/Vector.js';
 import XYZ from 'ol/source/XYZ.js';
 import type Geometry from 'ol/geom/Geometry.js';
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from 'ol/style.js';
-import type { BasemapId } from '../map/MapCommandContext';
+import type { BasemapId } from '../../features/maps/components/map/MapCommandContext';
 import { defaultUploadedLayerStyle, useGis, type UploadedLayerStyle, type VectorOverlayStyle } from '../../gisStore';
 import { useMapGroupRenderState } from '../../mapGroupRenderState';
 import { useLayout } from './LayoutPanel';
-import { getRasterBasemapDefinitions } from '../map/rasterBasemapSources';
+import { getRasterBasemapDefinitions } from '../../features/maps/components/map/rasterBasemapSources';
 
 const layoutPreviewCenter: [number, number] = [10.4515, 51.1657];
 const layoutPreviewZoom = 5.3;

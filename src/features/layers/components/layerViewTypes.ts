@@ -1,6 +1,6 @@
-import type { BasemapId } from '../../../components/map/basemapOptions';
-import type { CesiumImageryId } from '../../../components/map/cesiumLayerOptions';
-import type { BasemapSourceKind } from '../../../components/map/rasterBasemapSources';
+import type { BasemapId } from '../../maps/components/map/basemapOptions';
+import type { CesiumImageryId } from '../../maps/components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../../maps/components/map/rasterBasemapSources';
 import type { RasterOverlay, UploadedLayer } from '../../../gisStore';
 import type { MapGroupLayerItem } from '../types';
 

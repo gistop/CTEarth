@@ -13,16 +13,16 @@ import ImageStatic from 'ol/source/ImageStatic.js';
 import VectorSource from 'ol/source/Vector.js';
 import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style.js';
 import type { Coordinate } from 'ol/coordinate.js';
-import type { BasemapId, DisplayCrsId } from './MapCommandContext';
-import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds } from '../../gisStore';
+import { type BasemapId, type DisplayCrsId, useMapCommands } from './MapCommandContext';
+import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds } from '../../../../gisStore';
 import { OpenLayersFeatureIdentify } from './OpenLayersFeatureIdentify';
 import { useMapViewport } from './MapViewportContext';
-import { useMapGroupRenderState } from '../../mapGroupRenderState';
+import { useMapGroupRenderState } from '../../../../mapGroupRenderState';
 import {
   createOpenLayersLayerAdapter,
   type OpenLayersBasemapLayer,
   useLayerStore,
-} from '../../features/layers';
+} from '../../../layers';
 
 const CHINA_CENTER: [number, number] = [10.4515, 51.1657];
 const CHINA_ZOOM = 5.3;
@@ -53,6 +53,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   const uploadedLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const basemapLayersRef = useRef(new globalThis.Map<string, OpenLayersBasemapLayer>());
   const { viewportBounds4326, setViewportBounds4326 } = useMapViewport();
+  const { registerMapCommands } = useMapCommands();
   const initialViewportBoundsRef = useRef(viewportBounds4326);
   const mapGroupRenderState = useMapGroupRenderState();
   const {
@@ -93,6 +94,32 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     zoomIn: () => zoomOpenLayersByDelta(mapRef.current, 1),
     zoomOut: () => zoomOpenLayersByDelta(mapRef.current, -1),
   }), [projectionCode]);
+
+  useEffect(() => registerMapCommands({
+    locate: () => {
+      const map = mapRef.current;
+
+      if (!map) {
+        return;
+      }
+
+      const view = map.getView();
+      view.setCenter(transform(CHINA_CENTER, 'EPSG:4326', projectionCode));
+      view.setZoom(CHINA_ZOOM);
+      view.setRotation(0);
+    },
+    resetNorth: () => mapRef.current?.getView().setRotation(0),
+    zoomIn: () => zoomOpenLayersByDelta(mapRef.current, 1),
+    zoomOut: () => zoomOpenLayersByDelta(mapRef.current, -1),
+    syncViewport: () => {
+      const map = mapRef.current;
+      const bounds = map ? openLayersMapToLonLatExtent(map, projectionCode) : null;
+
+      if (bounds) {
+        setViewportBounds4326(bounds);
+      }
+    },
+  }), [projectionCode, registerMapCommands, setViewportBounds4326]);
 
   useEffect(() => {
     const container = containerRef.current;

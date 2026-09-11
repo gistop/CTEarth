@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type maplibregl from 'maplibre-gl';
-import { useGis } from '../../gisStore';
+import { useGis } from '../../../../gisStore';
 
 type MapFeatureSelectionProps = {
   active: boolean;

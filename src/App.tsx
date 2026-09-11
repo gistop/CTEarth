@@ -1,4 +1,4 @@
-import { createContext, Fragment, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockviewReact,
   type DockviewApi,
@@ -53,16 +53,19 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { MapPanel } from './components/MapPanel';
-import { CoordinateSystemControls as MapCoordinateSystemControls } from './components/map/CoordinateSystemControls';
-import { GlobeLocateSearchButton } from './components/map/GlobeLocateSearchButton';
-import { MapLayerMenu } from './components/map/MapLayerMenu';
-import { MapMeasureButton } from './components/map/MapMeasureButton';
-import { MapMeasureProvider } from './components/map/MapMeasureContext';
-import { MapSunlightButton } from './components/map/MapSunlightButton';
-import { MapSunlightProvider } from './components/map/MapSunlightContext';
-import { MapBasemapSelectionProvider } from './components/map/MapBasemapSelectionContext';
-import type { OpenLayersProjectionMapHandle } from './components/map/OpenLayersProjectionMap';
+import {
+  CoordinateSystemControls as MapCoordinateSystemControls,
+  GlobeLocateSearchButton,
+  MapLayerMenu,
+  MapMeasureButton,
+  MapTerrainDiagnosticsButton,
+  MapMeasureProvider,
+  MapPanel,
+  MapViewportFrame,
+  MapSunlightButton,
+  MapSunlightProvider,
+  MapBasemapSelectionProvider,
+} from './features/maps';
 import {
   AttributeTableProvider,
   defaultAttributeTableState,
@@ -82,10 +85,10 @@ import {
   type MapCommandState,
   type MapViewMode,
   useMapCommands,
-} from './components/map/MapCommandContext';
-import { MapIdentifyProvider, useMapIdentify } from './components/map/MapIdentifyContext';
-import { MapSelectionProvider, useMapSelection } from './components/map/MapSelectionContext';
-import { MapViewportProvider } from './components/map/MapViewportContext';
+} from './features/maps';
+import { MapIdentifyProvider, useMapIdentify } from './features/maps';
+import { MapSelectionProvider, useMapSelection } from './features/maps';
+import { MapViewportProvider } from './features/maps';
 import {
   LayoutElementControls,
   LayoutAlignSplitButton,
@@ -157,29 +160,6 @@ const dockColumnRatio = {
 const aiAssistantPanelId = 'ai-assistant-panel';
 const attributeChartPanelIdPrefix = 'attribute-chart:';
 const attributeTablePanelIdPrefix = 'attribute-table:';
-type ProjectionMapCommand = Extract<MapCommand, 'zoomIn' | 'zoomOut' | 'resetNorth' | 'locate'>;
-type ProjectionMapCommands = Pick<OpenLayersProjectionMapHandle, ProjectionMapCommand>;
-
-function isProjectionMapCommand(command: MapCommand): command is ProjectionMapCommand {
-  return command !== 'toggleDragRotate';
-}
-
-type DockPanelActionsValue = {
-  hasProjectionMapCommands: boolean;
-  registerProjectionMapCommands: (commands: ProjectionMapCommands) => () => void;
-  runProjectionMapCommand: (command: ProjectionMapCommand) => void;
-};
-
-const DockPanelActionsContext = createContext<DockPanelActionsValue>({
-  hasProjectionMapCommands: false,
-  registerProjectionMapCommands: () => () => undefined,
-  runProjectionMapCommand: () => undefined,
-});
-
-function useDockPanelActions() {
-  return useContext(DockPanelActionsContext);
-}
-
 function getAttributeTablePanelId(layerId: string) {
   return `${attributeTablePanelIdPrefix}${encodeURIComponent(layerId)}`;
 }
@@ -218,7 +198,7 @@ const AttributeChartPanel = lazy(() => (
   import('./components/attributes/AttributeChartPanel').then((module) => ({ default: module.AttributeChartPanel }))
 ));
 const ProjectionMap = lazy(() => (
-  import('./components/map/OpenLayersProjectionMap').then((module) => ({ default: module.OpenLayersProjectionMap }))
+  import('./features/maps/components/map/OpenLayersProjectionMap').then((module) => ({ default: module.OpenLayersProjectionMap }))
 ));
 
 const baseRibbonGroups: RibbonGroup[] = [
@@ -2279,48 +2259,30 @@ function AttributeChartDockPanel(props: IDockviewPanelProps<{ layerId?: string; 
 
 function ProjectionMapDockPanel() {
   const { mapCommandState } = useMapCommands();
-  const { registerProjectionMapCommands } = useDockPanelActions();
   const { identifyActive } = useMapIdentify();
   const [coords, setCoords] = useState('');
-  const projectionMapRef = useRef<OpenLayersProjectionMapHandle | null>(null);
-
-  useEffect(() => {
-    if (mapCommandState.displayCrs === 'webMercator') {
-      return undefined;
-    }
-
-    return registerProjectionMapCommands({
-      locate: () => projectionMapRef.current?.locate(),
-      resetNorth: () => projectionMapRef.current?.resetNorth(),
-      zoomIn: () => projectionMapRef.current?.zoomIn(),
-      zoomOut: () => projectionMapRef.current?.zoomOut(),
-    });
-  }, [mapCommandState.displayCrs, registerProjectionMapCommands]);
 
   if (mapCommandState.displayCrs === 'webMercator') {
     return (
-      <section className="map-panel projection-panel-empty">
-        <div className="map-status">请选择 WGS84 或 EPSG:32651 投影视图。</div>
-      </section>
+      <MapViewportFrame status="请选择 WGS84 或 EPSG:32651 投影视图。" className="projection-panel-empty">
+        <div />
+      </MapViewportFrame>
     );
   }
 
   return (
-    <section className="map-panel">
+    <MapViewportFrame status={displayCrsTitle(mapCommandState.displayCrs)} readout={coords}>
       <Suspense fallback={<div className="openlayers-projection-map is-visible" />}>
         <ProjectionMap
           basemap={mapCommandState.basemap}
           displayCrs={mapCommandState.displayCrs}
           key={mapCommandState.displayCrs}
           onCoordinateChange={setCoords}
-          ref={projectionMapRef}
           identifyActive={identifyActive}
           visible
         />
       </Suspense>
-      <div className="map-status">{displayCrsTitle(mapCommandState.displayCrs)}</div>
-      {coords ? <div className="map-readout">{coords}</div> : null}
-    </section>
+    </MapViewportFrame>
   );
 }
 
@@ -2389,13 +2351,11 @@ const mapModeOptions: {
 ];
 
 function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
-  const { hasMapCommands, mapCommandState, runMapCommand, setMapMode } = useMapCommands();
-  const { hasProjectionMapCommands, runProjectionMapCommand } = useDockPanelActions();
+  const { canRunMapCommand, hasMapCommands, mapCommandState, runMapCommand, setMapMode } = useMapCommands();
   const { layers, clearSelection } = useGis();
   const { getTableState, openAttributeChart, updateTableState } = useAttributeTable();
   const [isMapModeSwitcherOpen, setIsMapModeSwitcherOpen] = useState(false);
   const attributeLayerId = getLayerIdFromAttributeTablePanelId(activePanel?.id);
-  const projectionDisplayActive = mapCommandState.displayCrs !== 'webMercator';
 
   if (attributeLayerId) {
     const layer = layers.find((item) => item.id === attributeLayerId) ?? null;
@@ -2487,15 +2447,13 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
       {mapHeaderTools.map((tool) => {
         const Icon = tool.icon;
         const isActive = tool.active?.(mapCommandState) ?? false;
-        const isProjectionCommand = isProjectionMapCommand(tool.command);
-        const isDisabled = projectionDisplayActive
-          ? !hasProjectionMapCommands || !isProjectionCommand
-          : !hasMapCommands;
+        const isDisabled = !hasMapCommands || !canRunMapCommand(tool.command);
 
         return (
           <Fragment key={tool.command}>
             {tool.command === 'resetNorth' ? (
               <>
+                <MapTerrainDiagnosticsButton />
                 <MapMeasureButton />
                 <MapSunlightButton />
               </>
@@ -2509,11 +2467,7 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
               disabled={isDisabled}
               onClick={(event) => {
                 event.stopPropagation();
-                if (projectionDisplayActive && isProjectionMapCommand(tool.command)) {
-                  runProjectionMapCommand(tool.command);
-                } else {
-                  runMapCommand(tool.command);
-                }
+                runMapCommand(tool.command);
               }}
             >
               <Icon size={15} strokeWidth={1.8} />
@@ -2596,8 +2550,6 @@ export default function App() {
   const [attributeTableStateByLayerId, setAttributeTableStateByLayerId] = useState<Record<string, AttributeTableState>>({});
   const dockviewApiRef = useRef<DockviewApi | null>(null);
   const aiAssistantPanelRef = useRef<IDockviewPanel | null>(null);
-  const projectionMapCommandsRef = useRef<ProjectionMapCommands | null>(null);
-  const [hasProjectionMapCommands, setHasProjectionMapCommands] = useState(false);
 
   const components = useMemo(
     () => ({
@@ -2617,31 +2569,6 @@ export default function App() {
   const changeRibbonTab = useCallback((tab: RibbonTab) => {
     setActiveRibbonTab(tab);
   }, []);
-
-  const registerProjectionMapCommands = useCallback((commands: ProjectionMapCommands) => {
-    projectionMapCommandsRef.current = commands;
-    setHasProjectionMapCommands(true);
-
-    return () => {
-      if (projectionMapCommandsRef.current === commands) {
-        projectionMapCommandsRef.current = null;
-        setHasProjectionMapCommands(false);
-      }
-    };
-  }, []);
-
-  const runProjectionMapCommand = useCallback((command: ProjectionMapCommand) => {
-    projectionMapCommandsRef.current?.[command]();
-  }, []);
-
-  const dockPanelActions = useMemo(
-    () => ({
-      hasProjectionMapCommands,
-      registerProjectionMapCommands,
-      runProjectionMapCommand,
-    }),
-    [hasProjectionMapCommands, registerProjectionMapCommands, runProjectionMapCommand],
-  );
 
   const addAiAssistantPanel = useCallback((api: DockviewApi) => {
     const existingPanel = api.getPanel(aiAssistantPanelId);
@@ -2875,7 +2802,6 @@ export default function App() {
             <DigitizeProvider>
               <AttributeTableProvider value={{ getTableState, openAttributeChart, openAttributeTable, updateTableState }}>
                 <LayoutProvider>
-                <DockPanelActionsContext.Provider value={dockPanelActions}>
                   <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
                 <QuickAccessBar
                   isAiAssistantPanelVisible={isAiAssistantPanelVisible}
@@ -2901,7 +2827,6 @@ export default function App() {
                 </main>
                 <StatusFooter />
                   </div>
-                </DockPanelActionsContext.Provider>
                 </LayoutProvider>
               </AttributeTableProvider>
             </DigitizeProvider>

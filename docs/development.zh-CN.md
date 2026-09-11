@@ -38,7 +38,7 @@
 | 模块 | 当前文档状态 |
 |---|---|
 | 图层管理模块 | 已完成本阶段设计说明 |
-| 地图显示与视图控制模块 | 待补充 |
+| 地图显示与视图控制模块 | 已完成本阶段设计说明 |
 | 数据导入与导出模块 | 待补充 |
 | 属性表与图表模块 | 待补充 |
 | 数字化编辑模块 | 待补充 |
@@ -435,6 +435,41 @@ adapters   → types / 地图引擎 API / 地图源定义
 
 后续演进应优先保持公开接口和持久化数据兼容。只有在具备迁移方案、回归测试和文档更新时，才允许调整领域标识或草稿结构。
 
+### 5.3 地图显示与视图控制模块
+
+地图显示模块位于 `src/features/maps/`，负责地图工作区 UI、视图命令和各地图引擎运行时的编排。它与图层管理模块通过 `useLayerStore`、`MapGroupRenderState` 及图层适配器协作，不在 UI 中重复实现图层业务规则。
+
+#### 5.3.1 引擎分工
+
+| 引擎 | 入口 | 职责 |
+|---|---|---|
+| MapLibre | `components/MapPanel.tsx` | 主二维地图、在线底图、上传图层和分析结果 |
+| OpenLayers | `components/map/OpenLayersProjectionMap.tsx` | 非 Web Mercator 投影视图；数字化地图仍由兼容组件提供 |
+| Cesium | `components/MapPanel.tsx` 内部按需加载 | 地形与三维地球、三维测量和日照 |
+
+#### 5.3.2 视图控制边界
+
+- `MapCommandContext` 只维护当前视图状态和引擎能力声明；命令通过 `registerMapCommands` 注册，未实现的命令不会显示为可用。
+- `MapViewportContext` 保存可跨投影视图复用的 WGS84 视口范围，用于 CRS 切换和地图面板重建后的视图恢复。
+- `MapViewportFrame` 统一地图面板的状态提示、坐标读数和容器样式，MapLibre 与 OpenLayers 投影视图共享同一套 UI 外壳。
+- `mapViewportService` 负责范围计算、合法性校验和边界填充；`mapSearchService` 负责坐标解析与 Nominatim 检索，均不依赖 React 或地图实例。
+
+#### 5.3.3 数据流
+
+```text
+地图工具栏 / 图层面板
+  ↓
+MapCommandContext / MapViewportContext
+  ↓
+MapPanel 或 OpenLayersProjectionMap
+  ↓
+features/layers/adapters
+  ↓
+MapLibre / OpenLayers / Cesium 实例
+```
+
+地图引擎实例只在地图运行时组件中创建和销毁；图层显隐、顺序、透明度及底图来源由 `features/layers/adapters/` 统一同步。Cesium 运行时保持按需加载，投影视图保持懒加载，以避免主地图首屏引入不必要的引擎代码。
+
 ## 6. 数据设计
 
 > 待补充。后续应包括工作区数据、空间数据、草稿格式和数据迁移策略。
@@ -471,4 +506,4 @@ adapters   → types / 地图引擎 API / 地图源定义
 
 | 文档版本 | 日期 | 变更内容 |
 |---|---|---|
-| 0.1 | 2026-09-11 | 建立开发文档骨架；完成图层管理模块设计说明 |
+| 0.1 | 2026-09-11 | 建立开发文档骨架；完成图层管理及地图显示与视图控制模块设计说明 |

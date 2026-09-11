@@ -1,22 +1,24 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import { type CesiumImageryId, type CesiumTerrainId, defaultCesiumImageryId, defaultCesiumTerrainId } from './cesiumLayerOptions';
-import { defaultBasemapId } from './basemapOptions';
-import type { BasemapId } from './basemapOptions';
+import { defaultBasemapId, type BasemapId } from './basemapOptions';
+import {
+  defaultCesiumImageryId,
+  defaultCesiumTerrainId,
+  type CesiumImageryId,
+  type CesiumTerrainId,
+} from './cesiumLayerOptions';
 import type { BasemapSourceKind } from './rasterBasemapSources';
+
 export type { BasemapId } from './basemapOptions';
+
 export type DisplayCrsId = 'webMercator' | 'wgs84' | 'epsg32651';
 export type MapViewMode = 'planar' | 'terrain' | 'globe';
-
 export type MapCommand = 'zoomIn' | 'zoomOut' | 'resetNorth' | 'toggleDragRotate' | 'locate';
 
-export type MapCommands = Record<MapCommand, () => void> & {
-  setBasemap: (basemap: BasemapId) => void;
-  setCesiumImagery: (imagery: CesiumImageryId) => void;
-  setCesiumTerrain: (terrain: CesiumTerrainId) => void;
-  setDisplayCrs: (displayCrs: DisplayCrsId) => void;
-  setMapMode: (mode: MapViewMode) => void;
-  locateByQuery: (query: string) => Promise<boolean>;
-  syncViewport: () => void;
+/** Imperative navigation surface implemented by whichever map engine is active. */
+export type MapCommands = Partial<Record<MapCommand, () => void>> & {
+  locateByQuery?: (query: string) => Promise<boolean>;
+  syncViewport?: () => void;
+  inspectTerrain?: () => void;
 };
 
 export type MapCommandState = {
@@ -30,10 +32,13 @@ export type MapCommandState = {
 };
 
 type MapCommandContextValue = {
+  canRunMapCommand: (command: MapCommand) => boolean;
   hasMapCommands: boolean;
+  hasTerrainDiagnostic: boolean;
   mapCommandState: MapCommandState;
   registerMapCommands: (commands: MapCommands) => () => void;
   runMapCommand: (command: MapCommand) => void;
+  runTerrainDiagnostic: () => void;
   locateByQuery: (query: string) => Promise<boolean>;
   setBasemap: (basemap: BasemapId) => void;
   setCesiumImagery: (imagery: CesiumImageryId) => void;
@@ -43,6 +48,7 @@ type MapCommandContextValue = {
   updateMapCommandState: (state: Partial<MapCommandState>) => void;
 };
 
+const commandNames: MapCommand[] = ['zoomIn', 'zoomOut', 'resetNorth', 'toggleDragRotate', 'locate'];
 const MapCommandContext = createContext<MapCommandContextValue | null>(null);
 const defaultMapCommandState: MapCommandState = {
   basemap: defaultBasemapId,
@@ -56,68 +62,94 @@ const defaultMapCommandState: MapCommandState = {
 
 export function MapCommandProvider({ children }: { children: ReactNode }) {
   const commandsRef = useRef<MapCommands | null>(null);
-  const [hasMapCommands, setHasMapCommands] = useState(false);
+  const [availableCommands, setAvailableCommands] = useState<ReadonlySet<MapCommand>>(() => new Set());
+  const [hasTerrainDiagnostic, setHasTerrainDiagnostic] = useState(false);
   const [mapCommandState, setMapCommandState] = useState<MapCommandState>(defaultMapCommandState);
 
   const registerMapCommands = useCallback((commands: MapCommands) => {
     commandsRef.current = commands;
-    setHasMapCommands(true);
+    setAvailableCommands(new Set(commandNames.filter((command) => typeof commands[command] === 'function')));
+    setHasTerrainDiagnostic(typeof commands.inspectTerrain === 'function');
 
     return () => {
       if (commandsRef.current === commands) {
         commandsRef.current = null;
-        setHasMapCommands(false);
+        setAvailableCommands(new Set());
+        setHasTerrainDiagnostic(false);
       }
     };
   }, []);
 
+  const canRunMapCommand = useCallback(
+    (command: MapCommand) => availableCommands.has(command),
+    [availableCommands],
+  );
+
   const runMapCommand = useCallback((command: MapCommand) => {
-    commandsRef.current?.[command]();
+    commandsRef.current?.[command]?.();
   }, []);
 
-  const locateByQuery = useCallback((query: string) => commandsRef.current?.locateByQuery(query) ?? Promise.resolve(false), []);
+  const runTerrainDiagnostic = useCallback(() => {
+    commandsRef.current?.inspectTerrain?.();
+  }, []);
+
+  const locateByQuery = useCallback(
+    (query: string) => commandsRef.current?.locateByQuery?.(query) ?? Promise.resolve(false),
+    [],
+  );
 
   const setBasemap = useCallback((basemap: BasemapId) => {
     setMapCommandState((current) => ({ ...current, basemap, basemapSourceKind: 'basemap' }));
-    commandsRef.current?.setBasemap(basemap);
   }, []);
 
   const setCesiumImagery = useCallback((imagery: CesiumImageryId) => {
     setMapCommandState((current) => ({ ...current, basemapSourceKind: 'imagery', cesiumImagery: imagery }));
-    commandsRef.current?.setCesiumImagery(imagery);
   }, []);
 
   const setCesiumTerrain = useCallback((terrain: CesiumTerrainId) => {
     setMapCommandState((current) => ({ ...current, cesiumTerrain: terrain }));
-    commandsRef.current?.setCesiumTerrain(terrain);
   }, []);
 
   const setDisplayCrs = useCallback((displayCrs: DisplayCrsId) => {
-    commandsRef.current?.syncViewport();
+    commandsRef.current?.syncViewport?.();
     setMapCommandState((current) => ({
       ...current,
       displayCrs,
-      mapMode: displayCrs !== 'webMercator' ? 'planar' : current.mapMode,
+      mapMode: displayCrs === 'webMercator' ? current.mapMode : 'planar',
     }));
-    commandsRef.current?.setDisplayCrs(displayCrs);
   }, []);
 
   const setMapMode = useCallback((mode: MapViewMode) => {
-    setMapCommandState((current) => ({ ...current, mapMode: mode }));
-    commandsRef.current?.setMapMode(mode);
+    commandsRef.current?.syncViewport?.();
+    setMapCommandState((current) => ({
+      ...current,
+      mapMode: current.displayCrs === 'webMercator' ? mode : 'planar',
+    }));
   }, []);
 
   const updateMapCommandState = useCallback((state: Partial<MapCommandState>) => {
-    setMapCommandState((current) => ({ ...current, ...state }));
+    setMapCommandState((current) => {
+      const next = { ...current, ...state };
+
+      if (next.displayCrs !== 'webMercator') {
+        next.mapMode = 'planar';
+      }
+
+      return next;
+    });
   }, []);
 
+  const hasMapCommands = availableCommands.size > 0;
   const value = useMemo(
     () => ({
+      canRunMapCommand,
       hasMapCommands,
+      hasTerrainDiagnostic,
       mapCommandState,
       locateByQuery,
       registerMapCommands,
       runMapCommand,
+      runTerrainDiagnostic,
       setBasemap,
       setCesiumImagery,
       setCesiumTerrain,
@@ -125,7 +157,7 @@ export function MapCommandProvider({ children }: { children: ReactNode }) {
       setMapMode,
       updateMapCommandState,
     }),
-    [hasMapCommands, locateByQuery, mapCommandState, registerMapCommands, runMapCommand, setBasemap, setCesiumImagery, setCesiumTerrain, setDisplayCrs, setMapMode, updateMapCommandState],
+    [canRunMapCommand, hasMapCommands, hasTerrainDiagnostic, locateByQuery, mapCommandState, registerMapCommands, runMapCommand, runTerrainDiagnostic, setBasemap, setCesiumImagery, setCesiumTerrain, setDisplayCrs, setMapMode, updateMapCommandState],
   );
 
   return <MapCommandContext.Provider value={value}>{children}</MapCommandContext.Provider>;

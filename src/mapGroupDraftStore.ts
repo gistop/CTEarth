@@ -1,7 +1,7 @@
 import type { LayerOrderId } from './gisStore';
-import type { CesiumImageryId } from './components/map/cesiumLayerOptions';
-import type { BasemapId } from './components/map/basemapOptions';
-import type { BasemapSourceKind } from './components/map/rasterBasemapSources';
+import type { CesiumImageryId } from './features/maps/components/map/cesiumLayerOptions';
+import type { BasemapId } from './features/maps/components/map/basemapOptions';
+import type { BasemapSourceKind } from './features/maps/components/map/rasterBasemapSources';
 
 export type WorkspaceMapGroupLayerItem = {
   instanceId: string;

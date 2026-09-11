@@ -1,7 +1,7 @@
 import { RotateCcw, X } from 'lucide-react';
-import { basemapOptions, type BasemapId } from '../../../components/map/basemapOptions';
-import { cesiumImageryGroups, type CesiumImageryId } from '../../../components/map/cesiumLayerOptions';
-import type { BasemapSourceKind } from '../../../components/map/rasterBasemapSources';
+import { basemapOptions, type BasemapId } from '../../maps/components/map/basemapOptions';
+import { cesiumImageryGroups, type CesiumImageryId } from '../../maps/components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from '../../maps/components/map/rasterBasemapSources';
 import {
   defaultUploadedLayerStyle,
   type BasemapLayerStyle,

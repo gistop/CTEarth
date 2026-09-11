@@ -6,7 +6,7 @@ import { basemapOptions } from './basemapOptions';
 import { cesiumImageryGroups, cesiumTerrainOptions } from './cesiumLayerOptions';
 
 export function MapLayerMenu() {
-  const { mapCommandState, setCesiumTerrain } = useMapCommands();
+  const { mapCommandState, setBasemap, setCesiumImagery, setCesiumTerrain } = useMapCommands();
   const { requestBasemapChange, requestBasemapImageryChange } = useMapBasemapSelection();
   const [isOpen, setIsOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +82,7 @@ export function MapLayerMenu() {
                 title={option.label}
                 onClick={(event) => {
                   event.stopPropagation();
+                  setBasemap(option.id);
                   requestBasemapChange(option.id);
                   setIsOpen(false);
                 }}
@@ -108,6 +109,7 @@ export function MapLayerMenu() {
                     title={option.label}
                     onClick={(event) => {
                       event.stopPropagation();
+                      setCesiumImagery(option.id);
                       requestBasemapImageryChange(option.id);
                       setIsOpen(false);
                     }}

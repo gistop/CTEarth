@@ -7,7 +7,7 @@ import type { MapGroupRenderEntry } from '../../../mapGroupRenderState';
 import {
   getRasterBasemapDefinitions,
   type RasterBasemapTileDefinition,
-} from '../../../components/map/rasterBasemapSources';
+} from '../../maps/components/map/rasterBasemapSources';
 import type { LayerEngineAdapter } from './layerAdapterTypes';
 
 export type OpenLayersBasemapLayer = TileLayer<OSM | XYZ>;

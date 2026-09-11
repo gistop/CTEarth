@@ -1,10 +1,10 @@
 import { useSyncExternalStore } from 'react';
 import type { MapGroup, MapGroupLayerItem } from './features/layers/types';
-import { defaultBasemapId } from './components/map/basemapOptions';
-import type { BasemapId } from './components/map/basemapOptions';
-import { defaultCesiumImageryId } from './components/map/cesiumLayerOptions';
-import type { CesiumImageryId } from './components/map/cesiumLayerOptions';
-import type { BasemapSourceKind } from './components/map/rasterBasemapSources';
+import { defaultBasemapId } from './features/maps/components/map/basemapOptions';
+import type { BasemapId } from './features/maps/components/map/basemapOptions';
+import { defaultCesiumImageryId } from './features/maps/components/map/cesiumLayerOptions';
+import type { CesiumImageryId } from './features/maps/components/map/cesiumLayerOptions';
+import type { BasemapSourceKind } from './features/maps/components/map/rasterBasemapSources';
 
 export type MapGroupRenderEntry = {
   id: string;
