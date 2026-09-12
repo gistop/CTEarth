@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
 import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type UploadedLayerStyle } from '../../../gisStore';
 import {
@@ -6,8 +6,7 @@ import {
   createMapLibreLayerAdapter,
   useLayerStore,
 } from '../../layers';
-import { useDigitize } from '../../../components/digitize/DigitizeContext';
-import type { OpenLayersDigitizeMapHandle } from '../../../components/digitize/OpenLayersDigitizeMap';
+import { DigitizeMap, useDigitize, type DigitizeMapHandle } from '../../digitize';
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type MapViewMode, useMapCommands } from './map/MapCommandContext';
@@ -32,10 +31,6 @@ const CHINA_ZOOM = 5.3;
 
 const rasterLayerIds = ['idw-interpolation'];
 const vectorOverlayLayerIds = ['buffer-fill', 'buffer-outline'];
-
-const OpenLayersDigitizeMap = lazy(() => (
-  import('../../../components/digitize/OpenLayersDigitizeMap').then((module) => ({ default: module.OpenLayersDigitizeMap }))
-));
 
 type NominatimSearchResult = {
   boundingbox?: [string, string, string, string];
@@ -204,7 +199,7 @@ export function MapPanel() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cesiumContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const digitizeMapRef = useRef<OpenLayersDigitizeMapHandle | null>(null);
+  const digitizeMapRef = useRef<DigitizeMapHandle | null>(null);
   const cesiumRef = useRef<{ Cesium: CesiumNamespace; viewer: CesiumViewer } | null>(null);
   const cesiumSyncRef = useRef<{ imagery: CesiumImageryId; terrain: CesiumTerrainId } | null>(null);
   const cesiumSyncGenerationRef = useRef(0);
@@ -1060,7 +1055,7 @@ export function MapPanel() {
       <MapFeatureSelection active={featureSelectionActive} map={mapRef.current} mapReady={mapReady} />
       {hasLoadedDigitizeMap ? (
         <Suspense fallback={<div className="openlayers-digitize-map is-visible" />}>
-          <OpenLayersDigitizeMap
+          <DigitizeMap
             ref={digitizeMapRef}
             mapLibreMap={mapRef.current}
             visible={editingActive && mapCommandState.mapMode !== 'globe'}

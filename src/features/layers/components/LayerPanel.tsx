@@ -12,7 +12,7 @@ import {
   Trash2,
   ZoomIn,
 } from 'lucide-react';
-import { useAttributeTable } from '../../../components/attributes/AttributeTableContext';
+import { useAttributeTableActions } from '../../attributes';
 import { AddDataSplitButton } from './AddDataSplitButton';
 import { InlineRenameLabel } from './InlineRenameLabel';
 import { MapGroupEditPanel } from './MapGroupEditPanel';
@@ -114,7 +114,7 @@ export function LayerPanel() {
   } = useLayerStore();
   const { mapCommandState, setBasemap, setCesiumImagery } = useMapCommands();
   const { registerBasemapChangeHandler, registerBasemapImageryChangeHandler } = useMapBasemapSelection();
-  const { openAttributeTable } = useAttributeTable();
+  const { openTable: openAttributeTable } = useAttributeTableActions();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const renameTarget = expandedEditTarget;
@@ -758,12 +758,12 @@ export function LayerPanel() {
           disabled={!selectedUploadedLayer && !selectedVectorOverlay}
           onClick={() => {
             if (selectedUploadedLayer) {
-              openAttributeTable(selectedUploadedLayer.id, displayLayerName(selectedUploadedLayer.fileName));
+              openAttributeTable?.(selectedUploadedLayer.id, displayLayerName(selectedUploadedLayer.fileName));
               return;
             }
 
             if (selectedVectorOverlay) {
-              openAttributeTable('vectorOverlay', displayLayerName(selectedVectorOverlay.name));
+              openAttributeTable?.('vectorOverlay', displayLayerName(selectedVectorOverlay.name));
             }
           }}
         >

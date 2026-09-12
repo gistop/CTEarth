@@ -10,7 +10,7 @@ export {
   moveMapGroupByOffset,
   moveMapGroupsInOrder,
 } from './services/mapGroupService';
-export { normalizeLayerName, normalizeLayerOrder } from './services/layerService';
+export { displayLayerName, normalizeLayerName, normalizeLayerOrder } from './services/layerService';
 export type { LayerAction, LayerNodeKind, LayerVisibilityState } from './types';
 export type { LayerAdapterEntry, LayerEngineAdapter } from './adapters/layerAdapterTypes';
 export {

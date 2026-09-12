@@ -27,6 +27,7 @@ export type OpenLayersLayerSyncRequest = {
   basemapVisible?: boolean;
   stacking: 'background' | 'ordered';
   orderTargets?: OpenLayersLayerOrderTargets;
+  crossOrigin?: string | null;
 };
 
 const openLayersLayerAdapter: LayerEngineAdapter<OpenLayersLayerSyncRequest> = {
@@ -46,6 +47,7 @@ function syncOpenLayersLayers({
   basemapVisible = true,
   stacking,
   orderTargets,
+  crossOrigin,
 }: OpenLayersLayerSyncRequest) {
   const expectedIds = new Set<string>();
   const topZIndex = entries.length;
@@ -73,11 +75,11 @@ function syncOpenLayersLayers({
       let layer = basemapLayers.get(layerId);
 
       if (!layer) {
-        layer = createBasemapLayer(definition);
+        layer = createBasemapLayer(definition, crossOrigin);
         map.addLayer(layer);
         basemapLayers.set(layerId, layer);
       } else {
-        layer.setSource(createBasemapSource(definition));
+        layer.setSource(createBasemapSource(definition, crossOrigin));
       }
 
       layer.setVisible(entry.visible && basemapVisible);
@@ -106,17 +108,18 @@ function syncOpenLayersLayers({
   orderTargets.vectorOverlayLayer?.setZIndex(zIndexByEntryId.get('vectorOverlay') ?? 0);
 }
 
-function createBasemapLayer(definition: RasterBasemapTileDefinition): OpenLayersBasemapLayer {
+function createBasemapLayer(definition: RasterBasemapTileDefinition, crossOrigin?: string | null): OpenLayersBasemapLayer {
   return new TileLayer({
-    source: createBasemapSource(definition),
+    source: createBasemapSource(definition, crossOrigin),
     visible: false,
   });
 }
 
-function createBasemapSource(definition: RasterBasemapTileDefinition) {
+function createBasemapSource(definition: RasterBasemapTileDefinition, crossOrigin?: string | null) {
   if (definition.urls) {
     return new XYZ({
       urls: definition.urls,
+      crossOrigin,
       attributions: definition.attribution,
       tileSize: definition.tileSize,
       minZoom: definition.minZoom,
@@ -127,6 +130,7 @@ function createBasemapSource(definition: RasterBasemapTileDefinition) {
   if (definition.url) {
     return new XYZ({
       url: definition.url,
+      crossOrigin,
       attributions: definition.attribution,
       tileSize: definition.tileSize,
       minZoom: definition.minZoom,
@@ -134,7 +138,7 @@ function createBasemapSource(definition: RasterBasemapTileDefinition) {
     });
   }
 
-  return new OSM({ attributions: definition.attribution });
+  return new OSM({ attributions: definition.attribution, crossOrigin });
 }
 
 function getBasemapLayerId(prefix: string, renderId: string, suffix: string) {

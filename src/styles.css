@@ -3597,7 +3597,7 @@ button {
   color: var(--text-muted);
 }
 
-.tools-panel {
+.toolbox-panel {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -4125,6 +4125,7 @@ button {
 
 .attribute-chart-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -4143,7 +4144,8 @@ button {
   color: #526273;
 }
 
-.attribute-chart-toolbar select {
+.attribute-chart-toolbar select,
+.attribute-chart-query {
   min-width: 0;
   height: 27px;
   border: 1px solid #b7c2cc;
@@ -4151,6 +4153,16 @@ button {
   background: #ffffff;
   color: #263849;
   font-size: 12px;
+}
+
+.attribute-chart-query {
+  width: 140px;
+  padding: 0 6px;
+}
+
+.attribute-chart-toolbar .attribute-chart-selection {
+  display: inline-flex;
+  white-space: nowrap;
 }
 
 .attribute-chart-summary {

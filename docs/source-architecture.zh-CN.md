@@ -36,6 +36,7 @@ src/
 ├─ main.tsx                # React 挂载入口
 ├─ components/             # 跨业务的共享视图组件和历史组件目录
 ├─ features/               # 按业务领域组织的完整功能模块
+├─ shared/                 # 不依赖具体业务模块的共享契约、服务与基础状态
 ├─ services/               # 跨模块的基础服务（新增代码优先放入对应 feature）
 ├─ stores/                 # 跨模块共享状态（新增业务状态优先放入对应 feature）
 ├─ types/                  # 跨模块共享类型
@@ -56,6 +57,8 @@ src/
 功能模块及其专属 UI 组件应放在同一 Feature 模块内。
 
 只有跨多个功能模块复用、且与具体业务无关的通用组件，才放入 `src/components` 或 `src/shared`。
+
+`components/workspace/` 是应用外壳的跨模块组合位置。例如 `DataViewWorkspaceProvider` 将既有 GIS 数据接入共享数据视图，再连接独立的属性表和图表模块；它不实现筛选、排序或统计规则。
 
 ### `features/`
 
@@ -81,6 +84,18 @@ src/features/maps/
 ```
 
 MapLibre、OpenLayers 和 Cesium 的实例生命周期只允许在地图运行时组件中处理；图层同步仍统一委托给 `src/features/layers/adapters/`。
+
+AI 助手模块位于 `src/features/ai/`，入口为该模块的 `index.ts`。界面、会话状态、模型协议、GIS 上下文与工具执行分层；GIS 业务模块不依赖具体模型。当前实现浏览器直连，后端代理仅占位。职责、扩展方式和限制参见 [AI 助手模块](./ai-assistant.zh-CN.md)。
+
+地图布局与制图模块位于 `src/features/layout/`。独立文档 store、纯布局命令与几何服务、UI 手势、OpenLayers 运行时、页面导出和浏览器下载分层；常规界面和未来外部工具复用同一组命令，不依赖特定模型。旧 `src/components/layout/` 已删除，不保留兼容转发。布局地图的引擎生命周期集中在 `adapters/openLayersLayoutMapAdapter.ts`，React 组件仅负责连接。详见 [地图布局与制图模块](./layout.zh-CN.md)。
+
+数字化编辑模块位于 `src/features/digitize/`。工具状态、编辑会话与校验、公共边几何算法、数据提交端口、OpenLayers 交互和 Ribbon 界面分层。业务服务不依赖 React、地图实例或模型协议；GIS 适配器复用既有数据更新入口，不另建权威数据仓库。编辑引擎按需加载，其生命周期由 `adapters/openLayersDigitizeAdapter.ts` 管理。旧 `src/components/digitize/` 已删除，`App.tsx` 不再承载编辑工具业务。详见 [数字化编辑模块](./digitize.zh-CN.md)。
+
+属性表和图表现在是两个独立 Feature：`src/features/attributes/` 管理表格、排序和行选择交互，`src/features/charts/` 管理图表配置、统计模型和 ECharts 适配。两者不导入对方实现，也不直接依赖 GIS Store 或 Dockview。工作区通过各自 `index.ts` 组合它们；属性表只是图表的一个打开入口，不是图表的所有者。旧 `src/components/attributes/` 已删除。详见 [属性表模块](./attributes.zh-CN.md)和[图表模块](./charts.zh-CN.md)。
+
+### `shared/`
+
+仅承载确有跨模块复用需求、且不反向依赖业务 Feature 的基础能力。当前 `shared/data-views/` 包含中立数据集/记录契约、查询排序与统计服务、按数据集隔离的视图筛选状态，以及 React 注入桥接；不是新增的数据管理业务模块，也不保存权威 GIS 数据。数据字段、几何和持久化仍属于原 GIS 数据通路。详见 [共享数据视图契约](./data-views.zh-CN.md)。
 
 ### `services/`
 
@@ -171,6 +186,10 @@ adapters   → types / 地图引擎 API
 
 跨模块访问应优先使用目标模块的 `index.ts` 公开入口。
 
+属性表与图表遵守 `workspace → attributes / charts → shared/data-views` 的依赖方向。共享查询和统计实现不反向导入 Feature；ECharts 只在图表适配器使用。公开入口保持表格/图表引擎懒加载，新增导出不能使主应用提前加载引擎。边界测试会检查这些约束。
+
+引擎适配器之间复用现有 `features/layers/adapters/<engine>LayerAdapter.ts` 时，该按引擎文件作为次级入口使用，避免为单一引擎加载聚合入口中的其他地图引擎。该例外不允许 UI 组件绕过业务服务直接控制地图实例。
+
 ## 5. 命名约定
 
 ### 文件夹
@@ -206,3 +225,9 @@ adapters   → types / 地图引擎 API
 6. 每次迁移后运行 TypeScript 编译和生产构建。
 
 地图显示与视图控制模块的新增代码应放入 `src/features/maps/`，跨引擎导航通过 `MapCommandContext` 注册能力，视口范围和坐标检索优先复用 `services/` 下的纯函数。
+
+地图布局新增代码应放入 `src/features/layout/`。布局规则通过命令服务和独立 store 执行，地图实例操作只放入布局适配器；导出返回结果，UI 决定是否下载。已完成整体迁移的布局模块不再恢复旧目录或兼容壳。
+
+数字化编辑新增代码应放入 `src/features/digitize/`，外部通过 `index.ts` 使用 Provider、地图桥接、Ribbon Hook、状态命令和编辑服务。绘制/修改先建立会话，再通过数据端口提交；取消只丢弃当前未提交手势，不冒充通用撤销。不得在编辑 store 内复制全量业务图层，也不恢复旧目录或模型专用编辑逻辑。
+
+属性表新增代码放入 `src/features/attributes/`，图表新增代码放入 `src/features/charts/`。共用查询和统计放入 `src/shared/data-views/`，GIS 转换和跨模块导航连接放入工作区组合层。不要为共享筛选让图表重新依赖属性表 Context，也不要恢复旧组件目录。

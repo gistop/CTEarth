@@ -21,7 +21,9 @@ import {
   type WorkspaceRasterLayer,
   type WorkspaceVectorLayer,
 } from './workspaceDraftStore';
-import { normalizeLayerOrder } from './features/layers/services/layerService';
+import { displayLayerName, normalizeLayerOrder } from './features/layers/services/layerService';
+
+export { displayLayerName } from './features/layers/services/layerService';
 
 export type PointFeature = {
   type: 'Feature';
@@ -60,6 +62,10 @@ export type VectorOverlay = {
     features: unknown[];
   };
 };
+
+export type GisOperationResult<TOutput> =
+  | { ok: true; output: TOutput }
+  | { ok: false; message: string };
 
 export type GeoJsonFeatureCollection = {
   type: 'FeatureCollection';
@@ -297,10 +303,10 @@ type GisContextValue = {
   clearSelection: (layerId?: string) => void;
   selectByValue: (params: SelectByValueParameters) => Promise<SelectionResult | null>;
   selectByLocation: (params: SelectByLocationParameters) => Promise<SelectionResult | null>;
-  runIdwInterpolation: (params: IdwParameters) => Promise<void>;
-  runBufferAnalysis: (params: BufferParameters) => Promise<void>;
+  runIdwInterpolation: (params: IdwParameters) => Promise<GisOperationResult<RasterOverlay>>;
+  runBufferAnalysis: (params: BufferParameters) => Promise<GisOperationResult<VectorOverlay>>;
   runOverlayAnalysis: (tool: OverlayToolId, params: OverlayParameters) => Promise<void>;
-  runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<void>;
+  runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<GisOperationResult<RasterOverlay>>;
   runExtractByMask: (params: ExtractByMaskParameters) => Promise<void>;
   editRasterByAoi: (params: RasterEditParameters) => Promise<void>;
   saveRasterLayer: (options?: { fileName?: string }) => Promise<void>;
@@ -1135,7 +1141,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     return result;
   }, [layer, layers, vectorOverlay]);
 
-  const runIdwInterpolation = useCallback(async (params: IdwParameters) => {
+  const runIdwInterpolation = useCallback(async (params: IdwParameters): Promise<GisOperationResult<RasterOverlay>> => {
     const analysis = createAnalysisLogContext('idw_interpolation');
     logAnalysisEvent(analysis, 'start', {
       rawParams: { ...params },
@@ -1144,8 +1150,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     });
     if (!toolsReady) {
       logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
-      setMessage('WASM 工具仍在加载，请稍后再运行。');
-      return;
+      const message = 'WASM 工具仍在加载，请稍后再运行。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     const inputLayer = findLayer(layers, params.layerId) ?? layer;
@@ -1155,8 +1162,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
     if (!inputLayer) {
       logAnalysisEvent(analysis, 'blocked', { reason: 'input_layer_missing' });
-      setMessage('请先在左侧上传点 Shapefile 压缩包或点 GeoJSON。');
-      return;
+      const message = '请先在左侧上传点 Shapefile 压缩包或点 GeoJSON。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     if (inputLayer.points.features.length === 0) {
@@ -1164,8 +1172,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         reason: 'not_a_point_layer',
         resolvedInputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
       });
-      setMessage('反距离加权插值需要选择点图层。');
-      return;
+      const message = '反距离加权插值需要选择点图层。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     if (inputLayer.numericFields.length === 0) {
@@ -1173,8 +1182,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         reason: 'no_numeric_field',
         resolvedInputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
       });
-      setMessage('反距离加权插值需要至少一个数值字段。');
-      return;
+      const message = '反距离加权插值需要至少一个数值字段。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     try {
@@ -1266,14 +1276,17 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       )));
       setActiveLayerId(inputLayer.id);
       setMessage(`插值完成：${nextRaster.width} x ${nextRaster.height}${idwResolution.note ? `（${idwResolution.note}）` : ''}`);
+      return { ok: true, output: nextRaster };
     } catch (error) {
-      setMessage(errorMessage(error));
+      const message = errorMessage(error);
+      setMessage(message);
+      return { ok: false, message };
     } finally {
       setIsRunning(false);
     }
   }, [layer, layers, toolsReady]);
 
-  const runBufferAnalysis = useCallback(async (params: BufferParameters) => {
+  const runBufferAnalysis = useCallback(async (params: BufferParameters): Promise<GisOperationResult<VectorOverlay>> => {
     const analysis = createAnalysisLogContext('buffer_vector');
     logAnalysisEvent(analysis, 'start', {
       rawParams: { ...params },
@@ -1281,14 +1294,16 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     });
     if (!toolsReady) {
       logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
-      setMessage('WASM 工具仍在加载，请稍后再运行。');
-      return;
+      const message = 'WASM 工具仍在加载，请稍后再运行。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     if (!layer) {
       logAnalysisEvent(analysis, 'blocked', { reason: 'input_layer_missing' });
-      setMessage('请先在左侧上传 Shapefile 压缩包或 GeoJSON。');
-      return;
+      const message = '请先在左侧上传 Shapefile 压缩包或 GeoJSON。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     try {
@@ -1356,8 +1371,11 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setLayerVisibilityState((current) => ({ ...current, vectorOverlay: true }));
       setLayerOrder((current) => ['vectorOverlay', ...current.filter((id) => id !== 'vectorOverlay')]);
       setMessage(`缓冲区完成：${geojson.features.length} 个面要素`);
+      return { ok: true, output: { name: outputName, geojson } };
     } catch (error) {
-      setMessage(errorMessage(error));
+      const message = errorMessage(error);
+      setMessage(message);
+      return { ok: false, message };
     } finally {
       setIsRunning(false);
     }
@@ -1486,15 +1504,17 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
   }, [layer, layers, toolsReady, vectorOverlay]);
 
-  const runTerrainAnalysis = useCallback(async (tool: TerrainToolId, params: TerrainParameters) => {
+  const runTerrainAnalysis = useCallback(async (tool: TerrainToolId, params: TerrainParameters): Promise<GisOperationResult<RasterOverlay>> => {
     if (!toolsReady) {
-      setMessage('WASM 工具仍在加载，请稍后再运行。');
-      return;
+      const message = 'WASM 工具仍在加载，请稍后再运行。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     if (!raster) {
-      setMessage('请先添加一个 DEM GeoTIFF，或先生成一个栅格结果。');
-      return;
+      const message = '请先添加一个 DEM GeoTIFF，或先生成一个栅格结果。';
+      setMessage(message);
+      return { ok: false, message };
     }
 
     try {
@@ -1539,8 +1559,11 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
       setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`${terrainToolLabel(tool)}完成：${nextRaster.width} x ${nextRaster.height}`);
+      return { ok: true, output: nextRaster };
     } catch (error) {
-      setMessage(errorMessage(error));
+      const message = errorMessage(error);
+      setMessage(message);
+      return { ok: false, message };
     } finally {
       setIsRunning(false);
     }
@@ -3619,20 +3642,6 @@ function colorRamp(t: number) {
 
 function basename(value: string) {
   return value.replace(/\\/g, '/').split('/').pop() ?? value;
-}
-
-export function displayLayerName(fileName: string) {
-  let name = basename(fileName || 'layer').trim() || 'layer';
-
-  while (true) {
-    const next = name.replace(/\.(zip|csv|geojson|json|shp|gpkg|geopackage|geoparquet|tif|tiff|geotiff)$/i, '');
-
-    if (next === name) {
-      return name;
-    }
-
-    name = next || 'layer';
-  }
 }
 
 function createLayerId(fileName: string) {

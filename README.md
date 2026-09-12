@@ -49,6 +49,18 @@ Developer notes live in `docs/`.
   supported projections, projection conversion rules, and development caveats.
 - `docs/data-storage.md`: language index for vector import persistence, GeoJSON
   normalization, IndexedDB storage, and local restore behavior.
+- `docs/ai-assistant.zh-CN.md`: AI assistant module boundaries, browser-direct
+  model integration, GIS tool execution, credential handling, and limitations.
+- `docs/layout.zh-CN.md`: map layout module boundaries, reusable document commands,
+  OpenLayers lifecycle, PNG/PDF export, tests, and known limitations.
+- `docs/digitize.zh-CN.md`: digitizing module boundaries, reusable edit sessions,
+  data-port integration, snapping/tracing, engine lifecycle, and regression checks.
+- `docs/attributes.zh-CN.md`: independent attribute-table module, sorting,
+  selection, virtualized rows, and workspace integration.
+- `docs/charts.zh-CN.md`: independent chart module, reusable statistical models,
+  ECharts lifecycle, standalone integration, and limitations.
+- `docs/data-views.zh-CN.md`: shared data-view contracts and filter coordination;
+  neither table nor chart modules own the authoritative GIS data.
 
 ## Build
 

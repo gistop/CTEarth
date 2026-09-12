@@ -1,0 +1,44 @@
+.ai-assistant-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-assistant-panel > .ai-thread-root {
+  flex: 1;
+  height: auto;
+}
+
+.ai-assistant-panel .ai-thread-header {
+  position: relative;
+}
+
+.ai-assistant-panel .ai-inline-settings.is-compact {
+  position: static;
+}
+
+.ai-assistant-panel .ai-settings-popover {
+  left: 8px;
+  right: 8px;
+  max-width: none;
+  flex-wrap: wrap;
+}
+
+.ai-settings-notice {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  padding: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.ai-assistant-panel .ai-mode-toggle button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ai-session-error {
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+}
