@@ -6,7 +6,6 @@ import initGeoLibre, {
   GeoTiffReader,
   transform_points_epsg,
   vector_to_geojson_reproject,
-  version as geolibreVersion,
 } from 'geolibre-wasm';
 import { extractCogSubset, initTools, runTool } from 'geolibre-wasm/tools';
 import type { RunToolOptions, ToolResult } from 'geolibre-wasm/tools';
@@ -22,6 +21,7 @@ import {
   type WorkspaceVectorLayer,
 } from './workspaceDraftStore';
 import { displayLayerName, normalizeLayerOrder } from './features/layers/services/layerService';
+import { getLayerFields } from './features/layers/services/layerFieldService';
 
 export { displayLayerName } from './features/layers/services/layerService';
 
@@ -344,6 +344,38 @@ export const defaultBasemapStyle: BasemapLayerStyle = {
   opacity: 1,
 };
 const maxIdwOutputCells = 50_000_000;
+let geoLibreReadyPromise: Promise<void> | null = null;
+let toolsReadyPromise: Promise<void> | null = null;
+
+function ensureGeoLibreReady() {
+  if (!geoLibreReadyPromise) {
+    geoLibreReadyPromise = initGeoLibre()
+      .then(() => undefined)
+      .catch((error) => {
+        geoLibreReadyPromise = null;
+        throw error;
+      });
+  }
+
+  return geoLibreReadyPromise;
+}
+
+function ensureToolsReady() {
+  if (!toolsReadyPromise) {
+    toolsReadyPromise = initTools()
+      .then(() => undefined)
+      .catch((error) => {
+        toolsReadyPromise = null;
+        throw error;
+      });
+  }
+
+  return toolsReadyPromise;
+}
+
+function ensureWasmReady() {
+  return Promise.all([ensureGeoLibreReady(), ensureToolsReady()]);
+}
 
 export function GisProvider({ children }: { children: React.ReactNode }) {
   const fileHandlesRef = useRef<Record<string, LocalSaveFileHandle>>({});
@@ -362,10 +394,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [rasterLayerVisibility, setRasterLayerVisibilityState] = useState<Record<string, boolean>>({});
   const [uploadedLayerVisibility, setUploadedLayerVisibilityState] = useState<Record<string, boolean>>({});
   const [layerOrder, setLayerOrder] = useState<LayerOrderId[]>(defaultLayerOrder);
-  const [toolsReady, setToolsReady] = useState(false);
+  const toolsReady = true;
   const [isRunning, setIsRunning] = useState(false);
   const [workspaceDraftLoaded, setWorkspaceDraftLoaded] = useState(false);
-  const [message, setMessage] = useState('WASM 工具正在加载');
+  const [message, setMessage] = useState('');
 
   const layer = useMemo(
     () => layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null,
@@ -508,7 +540,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
   const addGeoJsonLayer = useCallback((fileName: string, geojson: GeoJsonFeatureCollection, formatLabel: string) => {
     const points = geojson.features.filter(isPointFeature);
-    const fields = getFields(geojson.features);
+    const fields = getLayerFields(geojson);
     const numericFields = getNumericFields(points);
     const nextLayer: UploadedLayer = {
       id: createLayerId(fileName),
@@ -541,38 +573,16 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let active = true;
 
-    Promise.all([initGeoLibre(), initTools()])
-      .then(() => {
-        if (!active) {
-          return;
-        }
-
-        setToolsReady(true);
-        setMessage(`GeoLibre WASM ${geolibreVersion()} 已就绪`);
-      })
-      .catch((error: unknown) => {
-        if (!active) {
-          return;
-        }
-
-        setMessage(errorMessage(error));
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-
     readWorkspaceDraft()
-      .then((draft) => {
+      .then(async (draft) => {
         if (!active) {
           return;
         }
 
         if (draft?.vectorLayers.length || draft?.rasterLayers.length) {
+          if (draft.rasterLayers.length > 0) {
+            await ensureGeoLibreReady();
+          }
           const nextLayers = draft.vectorLayers.map(draftLayerToUploadedLayer);
           const nextRasters = draft.rasterLayers.map(draftRasterLayerToOverlay);
           const layerIds = new Set(nextLayers.map((item) => item.id));
@@ -672,7 +682,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const shapefileInput = await zipToToolInput(bytes);
       const geojson = normalizeGeoJson(await shp(bytes));
       const points = geojson.features.filter(isPointFeature);
-      const fields = getFields(geojson.features);
+      const fields = getLayerFields(geojson);
       const numericFields = getNumericFields(points);
       const nextLayer: UploadedLayer = {
         id: createLayerId(file.name),
@@ -777,6 +787,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     try {
       setMessage('正在读取 GeoPackage');
       setVectorOverlay(null);
+      await ensureGeoLibreReady();
 
       const bytes = new Uint8Array(await file.arrayBuffer());
       const geojson = normalizeGeoJson(JSON.parse(vector_to_geojson_reproject(bytes, 'geopackage', 4326, 0)));
@@ -791,6 +802,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     try {
       setMessage('正在读取 GeoTIFF');
       setVectorOverlay(null);
+      await ensureGeoLibreReady();
 
       const bytes = new Uint8Array(await file.arrayBuffer());
       const inputName = file.name || 'raster.tif';
@@ -821,6 +833,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setIsRunning(true);
       setMessage('正在读取远程 COG/GeoTIFF');
       setVectorOverlay(null);
+      await ensureGeoLibreReady();
 
       const metadata = await readRemoteCogMetadata(trimmedUrl);
       const outputBytes = await extractCogSubset(trimmedUrl, {
@@ -994,7 +1007,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const updateUploadedLayerGeoJson = useCallback((layerId: string, nextGeoJson: GeoJsonFeatureCollection) => {
     const geojson = normalizeGeoJson(nextGeoJson);
     const points = geojson.features.filter(isPointFeature);
-    const fields = getFields(geojson.features);
+    const fields = getLayerFields(geojson);
     const numericFields = getNumericFields(points);
 
     setLayers((current) => current.map((item) => {
@@ -1188,6 +1201,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      await ensureWasmReady();
       setIsRunning(true);
       setMessage('正在浏览器 WASM 中运行反距离加权插值');
       const requestedCellSize = positiveNumber(params.cellSize, '输出像元大小');
@@ -1307,6 +1321,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      await ensureWasmReady();
       setIsRunning(true);
       setMessage('正在浏览器 WASM 中运行缓冲区分析');
       setVectorOverlay(null);
@@ -1518,6 +1533,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      await ensureWasmReady();
       setIsRunning(true);
       setMessage(`正在浏览器 WASM 中运行${terrainToolLabel(tool)}`);
 
@@ -1588,6 +1604,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      await ensureWasmReady();
       setIsRunning(true);
       setMessage('正在使用 GeoLibre/Whitebox 按掩膜提取栅格');
       const outputName = ensureTifName(params.outputName || extractByMaskName(raster.name));
@@ -1642,6 +1659,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
 
     try {
+      await ensureWasmReady();
       setIsRunning(true);
       setMessage('正在按 AOI 修改栅格像元值');
 
@@ -2177,7 +2195,7 @@ function layerToWorkspaceDraftLayer(layer: UploadedLayer): WorkspaceVectorLayer 
 function draftLayerToUploadedLayer(layer: WorkspaceVectorLayer): UploadedLayer {
   const geojson = normalizeGeoJson(layer.geojson);
   const points = geojson.features.filter(isPointFeature);
-  const fields = getFields(geojson.features);
+  const fields = getLayerFields(geojson);
   const numericFields = getNumericFields(points);
 
   return {
@@ -3082,18 +3100,6 @@ function hasPolygonOverlayFeatures(features: unknown[]) {
 
     return feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon';
   });
-}
-
-function getFields(features: unknown[]) {
-  const fields = new Set<string>();
-
-  for (const feature of features) {
-    const properties = isRecord(feature) && isRecord(feature.properties) ? feature.properties : {};
-
-    Object.keys(properties).forEach((key) => fields.add(key));
-  }
-
-  return [...fields].sort();
 }
 
 function getNumericFields(features: PointFeature[]) {

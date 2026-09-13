@@ -27,10 +27,13 @@ type DataViewDataset = {
   fields: readonly string[];
   selectedIndexes: readonly number[];
   selectable: boolean;
+  editable?: boolean;
+  fieldDefinitions?: readonly DataFieldDefinition[];
 };
 ```
 
 - 同一 Provider 中的数据集 ID 必须唯一、非空；记录顺序与选择索引必须来自同一份数据快照。
+- `editable` 是宿主显式提供的字段编辑能力，不从 `selectable` 推断；可选的 `fieldDefinitions` 包含名称、别名、类型、可空性、默认值与文本长度。共享层提供中立定义与纯校验服务，不持有字段编辑草稿或执行 GIS 写入。
 - `records` 是只读记录视图，不要求包含几何，也不要求宿主是 GIS。不得在 UI 或统计服务内修改记录。
 - 宿主更新数据/选择时提供新引用。既有 GIS 适配器按 GeoJSON 引用缓存属性投影，重用属性对象而不复制权威几何；这是可丢弃的派生视图，不是数据仓库。
 - 无效/空属性映射为空记录，不删除该记录，因此不会改变原始要素索引。分析结果 `vectorOverlay` 标记为只读，但仍允许搜索、排序和生成图表。
@@ -44,6 +47,7 @@ type DataViewDataset = {
 | 数据、字段、选中记录 | 原 GIS 数据通路/注入宿主 | 沿用原有数据和持久化机制 |
 | 搜索词、仅显示已选 | `DataViewFilterStore` | Provider 实例内按数据集隔离；数据集移除时清理 |
 | 属性表排序 | `AttributeTableStore` | 属性表 Provider 内按数据集隔离 |
+| 未保存字段草稿 | `AttributeFieldStore` | 属性表 Provider 内按数据集隔离，图层移除时清理 |
 | 图表字段、图表类型 | `ChartStore` | 图表 Provider 内按数据集隔离 |
 | Dockview 面板 ID、激活、位置 | 应用工作区 | 沿用当前面板管理 |
 | ECharts 实例、动画帧、观察器 | 图表适配器 | Canvas 挂载到卸载 |
@@ -63,6 +67,8 @@ type DataViewDataset = {
 ## 5. 工作区组合
 
 `src/components/workspace/DataViewWorkspaceProvider.tsx` 通过 `useLayerStore` 连接现有数据，通过三个 Provider 组合共享视图、属性表和图表。表格发起图表打开请求时，工作区将它交给图表公开动作，再委托 `App.tsx` 打开 Dockview 面板。
+
+字段新增通过独立的可选导航/提交回调接入属性模块，不经由只读记录视图回写。工作区组合图层的纯字段更新服务与现有 GIS 更新入口，成功后新的数据快照自然同步给属性表和图表。
 
 保留原面板组件名 `attributeTable` / `attributeChart`、ID 前缀及 `layerId` 参数；应用包装组件将其转换为独立模块的 `datasetId`，不让 Dockview 类型进入业务模块。
 

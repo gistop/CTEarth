@@ -1,4 +1,13 @@
 export type DataRecord = Readonly<Record<string, unknown>>;
+export type DataFieldType = 'text' | 'integer' | 'decimal' | 'boolean' | 'date';
+export type DataFieldDefinition = Readonly<{
+  name: string;
+  alias: string;
+  type: DataFieldType;
+  nullable: boolean;
+  defaultValue: string | number | boolean | null;
+  length: number | null;
+}>;
 export type DataViewDataset = {
   id: string;
   name: string;
@@ -6,6 +15,8 @@ export type DataViewDataset = {
   fields: readonly string[];
   selectedIndexes: readonly number[];
   selectable: boolean;
+  editable?: boolean;
+  fieldDefinitions?: readonly DataFieldDefinition[];
 };
 export type DataViewFilter = Readonly<{ query: string; showSelectedOnly: boolean }>;
 export type DataViewRow = { recordIndex: number; values: DataRecord };

@@ -62,9 +62,11 @@ import {
   MapSunlightProvider,
   MapBasemapSelectionProvider,
 } from './features/maps';
-import { AttributeTableHeader, AttributeTablePanel } from './features/attributes';
+import { AttributeFieldsHeader, AttributeFieldsPanel, AttributeTableHeader, AttributeTablePanel, useAttributeFieldRibbonGroups } from './features/attributes';
+import type { AttributeFieldRibbonGroup } from './features/attributes';
 import { ChartPanel } from './features/charts';
 import { DataViewWorkspaceProvider } from './components/workspace/DataViewWorkspaceProvider';
+import { getAttributeFieldsLayerId, openAttributeFieldsPanel } from './components/workspace/attributeFieldsDock';
 import { ContentsPanel as EmbeddedContentsPanel } from './components/contents/ContentsPanel';
 import {
   DigitizeProvider,
@@ -124,9 +126,10 @@ const quickTools = [
   { title: '缩小', icon: ZoomOut },
 ];
 
-const ribbonTabs = ['工程', '地图', '布局', '分析', '编辑', '共享', '帮助'];
+const ribbonTabs = ['工程', '地图', '布局', '分析', '编辑', '共享', '帮助'] as const;
 type RibbonTab = typeof ribbonTabs[number];
 const editRibbonTab = '编辑';
+const fieldRibbonTab = '字段';
 
 const dockColumnWidths = {
   contents: 180,
@@ -487,17 +490,28 @@ function QuickAccessBar({
 function Ribbon({
   activeTab,
   collapsed,
+  fieldContextVisible,
+  fieldContextSelected,
+  fieldDatasetId,
   onChangeTab,
+  onSelectFieldContext,
 }: {
   activeTab: RibbonTab;
   collapsed: boolean;
+  fieldContextVisible: boolean;
+  fieldContextSelected: boolean;
+  fieldDatasetId: string | null;
   onChangeTab: (tab: RibbonTab) => void;
+  onSelectFieldContext: () => void;
 }) {
+  const fieldGroups = useAttributeFieldRibbonGroups(fieldContextVisible ? fieldDatasetId : null);
   const editGroups = useDigitizeRibbonGroups(activeTab === editRibbonTab);
   const { clearSelection, layers } = useGis();
   const { identifyActive, setIdentifyActive, toggleIdentifyActive } = useMapIdentify();
   const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
-  const activeGroups = activeTab === editRibbonTab
+  const activeGroups: RibbonGroup[] = fieldContextSelected
+    ? fieldGroups.map((group: AttributeFieldRibbonGroup) => group)
+    : activeTab === editRibbonTab
     ? editGroups
     : activeTab === '布局'
       ? layoutRibbonGroups.map((group, groupIndex) => {
@@ -533,7 +547,7 @@ function Ribbon({
       });
 
   return (
-    <section className={`ribbon${activeTab === ribbonTabs[2] ? ' layout-ribbon' : ''}`} aria-label="功能区">
+    <section className={`ribbon${activeTab === ribbonTabs[2] ? ' layout-ribbon' : ''}${fieldContextVisible ? ' field-context-ribbon' : ''}`} aria-label="功能区">
       <nav className="ribbon-tabs" aria-label="菜单">
         <div className="ribbon-tab-list">
           {ribbonTabs.map((tab) => (
@@ -548,6 +562,16 @@ function Ribbon({
               {tab}
             </button>
           ))}
+          {fieldContextVisible ? (
+            <button
+              className={`ribbon-context-tab${fieldContextSelected ? ' is-selected' : ''}`}
+              type="button"
+              aria-pressed={fieldContextSelected}
+              onClick={onSelectFieldContext}
+            >
+              {fieldRibbonTab}
+            </button>
+          ) : null}
         </div>
       </nav>
       <div className="ribbon-strip" aria-hidden={collapsed}>
@@ -800,6 +824,14 @@ function AttributeTableDockPanel(props: IDockviewPanelProps<{ layerId?: string }
   );
 }
 
+function AttributeFieldsDockPanel(props: IDockviewPanelProps<{ layerId?: string }>) {
+  return (
+    <Suspense fallback={<div className="placeholder-panel">字段</div>}>
+      <AttributeFieldsPanel datasetId={props.params.layerId} />
+    </Suspense>
+  );
+}
+
 function AttributeChartDockPanel(props: IDockviewPanelProps<{ layerId?: string; field?: string }>) {
   return (
     <Suspense fallback={<div className="placeholder-panel">图表</div>}>
@@ -905,8 +937,10 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
   const { canRunMapCommand, hasMapCommands, mapCommandState, runMapCommand, setMapMode } = useMapCommands();
   const [isMapModeSwitcherOpen, setIsMapModeSwitcherOpen] = useState(false);
   const attributeLayerId = getLayerIdFromAttributeTablePanelId(activePanel?.id);
+  const fieldsLayerId = getAttributeFieldsLayerId(activePanel?.id);
 
   if (attributeLayerId) return <AttributeTableHeader datasetId={attributeLayerId} />;
+  if (fieldsLayerId) return <AttributeFieldsHeader datasetId={fieldsLayerId} />;
 
   if (activePanel?.id === 'layout') {
     return <LayoutHeaderActions />;
@@ -1023,6 +1057,8 @@ function StatusFooter() {
 
 export default function App() {
   const [activeRibbonTab, setActiveRibbonTab] = useState<RibbonTab>('地图');
+  const [activeDockPanelId, setActiveDockPanelId] = useState<string | null>(null);
+  const [fieldContextSelected, setFieldContextSelected] = useState(false);
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState(false);
   const [isAiAssistantPanelVisible, setIsAiAssistantPanelVisible] = useState(false);
   const dockviewApiRef = useRef<DockviewApi | null>(null);
@@ -1033,6 +1069,7 @@ export default function App() {
       aiAssistant: AiAssistantDockPanel,
       attributeChart: AttributeChartDockPanel,
       attributeTable: AttributeTableDockPanel,
+      attributeFields: AttributeFieldsDockPanel,
       contents: EmbeddedContentsPanel,
       layout: LayoutPanel,
       map: MapSurfaceDockPanel,
@@ -1045,6 +1082,7 @@ export default function App() {
 
   const changeRibbonTab = useCallback((tab: RibbonTab) => {
     setActiveRibbonTab(tab);
+    setFieldContextSelected(false);
   }, []);
 
   const addAiAssistantPanel = useCallback((api: DockviewApi) => {
@@ -1132,6 +1170,11 @@ export default function App() {
     }).api.setActive();
   }, []);
 
+  const openAttributeFields = useCallback((layerId: string, layerName?: string) => {
+    const api = dockviewApiRef.current;
+    if (api) openAttributeFieldsPanel(api, layerId, layerName);
+  }, []);
+
   const openAttributeTable = useCallback((layerId: string, layerName?: string) => {
     const api = dockviewApiRef.current;
 
@@ -1167,6 +1210,11 @@ export default function App() {
 
   const onReady = useCallback((event: DockviewReadyEvent) => {
     dockviewApiRef.current = event.api;
+    setActiveDockPanelId(event.api.activePanel?.id ?? null);
+    event.api.onDidActivePanelChange(({ panel }) => {
+      setActiveDockPanelId(panel?.id ?? null);
+      setFieldContextSelected(Boolean(getAttributeFieldsLayerId(panel?.id)));
+    });
     event.api.onDidRemovePanel((panel) => {
       if (panel.id === aiAssistantPanelId) {
         aiAssistantPanelRef.current = null;
@@ -1259,7 +1307,7 @@ export default function App() {
             <MapSelectionProvider>
             <MapIdentifyProvider>
             <DigitizeProvider>
-<DataViewWorkspaceProvider onOpenTable={openAttributeTable} onOpenChart={openAttributeChart}>
+<DataViewWorkspaceProvider onOpenTable={openAttributeTable} onOpenChart={openAttributeChart} onOpenFields={openAttributeFields}>
                 <LayoutProvider>
                   <div className={`app-shell${isRibbonCollapsed ? ' ribbon-is-collapsed' : ''}`}>
                 <QuickAccessBar
@@ -1271,7 +1319,11 @@ export default function App() {
                 <Ribbon
                   activeTab={activeRibbonTab}
                   collapsed={isRibbonCollapsed}
+                  fieldContextVisible={Boolean(getAttributeFieldsLayerId(activeDockPanelId ?? undefined))}
+                  fieldContextSelected={fieldContextSelected}
+                  fieldDatasetId={getAttributeFieldsLayerId(activeDockPanelId ?? undefined)}
                   onChangeTab={changeRibbonTab}
+                  onSelectFieldContext={() => setFieldContextSelected(true)}
                 />
                 <main className="workspace">
                   <DockviewReact

@@ -35,3 +35,7 @@
 ## 相关实现
 
 - `src/gisStore.tsx`
+
+## 空白 GeoJSON 图层
+
+新建空白 GeoJSON 图层后，数据以空的 GeoJSON `FeatureCollection` 形式保存在浏览器本地 IndexedDB 中；点击“保存”后才导出为 `.geojson` 文件。

@@ -35,3 +35,7 @@ On startup, the app reads the draft back from the same local store and restores 
 ## Related Implementation
 
 - `src/gisStore.tsx`
+
+## Blank GeoJSON Layers
+
+A newly created blank GeoJSON layer is stored as an empty GeoJSON `FeatureCollection` in browser-local IndexedDB and is exported as a `.geojson` file only when explicitly saved.

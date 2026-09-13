@@ -3,15 +3,17 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DataViewWorkspaceProvider } from './DataViewWorkspaceProvider';
-import { AttributeTableHeader } from '../../features/attributes';
+import { AttributeFieldsHeader, AttributeTableHeader } from '../../features/attributes';
+import { AttributeFieldsView } from '../../features/attributes/components/AttributeFieldsView';
+import { getLayerFields } from '../../features/layers/services/layerFieldService';
 import { ChartPanelView } from '../../features/charts/components/ChartPanelView';
 import { createEditableLayer } from '../../features/digitize/testing/digitizeFixtures';
 import { useDataView } from '../../shared/data-views';
 import type { ChartModel } from '../../features/charts';
-import type { UploadedLayer, VectorOverlay } from '../../gisStore';
+import type { GeoJsonFeatureCollection, UploadedLayer, VectorOverlay } from '../../gisStore';
 
-const gis = vi.hoisted(() => ({ layers: [] as UploadedLayer[], vectorOverlay: null as VectorOverlay | null, setLayerSelection: vi.fn() }));
-vi.mock('../../features/layers', () => ({ useLayerStore: () => gis }));
+const gis = vi.hoisted(() => ({ layers: [] as UploadedLayer[], vectorOverlay: null as VectorOverlay | null, setLayerSelection: vi.fn(), updateUploadedLayerGeoJson: vi.fn() }));
+vi.mock('../../features/layers', async () => ({ ...await import('../../features/layers/services/layerFieldService'), useLayerStore: () => gis }));
 vi.mock('../../gisStore', () => ({ displayLayerName: (name: string) => name }));
 vi.mock('../../features/charts/components/ChartCanvas', () => ({ ChartCanvas: ({ model }: { model: ChartModel }) => <output data-testid="chart-model">{JSON.stringify(model)}</output> }));
 function SelectionProbe() {
@@ -21,6 +23,38 @@ function SelectionProbe() {
 beforeEach(() => { gis.layers = [createEditableLayer()]; gis.vectorOverlay = null; });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 describe('workspace composition of independent data views', () => {
+  it('adds fields to the entire GIS layer without changing selection, geometry or shared filtering', () => {
+    const original = gis.layers[0];
+    const second = { type: 'Feature', geometry: null, properties: { name: 'hidden', value: 10 } };
+    gis.layers = [{ ...original, geojson: { ...original.geojson, features: [...original.geojson.features, second] }, selectedFeatureIndexes: [1] }];
+    const onOpenFields = vi.fn();
+    const element = () => <DataViewWorkspaceProvider onOpenTable={vi.fn()} onOpenChart={vi.fn()} onOpenFields={onOpenFields}>
+      <AttributeTableHeader datasetId='points' /><AttributeFieldsHeader datasetId='points' /><AttributeFieldsView datasetId='points' /><SelectionProbe />
+    </DataViewWorkspaceProvider>;
+    const view = render(element());
+    gis.updateUploadedLayerGeoJson.mockImplementation((id: string, geojson: GeoJsonFeatureCollection) => {
+      gis.layers = gis.layers.map(layer => layer.id === id ? { ...layer, geojson, fields: getLayerFields(geojson) } : layer);
+    });
+    fireEvent.change(screen.getByLabelText('搜索属性'), { target: { value: 'hidden' } });
+    fireEvent.click(screen.getByLabelText('添加字段'));
+    expect(onOpenFields).toHaveBeenCalledWith('points', 'points.geojson');
+    fireEvent.change(screen.getByLabelText('新增字段 1 名称'), { target: { value: 'population' } });
+    fireEvent.change(screen.getByLabelText('新增字段 1 数据类型'), { target: { value: 'integer' } });
+    fireEvent.change(screen.getByLabelText('新增字段 1 默认值'), { target: { value: '9' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存字段' }));
+    expect(gis.updateUploadedLayerGeoJson).toHaveBeenCalledTimes(1);
+    expect(gis.layers[0].geojson.features).toEqual([
+      { ...original.geojson.features[0] as object, properties: { name: 'point-1', value: 42, population: 9 } },
+      { ...second, properties: { name: 'hidden', value: 10, population: 9 } },
+    ]);
+    expect(gis.layers[0].selectedFeatureIndexes).toEqual([1]);
+    expect(original.fields).toEqual(['name', 'value']);
+    view.rerender(element());
+    expect(screen.getByRole('rowheader', { name: 'population' })).toBeTruthy();
+    expect(screen.getByTestId('rows').textContent).toBe('1');
+    expect(gis.setLayerSelection).not.toHaveBeenCalled();
+  });
+
   it('synchronizes filters in both directions without copying authoritative data', () => {
     const layer = gis.layers[0];
     layer.geojson = { type: 'FeatureCollection', features: [

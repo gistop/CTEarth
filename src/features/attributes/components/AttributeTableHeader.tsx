@@ -1,11 +1,11 @@
 import { useState } from 'react';
-import { ChartColumn, Search, TableProperties, X } from 'lucide-react';
+import { ChartColumn, Columns3, Search, TableProperties, X } from 'lucide-react';
 import { useDataViewState } from '../../../shared/data-views';
 import { useAttributeTableActions, useAttributeTableState } from '../stores/AttributeTableProvider';
 
 export function AttributeTableHeader({ datasetId }: { datasetId: string }) {
   const { dataset, filter, filters, select } = useDataViewState(datasetId);
-  const { openChart } = useAttributeTableActions();
+  const { openChart, openFields, addFields } = useAttributeTableActions();
   const state = useAttributeTableState(datasetId);
   const [error, setError] = useState('');
   return <div className="attribute-header-actions" aria-label="属性表工具" onClick={event => event.stopPropagation()} onMouseDown={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
@@ -15,6 +15,7 @@ export function AttributeTableHeader({ datasetId }: { datasetId: string }) {
     <button type="button" title="清除选择" aria-label="清除选择" disabled={!dataset?.selectable || !dataset.selectedIndexes.length} onClick={() => {
       try { select(datasetId, []); setError(''); } catch (reason) { setError(reason instanceof Error ? reason.message : '清除选择失败。'); }
     }}><X size={14} /><span>清除</span></button>
+    <button type="button" title="添加字段" aria-label="添加字段" disabled={!dataset?.editable || !openFields || !addFields} onClick={() => { if (dataset) openFields?.(dataset.id, dataset.name); }}><Columns3 size={14} /><span>添加字段</span></button>
     <button type="button" title="生成统计图" aria-label="生成当前属性表统计图" disabled={!dataset?.fields.length || !openChart} onClick={() => { if (dataset) openChart?.(dataset.id, dataset.name, state.sort?.field); }}><ChartColumn size={14} /><span>图表</span></button>
     {error ? <span role="alert">{error}</span> : null}
   </div>;

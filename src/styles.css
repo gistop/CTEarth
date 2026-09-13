@@ -220,6 +220,24 @@ button {
   background: white;
 }
 
+.ribbon-tab-list button.ribbon-context-tab {
+  margin-left: 10px;
+  border-bottom-color: #77a9c7;
+  background: #eaf4fa;
+  color: #2b6f95;
+  font-weight: 600;
+}
+
+.ribbon-tab-list button.ribbon-context-tab.is-selected {
+  border-bottom-color: #1677b8;
+  background: #dceef8;
+  color: #0f5d8e;
+}
+
+.field-context-ribbon .ribbon-strip {
+  border-color: #b9d5e4;
+}
+
 .ribbon-strip {
   display: flex;
   height: 100px;
@@ -1052,10 +1070,10 @@ button {
 
 .attribute-header-actions {
   display: inline-grid;
-  grid-template-columns: minmax(72px, 150px) minmax(120px, 220px) auto auto auto;
+  grid-template-columns: minmax(40px, 120px) minmax(70px, 180px) auto auto auto auto;
   align-items: center;
   gap: 6px;
-  width: min(62vw, 650px);
+  width: min(68vw, 720px);
   max-width: 100%;
   min-width: 0;
   height: 100%;
@@ -3881,6 +3899,203 @@ button {
   background: #ffffff;
   color: #17202a;
   font-size: 12px;
+}
+
+.attribute-fields-header-actions {
+  grid-template-columns: minmax(40px, 150px) minmax(0, 1fr) auto auto auto;
+  width: min(62vw, 580px);
+}
+
+.attribute-fields-pending {
+  overflow: hidden;
+  color: #667584;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attribute-fields-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+  color: #24384b;
+  font-size: 12px;
+}
+
+.attribute-fields-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.attribute-fields-table {
+  width: 100%;
+  min-width: 800px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.attribute-fields-table th,
+.attribute-fields-table td {
+  height: 31px;
+  overflow: hidden;
+  padding: 3px 8px;
+  border-right: 1px solid #d4dde5;
+  border-bottom: 1px solid #d4dde5;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attribute-fields-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 32px;
+  background: #eef3f7;
+  color: #43586b;
+  font-weight: 600;
+}
+
+.attribute-fields-table thead th:nth-child(2),
+.attribute-fields-table thead th:nth-child(3),
+.attribute-fields-table thead th:nth-child(6) {
+  width: 17%;
+}
+
+.attribute-fields-table .attribute-fields-row-number,
+.attribute-fields-table .attribute-fields-remove {
+  width: 34px;
+}
+
+.attribute-fields-existing {
+  background: #f8fafc;
+  color: #607285;
+}
+
+.attribute-fields-existing th {
+  font-weight: 500;
+}
+
+.attribute-fields-draft {
+  background: #f6fbf5;
+}
+
+.attribute-fields-draft > td:first-child {
+  box-shadow: inset 3px 0 #65a966;
+}
+
+.attribute-fields-table input:not([type='checkbox']),
+.attribute-fields-table select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: #24384b;
+  font: inherit;
+}
+
+.attribute-fields-table input:focus-visible,
+.attribute-fields-table select:focus-visible,
+.attribute-fields-table button:focus-visible,
+.attribute-header-actions button:focus-visible {
+  outline: 2px solid #2788bd;
+  outline-offset: -2px;
+  background: #fff;
+}
+
+.attribute-fields-table .attribute-fields-checkbox {
+  text-align: center;
+}
+
+.attribute-fields-checkbox input {
+  accent-color: #348559;
+}
+
+.attribute-fields-state {
+  color: #798897;
+  font-size: 11px;
+}
+
+.attribute-fields-state.is-new {
+  color: #397745;
+}
+
+.attribute-fields-delete,
+.attribute-fields-add-cell button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #276e9d;
+  font: inherit;
+  cursor: pointer;
+}
+
+.attribute-fields-delete:hover {
+  background: #fcecec;
+  color: #a93c3c;
+}
+
+.attribute-fields-table .attribute-fields-add-cell {
+  padding: 2px 34px;
+  background: #fff;
+}
+
+.attribute-fields-add-cell button:hover {
+  background: #e4f2fb;
+}
+
+.attribute-fields-table button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.attribute-fields-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 5px 10px;
+  border-top: 1px solid #d4dde5;
+  background: #f7f9fb;
+  color: #65798b;
+  font-size: 11px;
+}
+
+.attribute-fields-message {
+  padding: 6px 10px;
+  border-bottom: 1px solid #d3e5d5;
+  background: #f1f8f2;
+  color: #357643;
+}
+
+.attribute-fields-message.is-error {
+  border-color: #edc9c9;
+  background: #fff2f2;
+  color: #aa3535;
+}
+
+.attribute-fields-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .attribute-table-empty {

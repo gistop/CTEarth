@@ -1,4 +1,5 @@
 import type { UploadedLayer, VectorOverlay } from '../../gisStore';
+import { readLayerFieldDefinitions } from '../../features/layers';
 import { isDataRecord } from '../../shared/data-views/dataViewQueryService';
 import type { DataRecord, DataViewDataset } from '../../shared/data-views/types';
 
@@ -19,6 +20,7 @@ export function createGisDataViewAdapter() {
       const datasets: DataViewDataset[] = layers.map(layer => ({
         id: layer.id, name: displayName(layer.fileName), records: read(layer.geojson).records,
         fields: [...new Set(layer.fields)], selectedIndexes: layer.selectedFeatureIndexes, selectable: true,
+        editable: true, fieldDefinitions: readLayerFieldDefinitions(layer.geojson),
       }));
       if (overlay) datasets.push({ id: 'vectorOverlay', name: displayName(overlay.name), ...read(overlay.geojson), selectedIndexes: [], selectable: false });
       return datasets;
