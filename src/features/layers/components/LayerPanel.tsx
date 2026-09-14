@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useAttributeTableActions } from '../../attributes';
 import { AddDataSplitButton } from './AddDataSplitButton';
+import { DeleteLayerConfirmDialog, type DeleteLayerConfirmTarget } from './DeleteLayerConfirmDialog';
 import { InlineRenameLabel } from './InlineRenameLabel';
 import { MapGroupEditPanel } from './MapGroupEditPanel';
 import { MapGroupSplitButton } from './MapGroupSplitButton';
@@ -71,6 +72,11 @@ type EditTarget =
   | { kind: 'group'; groupId: string }
   | { kind: 'layer'; groupId: string; layerInstanceKey: string; itemId: string; layerKind: Exclude<LayerListItem['kind'], 'basemap'> };
 
+type PendingDeleteTarget =
+  | { kind: 'uploaded'; id: string; name: string }
+  | { kind: 'raster'; id: string; name: string }
+  | { kind: 'basemap'; groupId: string; instanceId: string; name: string };
+
 export function LayerPanel() {
   const [draggingItem, setDraggingItem] = useState<LayerDragDescriptor | null>(null);
   const [dropTarget, setDropTarget] = useState<LayerDropDescriptor | null>(null);
@@ -94,6 +100,7 @@ export function LayerPanel() {
     layerOrder,
     createBlankGeoJsonLayer,
     deleteUploadedLayer,
+    deleteRasterLayer,
     saveGeoJsonLayer,
     saveGeoPackageLayer,
     setLayerVisibility,
@@ -116,6 +123,7 @@ export function LayerPanel() {
   const { registerBasemapChangeHandler, registerBasemapImageryChangeHandler } = useMapBasemapSelection();
   const { openTable: openAttributeTable } = useAttributeTableActions();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<PendingDeleteTarget | null>(null);
   const [editValue, setEditValue] = useState('');
   const renameTarget = expandedEditTarget;
   const renameValue = editValue;
@@ -220,6 +228,9 @@ export function LayerPanel() {
   }, [mapGroupViews, normalizedSearchQuery]);
   const selectedUploadedLayer = selectedItemId?.startsWith('uploaded:')
     ? layers.find((item) => `uploaded:${item.id}` === selectedItemId) ?? null
+    : null;
+  const selectedRaster = selectedItemId?.startsWith('raster:')
+    ? rasters.find((item) => `raster:${item.id}` === selectedItemId) ?? null
     : null;
   const selectedVectorOverlay = selectedItemId === 'vectorOverlay' ? vectorOverlay : null;
   const selectedLayerBounds = selectedUploadedLayer ? getLayerBounds(selectedUploadedLayer) : null;
@@ -633,33 +644,68 @@ export function LayerPanel() {
 
   const handleDeleteSelectedLayer = () => {
     if (selectedUploadedLayer) {
-      if (!window.confirm(`删除图层 ${displayLayerName(selectedUploadedLayer.fileName)}？`)) {
-        return;
-      }
+      setPendingDelete({
+        kind: 'uploaded',
+        id: selectedUploadedLayer.id,
+        name: displayLayerName(selectedUploadedLayer.fileName),
+      });
+      return;
+    }
 
-      deleteUploadedLayer(selectedUploadedLayer.id);
-      setSelectedItemId(null);
-      closeEditPanel();
+    if (selectedRaster) {
+      setPendingDelete({
+        kind: 'raster',
+        id: selectedRaster.id,
+        name: displayLayerName(selectedRaster.name),
+      });
       return;
     }
 
     if (selectedBasemapItem) {
-      if (!window.confirm(`删除底图 · ${getMapGroupBasemapLabel(selectedBasemapItem.basemapId, selectedBasemapItem.basemapSourceKind, selectedBasemapItem.cesiumImageryId)}？`)) {
-        return;
-      }
+      setPendingDelete({
+        kind: 'basemap',
+        groupId: selectedBasemapItem.groupId,
+        instanceId: selectedBasemapItem.instanceId,
+        name: getMapGroupBasemapLabel(selectedBasemapItem.basemapId, selectedBasemapItem.basemapSourceKind, selectedBasemapItem.cesiumImageryId),
+      });
+    }
+  };
 
+  const handleConfirmDelete = () => {
+    if (!pendingDelete) {
+      return;
+    }
+
+    if (pendingDelete.kind === 'uploaded') {
+      deleteUploadedLayer(pendingDelete.id);
+    } else if (pendingDelete.kind === 'raster') {
+      deleteRasterLayer(pendingDelete.id);
+    } else {
       setMapGroups((current) => current.map((group) => (
-        group.id === selectedBasemapItem.groupId
+        group.id === pendingDelete.groupId
           ? {
             ...group,
-            layerItems: group.layerItems.filter((item) => item.instanceId !== selectedBasemapItem.instanceId),
+            layerItems: group.layerItems.filter((item) => item.instanceId !== pendingDelete.instanceId),
           }
           : group
       )));
-      setSelectedItemId(null);
-      closeEditPanel();
     }
+
+    setPendingDelete(null);
+    setSelectedItemId(null);
+    closeEditPanel();
   };
+
+  const handleCancelDelete = () => {
+    setPendingDelete(null);
+  };
+
+  const deleteDialogTarget: DeleteLayerConfirmTarget | null = pendingDelete
+    ? {
+      kind: pendingDelete.kind === 'basemap' ? 'basemap' : 'layer',
+      name: pendingDelete.name,
+    }
+    : null;
 
   const handleZoomToSelectedLayer = () => {
     if (!selectedUploadedLayer || !selectedLayerBounds) {
@@ -826,7 +872,7 @@ export function LayerPanel() {
           type="button"
           title="删除选中图层"
           aria-label="删除选中图层"
-          disabled={!selectedUploadedLayer && !selectedBasemapItem}
+          disabled={!selectedUploadedLayer && !selectedRaster && !selectedBasemapItem}
           onClick={handleDeleteSelectedLayer}
         >
           <Trash2 size={18} />
@@ -1056,6 +1102,11 @@ export function LayerPanel() {
         ) : null}
         <div className="layer-note status">{message}</div>
       </section>
+      <DeleteLayerConfirmDialog
+        target={deleteDialogTarget}
+        onCancel={handleCancelDelete}
+        onConfirm={handleConfirmDelete}
+      />
     </section>
   );
 }

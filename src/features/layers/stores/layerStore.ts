@@ -32,6 +32,7 @@ export function useLayerStore() {
     message: gis.message,
     createBlankGeoJsonLayer: gis.createBlankGeoJsonLayer,
     deleteUploadedLayer: gis.deleteUploadedLayer,
+    deleteRasterLayer: gis.deleteRasterLayer,
     saveGeoJsonLayer: gis.saveGeoJsonLayer,
     saveGeoPackageLayer: gis.saveGeoPackageLayer,
     setLayerVisibility: gis.setLayerVisibility,

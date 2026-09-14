@@ -278,6 +278,7 @@ type GisContextValue = {
   uploadGeoTiffUrl: (url: string) => Promise<void>;
   createBlankGeoJsonLayer: (params: { fileName?: string; geometryType: EditableGeometryType }) => string;
   deleteUploadedLayer: (layerId?: string) => void;
+  deleteRasterLayer: (rasterId?: string) => void;
   saveGeoJsonLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
   saveGeoPackageLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
   updateUploadedLayerGeoJson: (layerId: string, geojson: GeoJsonFeatureCollection) => void;
@@ -929,6 +930,31 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setLayerOrder((current) => current.filter((id) => id !== `uploaded:${targetId}`));
     setMessage(`已删除图层：${targetLayer.fileName}`);
   }, [layer, layers]);
+
+  const deleteRasterLayer = useCallback((rasterId?: string) => {
+    const targetRaster = rasters.find((item) => item.id === rasterId) ?? raster;
+
+    if (!targetRaster) {
+      setMessage('没有可删除的栅格图层。');
+      return;
+    }
+
+    const remainingRasters = rasters.filter((item) => item.id !== targetRaster.id);
+    const nextActiveRasterId = remainingRasters[0]?.id ?? null;
+
+    setRasters(remainingRasters);
+    setActiveRasterId((current) => (
+      current && current !== targetRaster.id && remainingRasters.some((item) => item.id === current)
+        ? current
+        : nextActiveRasterId
+    ));
+    setRasterLayerVisibilityState((current) => {
+      const { [targetRaster.id]: _removed, ...next } = current;
+      return next;
+    });
+    setLayerOrder((current) => current.filter((id) => id !== `raster:${targetRaster.id}`));
+    setMessage(`已删除图层：${targetRaster.name}`);
+  }, [raster, rasters]);
 
   const saveGeoJsonLayer = useCallback(async (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => {
     const targetLayer: { id: string; fileName: string; geojson: GeoJsonFeatureCollection } | null = layerId === 'vectorOverlay'
@@ -1752,6 +1778,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     uploadGeoTiffUrl,
     createBlankGeoJsonLayer,
     deleteUploadedLayer,
+    deleteRasterLayer,
     saveGeoJsonLayer,
     saveGeoPackageLayer,
     updateUploadedLayerGeoJson,
@@ -1784,7 +1811,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
