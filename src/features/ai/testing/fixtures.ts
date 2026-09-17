@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import type { GisOperationResult, RasterOverlay, SelectionResult, UploadedLayer, VectorOverlay } from '../../../gisStore';
+import type { GisOperationResult, OverlayToolId, RasterOverlay, SelectionResult, UploadedLayer, VectorOverlay } from '../../../gisStore';
 import type { AiGisPort, AiGisSnapshot } from '../tools/gisPort';
 
 export function createGisFixture() {
@@ -27,6 +27,7 @@ export function createGisFixture() {
     geoTransform: [120, 0.5, 0, 31, 0, -0.5], pixels: new Float64Array([1, 2, 3, 4]),
   };
   const overlay: VectorOverlay = { name: 'buffer.geojson', geojson: layer.geojson };
+  const generatedLayer: UploadedLayer = { ...layer, id: 'buffer-result', fileName: overlay.name, selectedFeatureIndexes: [] };
   let snapshot: AiGisSnapshot = {
     layer, layers: [layer], raster, vectorOverlay: null,
     toolsReady: true, isRunning: false, message: '',
@@ -38,10 +39,11 @@ export function createGisFixture() {
     getSnapshot: () => snapshot,
     selectByValue: vi.fn(async (): Promise<SelectionResult | null> => selection),
     selectByLocation: vi.fn(async (): Promise<SelectionResult | null> => selection),
-    runBufferAnalysis: vi.fn(async (): Promise<GisOperationResult<VectorOverlay>> => ({ ok: true, output: overlay })),
+    runBufferAnalysis: vi.fn(async (): Promise<GisOperationResult<UploadedLayer>> => ({ ok: true, output: generatedLayer })),
+    runOverlayAnalysis: vi.fn(async (tool: OverlayToolId): Promise<GisOperationResult<UploadedLayer>> => ({ ok: true, output: { ...generatedLayer, id: `${tool}-result`, fileName: `${tool}.geojson` } })),
     runIdwInterpolation: vi.fn(async (): Promise<GisOperationResult<RasterOverlay>> => ({ ok: true, output: raster })),
     runTerrainAnalysis: vi.fn(async (): Promise<GisOperationResult<RasterOverlay>> => ({ ok: true, output: raster })),
   } satisfies AiGisPort;
 
-  return { port, layer, raster, overlay, selection, setSnapshot(next: Partial<AiGisSnapshot>) { snapshot = { ...snapshot, ...next }; } };
+  return { port, layer, raster, overlay, generatedLayer, selection, setSnapshot(next: Partial<AiGisSnapshot>) { snapshot = { ...snapshot, ...next }; } };
 }

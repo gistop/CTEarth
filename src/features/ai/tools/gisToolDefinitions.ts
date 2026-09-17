@@ -1,5 +1,30 @@
 import type { AiToolDefinition } from '../types';
 
+const overlayParameters: AiToolDefinition['parameters'] = {
+  type: 'object',
+  properties: {
+    inputLayerId: {
+      type: 'string',
+      description: 'Input polygon layer id from list_layers. Use the real id of an uploaded or previously generated layer.',
+    },
+    overlayLayerId: {
+      type: 'string',
+      description: 'Overlay polygon layer id from list_layers. It must be different from inputLayerId.',
+    },
+    outputName: {
+      type: 'string',
+      description: 'Optional output GeoJSON file name.',
+    },
+    snapTolerance: {
+      type: 'number',
+      minimum: 0,
+      description: 'Optional non-negative snapping tolerance in the input layer coordinate units.',
+    },
+  },
+  required: ['inputLayerId', 'overlayLayerId'],
+  additionalProperties: false,
+};
+
 export const gisToolDefinitions: AiToolDefinition[] = [
   {
     name: 'list_layers',
@@ -12,7 +37,7 @@ export const gisToolDefinitions: AiToolDefinition[] = [
   },
   {
     name: 'buffer_vector',
-    description: 'Run the browser WASM vector buffer tool on the active uploaded layer and add the output as a vector overlay.',
+    description: 'Run the browser WASM vector buffer tool on the active vector layer. Add and activate a new independent vector layer without replacing any existing layer, even when output names match. Return its real layer id for subsequent operations.',
     parameters: {
       type: 'object',
       properties: {
@@ -90,7 +115,7 @@ export const gisToolDefinitions: AiToolDefinition[] = [
       properties: {
         referenceLayerId: {
           type: 'string',
-          description: 'Reference layer id. Use vectorOverlay for the current vector overlay result, or an uploaded layer id from list_layers.',
+          description: 'Reference vector layer id from list_layers, including generated analysis layers. Use the real resultLayer.id returned by a preceding analysis; vectorOverlay is only a legacy overlay id when explicitly listed.',
         },
         relation: {
           type: 'string',
@@ -106,6 +131,21 @@ export const gisToolDefinitions: AiToolDefinition[] = [
       required: ['referenceLayerId'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'intersect',
+    description: 'Run polygon intersection between two different vector layers. Keep only the areas where the input and overlay layers overlap, add the result as a new independent vector layer, and return its real layer id for subsequent operations.',
+    parameters: overlayParameters,
+  },
+  {
+    name: 'union',
+    description: 'Run polygon union between two different vector layers. Combine their polygon coverage into a new independent vector layer and return its real layer id for subsequent operations.',
+    parameters: overlayParameters,
+  },
+  {
+    name: 'erase',
+    description: 'Erase the areas of the input polygon layer that overlap the overlay polygon layer. Add the result as a new independent vector layer and return its real layer id for subsequent operations.',
+    parameters: overlayParameters,
   },
   {
     name: 'hillshade',
@@ -220,4 +260,3 @@ export const gisToolDefinitions: AiToolDefinition[] = [
     },
   },
 ];
-

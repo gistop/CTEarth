@@ -305,8 +305,8 @@ type GisContextValue = {
   selectByValue: (params: SelectByValueParameters) => Promise<SelectionResult | null>;
   selectByLocation: (params: SelectByLocationParameters) => Promise<SelectionResult | null>;
   runIdwInterpolation: (params: IdwParameters) => Promise<GisOperationResult<RasterOverlay>>;
-  runBufferAnalysis: (params: BufferParameters) => Promise<GisOperationResult<VectorOverlay>>;
-  runOverlayAnalysis: (tool: OverlayToolId, params: OverlayParameters) => Promise<void>;
+  runBufferAnalysis: (params: BufferParameters) => Promise<GisOperationResult<UploadedLayer>>;
+  runOverlayAnalysis: (tool: OverlayToolId, params: OverlayParameters) => Promise<GisOperationResult<UploadedLayer>>;
   runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<GisOperationResult<RasterOverlay>>;
   runExtractByMask: (params: ExtractByMaskParameters) => Promise<void>;
   editRasterByAoi: (params: RasterEditParameters) => Promise<void>;
@@ -409,16 +409,8 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     [activeRasterId, rasters],
   );
 
-  const setRaster = useCallback((nextRaster: RasterOverlay | null) => {
-    if (!nextRaster) {
-      setRasters([]);
-      setActiveRasterId(null);
-      setRasterLayerVisibilityState({});
-      setLayerOrder((current) => current.filter((id) => id !== 'raster' && !id.startsWith('raster:')));
-      return;
-    }
-
-    setRasters((current) => [nextRaster, ...current.filter((item) => item.id !== nextRaster.id)]);
+  const addRasterLayer = useCallback((nextRaster: RasterOverlay) => {
+    setRasters((current) => [nextRaster, ...current]);
     setActiveRasterId(nextRaster.id);
     setRasterLayerVisibilityState((current) => ({ ...current, [nextRaster.id]: true }));
     setLayerOrder((current) => [`raster:${nextRaster.id}`, ...current.filter((id) => id !== 'raster' && id !== `raster:${nextRaster.id}`)]);
@@ -539,13 +531,19 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
 
-  const addGeoJsonLayer = useCallback((fileName: string, geojson: GeoJsonFeatureCollection, formatLabel: string) => {
+  const addGeoJsonLayer = useCallback((
+    fileName: string,
+    geojson: GeoJsonFeatureCollection,
+    formatLabel: string,
+    options?: { geometryType?: EditableGeometryType; style?: Partial<UploadedLayerStyle> },
+  ) => {
     const points = geojson.features.filter(isPointFeature);
     const fields = getLayerFields(geojson);
     const numericFields = getNumericFields(points);
     const nextLayer: UploadedLayer = {
       id: createLayerId(fileName),
       fileName,
+      geometryType: options?.geometryType,
       toolInput: createGeoJsonToolInput(geoJsonToolInputName(fileName), geojson),
       geojson,
       points: {
@@ -558,17 +556,13 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       selectedFeatureIndexes: [],
     };
 
-    setLayerVisibilityState((current) => ({
-      ...current,
-      raster: true,
-      vectorOverlay: true,
-    }));
     setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
-    setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
+    setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: { ...defaultUploadedLayerStyle, ...options?.style } }));
     setLayers((current) => [...current, nextLayer]);
     setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
     setActiveLayerId(nextLayer.id);
     setMessage(`已加载 ${geojson.features.length} 个 ${formatLabel} 要素：${fileName}`);
+    return nextLayer;
   }, []);
 
   useEffect(() => {
@@ -809,7 +803,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const inputName = file.name || 'raster.tif';
       const nextRaster = readRasterOverlay(bytes, inputName, inputName);
 
-      setRaster(nextRaster);
+      addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({
         ...current,
         raster: true,
@@ -847,7 +841,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const inputName = remoteGeoTiffFileName(trimmedUrl);
       const nextRaster = readRasterOverlay(outputBytes, inputName, inputName);
 
-      setRaster(nextRaster);
+      addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({
         ...current,
         raster: true,
@@ -865,41 +859,14 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const createBlankGeoJsonLayer = useCallback((params: { fileName?: string; geometryType: EditableGeometryType }) => {
     const fileName = ensureGeoJsonName((params.fileName || `${params.geometryType.toLowerCase()}-layer.geojson`).trim() || 'new-layer.geojson');
     const geojson: GeoJsonFeatureCollection = { type: 'FeatureCollection', features: [] };
-    const nextLayer: UploadedLayer = {
-      id: createLayerId(fileName),
-      fileName,
-      geometryType: params.geometryType,
-      toolInput: createGeoJsonToolInput(fileName, geojson),
-      geojson,
-      points: {
-        type: 'FeatureCollection',
-        features: [],
-      },
-      fields: [],
-      numericFields: [],
-      selectedField: '',
-      selectedFeatureIndexes: [],
-    };
-
-    setRaster(null);
-    setVectorOverlay(null);
-    setLayerVisibilityState((current) => ({
-      ...current,
-      raster: true,
-      vectorOverlay: true,
-    }));
-    setUploadedLayerVisibilityState((current) => ({ ...current, [nextLayer.id]: true }));
-    setUploadedLayerStyles((current) => ({ ...current, [nextLayer.id]: defaultUploadedLayerStyle }));
-    setLayers((current) => [...current, nextLayer]);
-    setLayerOrder((current) => [`uploaded:${nextLayer.id}`, ...current]);
-    setActiveLayerId(nextLayer.id);
+    const nextLayer = addGeoJsonLayer(fileName, geojson, 'GeoJSON', { geometryType: params.geometryType });
     setMessage(`已新建空白 GeoJSON 图层：${fileName}`);
 
     return nextLayer.id;
-  }, []);
+  }, [addGeoJsonLayer]);
 
   const deleteUploadedLayer = useCallback((layerId?: string) => {
-    const targetLayer = findLayer(layers, layerId) ?? layer;
+    const targetLayer = layerId === undefined ? layer : findLayer(layers, layerId);
 
     if (!targetLayer) {
       setMessage('没有可删除的矢量图层。');
@@ -932,7 +899,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   }, [layer, layers]);
 
   const deleteRasterLayer = useCallback((rasterId?: string) => {
-    const targetRaster = rasters.find((item) => item.id === rasterId) ?? raster;
+    const targetRaster = rasterId === undefined ? raster : rasters.find((item) => item.id === rasterId);
 
     if (!targetRaster) {
       setMessage('没有可删除的栅格图层。');
@@ -1308,7 +1275,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
           max: nextRaster.max,
         },
       });
-      setRaster(nextRaster);
+      addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
       setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setLayers((current) => current.map((item) => (
@@ -1326,7 +1293,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
   }, [layer, layers, toolsReady]);
 
-  const runBufferAnalysis = useCallback(async (params: BufferParameters): Promise<GisOperationResult<VectorOverlay>> => {
+  const runBufferAnalysis = useCallback(async (params: BufferParameters): Promise<GisOperationResult<UploadedLayer>> => {
     const analysis = createAnalysisLogContext('buffer_vector');
     logAnalysisEvent(analysis, 'start', {
       rawParams: { ...params },
@@ -1350,7 +1317,6 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       await ensureWasmReady();
       setIsRunning(true);
       setMessage('正在浏览器 WASM 中运行缓冲区分析');
-      setVectorOverlay(null);
 
       const distance = positiveNumber(params.distance, '缓冲距离');
       const quadrantSegments = positiveInteger(params.quadrantSegments || '8', '圆弧段数');
@@ -1408,11 +1374,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         outputName,
         geojson: summarizeGeoJsonForAnalysis(geojson),
       });
-      setVectorOverlay({ name: outputName, geojson });
-      setLayerVisibilityState((current) => ({ ...current, vectorOverlay: true }));
-      setLayerOrder((current) => ['vectorOverlay', ...current.filter((id) => id !== 'vectorOverlay')]);
+      const output = addGeoJsonLayer(outputName, geojson, '缓冲区', { style: generatedVectorLayerStyle() });
       setMessage(`缓冲区完成：${geojson.features.length} 个面要素`);
-      return { ok: true, output: { name: outputName, geojson } };
+      return { ok: true, output };
     } catch (error) {
       const message = errorMessage(error);
       setMessage(message);
@@ -1420,9 +1384,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsRunning(false);
     }
-  }, [layer, toolsReady]);
+  }, [addGeoJsonLayer, layer, toolsReady]);
 
-  const runOverlayAnalysis = useCallback(async (tool: OverlayToolId, params: OverlayParameters) => {
+  const runOverlayAnalysis = useCallback(async (tool: OverlayToolId, params: OverlayParameters): Promise<GisOperationResult<UploadedLayer>> => {
     const analysis = createAnalysisLogContext(tool);
     logAnalysisEvent(analysis, 'start', {
       rawParams: { ...params },
@@ -1435,7 +1399,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     if (!toolsReady) {
       logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
       setMessage('WASM 工具仍在加载，请稍后再运行。');
-      return;
+      return { ok: false, message: 'WASM 工具仍在加载，请稍后再运行。' };
     }
 
     const inputLayer = findVectorToolInput(layers, vectorOverlay, params.inputLayerId)
@@ -1448,13 +1412,13 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
     if (!inputLayer) {
       setMessage('请选择输入矢量图层。');
-      return;
+      return { ok: false, message: '请选择输入矢量图层。' };
     }
 
     if (!overlayLayer) {
       logAnalysisEvent(analysis, 'blocked', { reason: 'overlay_layer_missing' });
       setMessage('请选择叠加矢量图层。');
-      return;
+      return { ok: false, message: '请选择叠加矢量图层。' };
     }
 
     if (!isOverlayPolygonLayerAvailable(layers, vectorOverlay, params.inputLayerId)
@@ -1465,7 +1429,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         overlayLayerId: params.overlayLayerId,
       });
       setMessage('相交、联合、擦除只支持面图层，请选择 Polygon 或 MultiPolygon 图层。');
-      return;
+      return { ok: false, message: '相交、联合、擦除只支持面图层，请选择 Polygon 或 MultiPolygon 图层。' };
     }
 
     if (inputLayer.id === overlayLayer.id) {
@@ -1474,14 +1438,12 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         inputLayerId: inputLayer.id,
       });
       setMessage('输入图层和叠加图层不能相同。');
-      return;
+      return { ok: false, message: '输入图层和叠加图层不能相同。' };
     }
 
     try {
       setIsRunning(true);
       setMessage(`正在浏览器 WASM 中运行${overlayToolLabel(tool)}`);
-      setVectorOverlay(null);
-
       const inputToolInput = namespaceVectorToolInput(inputLayer.toolInput, 'input');
       const overlayToolInput = namespaceVectorToolInput(overlayLayer.toolInput, 'overlay');
       const outputName = ensureGeoJsonName(params.outputName || `${tool}.geojson`);
@@ -1534,16 +1496,17 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         outputName,
         geojson: summarizeGeoJsonForAnalysis(geojson),
       });
-      setVectorOverlay({ name: outputName, geojson });
-      setLayerVisibilityState((current) => ({ ...current, vectorOverlay: true }));
-      setLayerOrder((current) => ['vectorOverlay', ...current.filter((id) => id !== 'vectorOverlay')]);
+      const output = addGeoJsonLayer(outputName, geojson, overlayToolLabel(tool), { style: generatedVectorLayerStyle() });
       setMessage(`${overlayToolLabel(tool)}完成：${geojson.features.length} 个要素`);
+      return { ok: true, output };
     } catch (error) {
-      setMessage(errorMessage(error));
+      const message = errorMessage(error);
+      setMessage(message);
+      return { ok: false, message };
     } finally {
       setIsRunning(false);
     }
-  }, [layer, layers, toolsReady, vectorOverlay]);
+  }, [addGeoJsonLayer, layer, layers, toolsReady, vectorOverlay]);
 
   const runTerrainAnalysis = useCallback(async (tool: TerrainToolId, params: TerrainParameters): Promise<GisOperationResult<RasterOverlay>> => {
     if (!toolsReady) {
@@ -1597,7 +1560,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       }
 
       const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
-      setRaster(nextRaster);
+      addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
       setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`${terrainToolLabel(tool)}完成：${nextRaster.width} x ${nextRaster.height}`);
@@ -1660,7 +1623,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
       const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
 
-      setRaster(nextRaster);
+      addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
       setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`按掩膜提取完成：${nextRaster.width} x ${nextRaster.height}`);
@@ -1717,7 +1680,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       });
       const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
 
-      setRaster(nextRaster);
+      addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
       setLayerOrder((current) => current.filter((id) => id !== 'raster'));
       setMessage(`栅格编辑完成：已更新 ${editedCount} 个像元，可导出 GeoTIFF。`);
@@ -3680,6 +3643,16 @@ function basename(value: string) {
 function createLayerId(fileName: string) {
   const safeName = fileName.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'layer';
   return `${safeName}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function generatedVectorLayerStyle(): UploadedLayerStyle {
+  return {
+    ...defaultUploadedLayerStyle,
+    fillColor: defaultVectorOverlayStyle.fillColor,
+    fillOpacity: defaultVectorOverlayStyle.fillOpacity,
+    lineColor: defaultVectorOverlayStyle.lineColor,
+    lineWidth: defaultVectorOverlayStyle.lineWidth,
+  };
 }
 
 function extensionOf(value: string) {

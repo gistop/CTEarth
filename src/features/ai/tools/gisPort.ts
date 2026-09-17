@@ -1,5 +1,5 @@
 import type {
-  BufferParameters, GisOperationResult, IdwParameters, LayerVisibility, RasterOverlay,
+  BufferParameters, GisOperationResult, IdwParameters, LayerVisibility, OverlayParameters, OverlayToolId, RasterOverlay,
   SelectByLocationParameters, SelectByValueParameters, SelectionResult,
   TerrainParameters, TerrainToolId, UploadedLayer, VectorOverlay,
 } from '../../../gisStore';
@@ -20,7 +20,8 @@ export interface AiGisPort {
   getSnapshot(): AiGisSnapshot;
   selectByValue(params: SelectByValueParameters): Promise<SelectionResult | null>;
   selectByLocation(params: SelectByLocationParameters): Promise<SelectionResult | null>;
-  runBufferAnalysis(params: BufferParameters): Promise<GisOperationResult<VectorOverlay>>;
+  runBufferAnalysis(params: BufferParameters): Promise<GisOperationResult<UploadedLayer>>;
+  runOverlayAnalysis(tool: OverlayToolId, params: OverlayParameters): Promise<GisOperationResult<UploadedLayer>>;
   runIdwInterpolation(params: IdwParameters): Promise<GisOperationResult<RasterOverlay>>;
   runTerrainAnalysis(tool: TerrainToolId, params: TerrainParameters): Promise<GisOperationResult<RasterOverlay>>;
 }

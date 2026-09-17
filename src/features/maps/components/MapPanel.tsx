@@ -20,7 +20,7 @@ import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
 import { useMapGroupRenderState } from '../../../mapGroupRenderState';
-import type { UploadedLayer } from '../../../gisStore';
+import type { UploadedLayer, VectorOverlay } from '../../../gisStore';
 import { MapViewportFrame } from './MapViewportFrame';
 import { combineMapBounds, padMapBounds } from '../services/mapViewportService';
 import { logMapTerrainDiagnostics } from '../services/mapTerrainDiagnostics';
@@ -206,6 +206,7 @@ export function MapPanel() {
   const mapModeRef = useRef<MapViewMode>('planar');
   const digitizeMapVisibleRef = useRef(false);
   const lastAutoFitRasterIdRef = useRef<string | null>(null);
+  const lastAutoFitVectorOverlayRef = useRef<VectorOverlay | null>(null);
   const { editingActive, status: digitizeStatus } = useDigitize();
   const { mapCommandState, registerMapCommands, updateMapCommandState } = useMapCommands();
   const { isMeasureOpen, mode: measureMode } = useMapMeasure();
@@ -768,6 +769,7 @@ export function MapPanel() {
     }
 
     if (!vectorOverlay) {
+      lastAutoFitVectorOverlayRef.current = null;
       return;
     }
 
@@ -807,10 +809,13 @@ export function MapPanel() {
       basemapVisible: layerVisibility.basemap,
     });
 
-    const bounds = getGeoJsonBounds(vectorOverlay.geojson);
+    if (lastAutoFitVectorOverlayRef.current !== vectorOverlay) {
+      const bounds = getGeoJsonBounds(vectorOverlay.geojson);
 
-    if (bounds && !fitValidBounds(map, bounds, 0.12, 80, 700)) {
-      setStatus('结果图层坐标超出经纬度范围，已跳过自动定位');
+      if (bounds && !fitValidBounds(map, bounds, 0.12, 80, 700)) {
+        setStatus('结果图层坐标超出经纬度范围，已跳过自动定位');
+      }
+      lastAutoFitVectorOverlayRef.current = vectorOverlay;
     }
   }, [layerVisibility.basemap, layerVisibility.vectorOverlay, layers, mapGroupRenderState.entries, mapReady, raster, vectorOverlay, vectorOverlayStyle]);
 

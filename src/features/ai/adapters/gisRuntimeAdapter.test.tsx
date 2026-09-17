@@ -32,7 +32,7 @@ describe('React GIS runtime bridge', () => {
 
   it('waits for the exact returned GIS output to commit before the next tool can run', async () => {
     runtime = createRuntime();
-    const output = createGisFixture().overlay;
+    const output = createGisFixture().generatedLayer;
     runtime.runBufferAnalysis.mockResolvedValue({ ok: true, output });
     const { result, rerender } = renderHook(() => useGisAiPort());
     let settled = false;
@@ -40,10 +40,27 @@ describe('React GIS runtime bridge', () => {
     void pending.then(() => { settled = true; });
     await act(async () => { await Promise.resolve(); });
     expect(settled).toBe(false);
-    runtime = { ...runtime, vectorOverlay: output };
+    runtime = { ...runtime, layers: [...runtime.layers, output], layer: output };
     rerender();
     await expect(pending).resolves.toEqual({ ok: true, output });
-    expect(result.current.port.getSnapshot().vectorOverlay).toBe(output);
+    expect(result.current.port.getSnapshot().layers).toContain(output);
+  });
+
+  it('waits for overlay outputs to commit and returns the exact generated layer', async () => {
+    runtime = createRuntime();
+    const output = { ...runtime.layer!, id: 'intersect-result', fileName: 'intersect.geojson' };
+    runtime.runOverlayAnalysis.mockResolvedValue({ ok: true, output });
+    const { result, rerender } = renderHook(() => useGisAiPort());
+    let settled = false;
+    const pending = result.current.port.runOverlayAnalysis('intersect', {
+      inputLayerId: 'input', overlayLayerId: 'overlay', outputName: 'intersect.geojson', snapTolerance: '',
+    });
+    void pending.then(() => { settled = true; });
+    await act(async () => { await Promise.resolve(); });
+    expect(settled).toBe(false);
+    runtime = { ...runtime, layers: [...runtime.layers, output], layer: output };
+    rerender();
+    await expect(pending).resolves.toEqual({ ok: true, output });
   });
 
   it('returns failed business results immediately without waiting for a render', async () => {

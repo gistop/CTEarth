@@ -7,7 +7,7 @@ import { runAiAgent } from './agentService';
 function setup(replies: AiMessage[]) {
   const complete = vi.fn<AiModelAdapter['complete']>();
   replies.forEach((reply) => complete.mockResolvedValueOnce(reply));
-  const executeTool = vi.fn(async (name: string) => toolResult(name, 'success', '完成', [], { count: 3 }));
+  const executeTool = vi.fn(async (name: string) => toolResult(name, 'success', '完成', { data: { count: 3 } }));
   return {
     complete,
     executeTool,
@@ -31,7 +31,7 @@ describe('runAiAgent', () => {
     const { options, complete, executeTool } = setup([call(), finalReply]);
     const result = await runAiAgent(options, [{ role: 'user', content: '查看地图' }]);
     expect(result.text).toBe('分析完成。');
-    expect(result.toolResults[0].output).toEqual({ count: 3 });
+    expect(result.toolResults[0].data).toEqual({ count: 3 });
     expect(executeTool).toHaveBeenCalledWith('list_layers', {}, undefined);
     const history = complete.mock.calls[1][0].messages;
     expect(history.some((message) => message.content.includes('roads'))).toBe(true);
@@ -95,7 +95,7 @@ describe('runAiAgent', () => {
     const { options, executeTool } = setup([call(), finalReply]);
     executeTool.mockRejectedValueOnce(new Error('GIS failed'));
     const result = await runAiAgent(options, []);
-    expect(result.toolResults[0]).toMatchObject({ ok: false, status: 'failed', message: 'GIS failed' });
+    expect(result.toolResults[0]).toMatchObject({ status: 'failed', message: 'GIS failed', data: null });
   });
 
   it('supports a text-only provider without exposing tools', async () => {

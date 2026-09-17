@@ -74,7 +74,14 @@ export function useGisAiPort(): { port: AiGisPort; snapshot: AiGisSnapshot } {
       async runBufferAnalysis(params) {
         const result = await current.current.runBufferAnalysis(params);
         if (result.ok) {
-          await waitForCommit((snapshot) => snapshot.vectorOverlay?.geojson === result.output.geojson && !snapshot.isRunning);
+          await waitForCommit((snapshot) => snapshot.layers.some((layer) => layer.id === result.output.id && layer.geojson === result.output.geojson) && !snapshot.isRunning);
+        }
+        return result;
+      },
+      async runOverlayAnalysis(tool, params) {
+        const result = await current.current.runOverlayAnalysis(tool, params);
+        if (result.ok) {
+          await waitForCommit((snapshot) => snapshot.layers.some((layer) => layer.id === result.output.id && layer.geojson === result.output.geojson) && !snapshot.isRunning);
         }
         return result;
       },

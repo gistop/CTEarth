@@ -32,13 +32,26 @@ export type AiToolDefinition = {
   };
 };
 
+export type AiToolStatus = 'success' | 'blocked' | 'failed' | 'needs_confirmation';
+
+export type AiToolNextAction = {
+  type: 'none' | 'ask_user' | 'retry' | 'confirm';
+  fields?: string[];
+};
+
+export type AiToolError = {
+  code: string;
+  retryable: boolean;
+  details?: Record<string, unknown>;
+};
+
 export type AiToolResult = {
-  ok: boolean;
-  status: 'success' | 'blocked' | 'failed';
+  status: AiToolStatus;
   tool: string;
   message: string;
-  qa: { passed: boolean; checks: string[] };
-  output?: Record<string, unknown>;
+  data: Record<string, unknown> | null;
+  error: AiToolError | null;
+  nextAction: AiToolNextAction;
 };
 
 export type AiModelSettings = { apiKey: string; model: string };

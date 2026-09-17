@@ -73,7 +73,10 @@ export async function runAiAgent(
         input = parseToolArguments(call.arguments);
         validateToolInput(definition, input);
       } catch (error) {
-        result = toolResult(call.name, 'blocked', errorText(error));
+        result = toolResult(call.name, 'blocked', errorText(error), {
+          error: { code: 'INVALID_TOOL_CALL', retryable: false },
+          nextAction: { type: 'ask_user' },
+        });
         results.push(result);
         conversation.push({ role: 'tool', content: JSON.stringify(result), toolCallId: call.id });
         continue;
@@ -84,7 +87,10 @@ export async function runAiAgent(
       } catch (error) {
         throwIfAborted(signal);
         if (isAbortError(error)) throw error;
-        result = toolResult(call.name, 'failed', errorText(error));
+        result = toolResult(call.name, 'failed', errorText(error), {
+          error: { code: 'TOOL_EXECUTION_ERROR', retryable: false },
+          nextAction: { type: 'none' },
+        });
       }
       throwIfAborted(signal);
       results.push(result);
