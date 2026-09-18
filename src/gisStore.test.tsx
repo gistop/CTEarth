@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runTool } from 'geolibre-wasm/tools';
 import type { RunToolOptions } from 'geolibre-wasm/tools';
@@ -329,5 +329,318 @@ describe('generated layer lifecycle', () => {
     act(() => { result.current.gis.setActiveLayer('points'); });
     expect(await execute('buffer_vector', { distance: 0.01 })).toMatchObject({ status: 'blocked', error: { code: 'GIS_STATE_CHANGED' } });
     expect(result.current.gis.layers).toHaveLength(4);
+  });
+});
+
+describe('raster calculator', () => {
+  it('adds rather than replaces repeated raster-calculator outputs', async () => {
+    const { result } = await createHarness();
+    const originals = result.current.gis.rasters;
+    const run = async () => {
+      await result.current.gis.runRasterCalculator({ expression: '"dem.tif" * 2 + 1', outputName: 'calc.tif' });
+    };
+    await act(run);
+    const first = result.current.gis.raster!;
+    act(() => { result.current.gis.setRasterLayerVisibility(first.id, false); });
+    await act(run);
+    const second = result.current.gis.raster!;
+    expect(result.current.gis.rasters).toEqual([second, first, ...originals]);
+    expect(first.id).not.toBe(second.id);
+    expect(first.name).toBe('calc.tif');
+    expect(second.name).toBe(first.name);
+    expect(result.current.gis.rasterLayerVisibility).toMatchObject({ [first.id]: false, [second.id]: true });
+    expect(result.current.gis.message).toContain('栅格计算完成');
+    act(() => { result.current.gis.deleteRasterLayer(first.id); });
+    expect(result.current.gis.rasters).toEqual([second, ...originals]);
+    expect(result.current.gis.layerOrder).not.toContain(`raster:${first.id}`);
+  });
+
+  it('rejects invalid expressions without changing raster state', async () => {
+    const { result } = await createHarness();
+    const before = result.current.gis;
+    await act(async () => {
+      await result.current.gis.runRasterCalculator({ expression: '"missing.tif" + 1', outputName: 'calc.tif' });
+    });
+    expect(result.current.gis.rasters).toBe(before.rasters);
+    expect(result.current.gis.isRunning).toBe(false);
+    expect(result.current.gis.message).toContain('"missing.tif"');
+  });
+
+  it('executes raster_calculator through the AI boundary, chains on its own output and guards unrelated raster changes', async () => {
+    const { result } = await createHarness();
+    const execute = createGisToolExecutor(result.current.port);
+    let pending: ReturnType<typeof execute>;
+    act(() => { pending = execute('raster_calculator', { expression: '"dem.tif" * 2' }); });
+    await waitFor(() => expect(result.current.gis.rasters).toHaveLength(2));
+    const firstResult = await pending!;
+    const first = result.current.gis.raster!;
+    expect(firstResult).toMatchObject({ status: 'success', data: { resultRaster: { id: first.id, kind: 'raster' }, expression: '"dem.tif" * 2' } });
+    expect(first.name).toBe('agent-raster-calculator.tif');
+
+    let chained: ReturnType<typeof execute>;
+    act(() => { chained = execute('raster_calculator', { expression: '"agent-raster-calculator.tif" + "dem.tif"', outputName: 'chain.tif' }); });
+    await waitFor(() => expect(result.current.gis.rasters).toHaveLength(3));
+    expect((await chained!).status).toBe('success');
+
+    act(() => { result.current.gis.deleteRasterLayer(result.current.gis.raster!.id); });
+    expect(await execute('raster_calculator', { expression: '"dem.tif" + 1' })).toMatchObject({ status: 'blocked', error: { code: 'GIS_STATE_CHANGED' } });
+    expect(result.current.gis.rasters).toHaveLength(2);
+  });
+
+  it('renders the toolbox form, disables invalid runs and executes valid expressions', async () => {
+    let snapshot: ReturnType<typeof useGis> | null = null;
+    function Probe() {
+      snapshot = useGis();
+      return null;
+    }
+    render(
+      <GisProvider>
+        <AnalysisToolPanel tool='rasterCalculator' onBack={() => undefined} />
+        <Probe />
+      </GisProvider>,
+    );
+    await waitFor(() => expect(snapshot?.workspaceDraftLoaded).toBe(true));
+    const expression = screen.getByRole('textbox', { name: /地图代数表达式/ });
+    const runButton = () => screen.getByRole('button', { name: '运行' }) as HTMLButtonElement;
+    expect(runButton().disabled).toBe(true);
+
+    fireEvent.change(expression, { target: { value: '"missing.tif" + 1' } });
+    expect(runButton().disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toContain('"missing.tif"');
+
+    fireEvent.change(expression, { target: { value: '"dem.tif" * 2 + 1' } });
+    expect(runButton().disabled).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.click(runButton());
+    await waitFor(() => expect(snapshot!.rasters).toHaveLength(2));
+    expect(snapshot!.message).toContain('栅格计算完成');
+  });
+});
+
+describe('raster reclassify', () => {
+  it('adds rather than replaces repeated raster-reclassify outputs', async () => {
+    const { result } = await createHarness();
+    const originals = result.current.gis.rasters;
+    const run = async () => {
+      await result.current.gis.runRasterReclassify({
+        rasterId: 'dem', method: 'jenks', classCount: '2', customBreaks: '', outputName: 'reclass.tif',
+      });
+    };
+    await act(run);
+    const first = result.current.gis.raster!;
+    act(() => { result.current.gis.setRasterLayerVisibility(first.id, false); });
+    await act(run);
+    const second = result.current.gis.raster!;
+    expect(result.current.gis.rasters).toEqual([second, first, ...originals]);
+    expect(first.id).not.toBe(second.id);
+    expect(first.name).toBe('reclass.tif');
+    expect(result.current.gis.rasterLayerVisibility).toMatchObject({ [first.id]: false, [second.id]: true });
+    expect(result.current.gis.message).toContain('重分类完成');
+    act(() => { result.current.gis.deleteRasterLayer(first.id); });
+    expect(result.current.gis.rasters).toEqual([second, ...originals]);
+  });
+
+  it('rejects invalid reclassify parameters without changing raster state', async () => {
+    const { result } = await createHarness();
+    const before = result.current.gis;
+    await act(async () => {
+      await result.current.gis.runRasterReclassify({
+        rasterId: 'dem', method: 'custom', classCount: '3', customBreaks: '9, 3', outputName: 'reclass.tif',
+      });
+    });
+    expect(result.current.gis.rasters).toBe(before.rasters);
+    expect(result.current.gis.isRunning).toBe(false);
+    expect(result.current.gis.message).toContain('严格递增');
+  });
+
+  it('executes raster_reclassify through the AI boundary, chains on its own output and guards unrelated raster changes', async () => {
+    const { result } = await createHarness();
+    const execute = createGisToolExecutor(result.current.port);
+    let pending: ReturnType<typeof execute>;
+    act(() => { pending = execute('raster_reclassify', { method: 'jenks', classCount: 2 }); });
+    await waitFor(() => expect(result.current.gis.rasters).toHaveLength(2));
+    const firstResult = await pending!;
+    const first = result.current.gis.raster!;
+    expect(firstResult).toMatchObject({
+      status: 'success',
+      data: { resultRaster: { id: first.id, kind: 'raster' }, method: 'jenks', classCount: 2, breaks: [2] },
+    });
+    expect(first.name).toBe('agent-raster-reclassify.tif');
+
+    let chained: ReturnType<typeof execute>;
+    act(() => { chained = execute('raster_reclassify', { method: 'quantile', classCount: 2, rasterName: 'agent-raster-reclassify.tif' }); });
+    await waitFor(() => expect(result.current.gis.rasters).toHaveLength(3));
+    expect((await chained!).status).toBe('success');
+
+    act(() => { result.current.gis.deleteRasterLayer(result.current.gis.raster!.id); });
+    expect(await execute('raster_reclassify', { method: 'jenks', classCount: 2 })).toMatchObject({
+      status: 'blocked',
+      error: { code: 'GIS_STATE_CHANGED' },
+    });
+    expect(result.current.gis.rasters).toHaveLength(2);
+  });
+
+  it('renders the reclassify form with a class preview and validates custom breaks', async () => {
+    let snapshot: ReturnType<typeof useGis> | null = null;
+    function Probe() {
+      snapshot = useGis();
+      return null;
+    }
+    render(
+      <GisProvider>
+        <AnalysisToolPanel tool='rasterReclassify' onBack={() => undefined} />
+        <Probe />
+      </GisProvider>,
+    );
+    await waitFor(() => expect(snapshot?.workspaceDraftLoaded).toBe(true));
+    const runButton = () => screen.getByRole('button', { name: '运行' }) as HTMLButtonElement;
+
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    expect(screen.getByLabelText('分类预览').textContent).toContain('~');
+
+    fireEvent.change(screen.getByRole('combobox', { name: /重分类方法/ }), { target: { value: 'custom' } });
+    const breaksInput = screen.getByRole('textbox', { name: /间断点/ });
+    expect(runButton().disabled).toBe(true);
+    fireEvent.change(breaksInput, { target: { value: '9, 3' } });
+    expect(runButton().disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toContain('严格递增');
+
+    fireEvent.change(breaksInput, { target: { value: '2, 3' } });
+    expect(runButton().disabled).toBe(false);
+    fireEvent.click(runButton());
+    await waitFor(() => expect(snapshot!.rasters).toHaveLength(2));
+    expect(snapshot!.message).toContain('重分类完成');
+  });
+});
+
+describe('raster resample', () => {
+  it('adds rather than replaces repeated raster-resample outputs', async () => {
+    const { result } = await createHarness();
+    const originals = result.current.gis.rasters;
+    const run = async () => {
+      await result.current.gis.runRasterResample({ rasterId: 'dem', method: 'bilinear', cellSize: '1', outputName: 'resampled.tif' });
+    };
+    await act(run);
+    const first = result.current.gis.raster!;
+    act(() => { result.current.gis.setRasterLayerVisibility(first.id, false); });
+    await act(run);
+    const second = result.current.gis.raster!;
+    expect(result.current.gis.rasters).toEqual([second, first, ...originals]);
+    expect(first.id).not.toBe(second.id);
+    expect(first.name).toBe('resampled.tif');
+    expect(result.current.gis.rasterLayerVisibility).toMatchObject({ [first.id]: false, [second.id]: true });
+    expect(result.current.gis.message).toContain('重采样完成');
+    act(() => { result.current.gis.deleteRasterLayer(first.id); });
+    expect(result.current.gis.rasters).toEqual([second, ...originals]);
+  });
+
+  it('keeps the current resolution when the cell size is omitted and rejects invalid sizes', async () => {
+    const { result } = await createHarness();
+    const before = result.current.gis;
+    await act(async () => {
+      await result.current.gis.runRasterResample({ rasterId: 'dem', method: 'nearest', cellSize: '', outputName: 'same.tif' });
+    });
+    expect(result.current.gis.rasters).toHaveLength(before.rasters.length + 1);
+    const same = result.current.gis.raster!;
+    expect(same.width).toBe(before.raster!.width);
+    expect(same.height).toBe(before.raster!.height);
+    const afterFirst = result.current.gis.rasters;
+
+    await act(async () => {
+      await result.current.gis.runRasterResample({ rasterId: 'dem', method: 'nearest', cellSize: '0', outputName: 'bad.tif' });
+    });
+    expect(result.current.gis.rasters).toBe(afterFirst);
+    expect(result.current.gis.isRunning).toBe(false);
+    expect(result.current.gis.message).toContain('大于 0');
+  });
+
+  it('executes raster_resample through the AI boundary, chains on its own output and guards unrelated raster changes', async () => {
+    const { result } = await createHarness();
+    const execute = createGisToolExecutor(result.current.port);
+    let pending: ReturnType<typeof execute>;
+    act(() => { pending = execute('raster_resample', { method: 'majority', cellSize: 1 }); });
+    await waitFor(() => expect(result.current.gis.rasters).toHaveLength(2));
+    const firstResult = await pending!;
+    const first = result.current.gis.raster!;
+    expect(firstResult).toMatchObject({
+      status: 'success',
+      data: { resultRaster: { id: first.id, kind: 'raster' }, method: 'majority', outputCellSize: 1 },
+    });
+    expect(first.name).toBe('agent-raster-resample.tif');
+
+    let chained: ReturnType<typeof execute>;
+    act(() => { chained = execute('raster_resample', { method: 'nearest', rasterName: 'agent-raster-resample.tif' }); });
+    await waitFor(() => expect(result.current.gis.rasters).toHaveLength(3));
+    expect((await chained!).status).toBe('success');
+
+    act(() => { result.current.gis.deleteRasterLayer(result.current.gis.raster!.id); });
+    expect(await execute('raster_resample', { method: 'nearest' })).toMatchObject({
+      status: 'blocked',
+      error: { code: 'GIS_STATE_CHANGED' },
+    });
+    expect(result.current.gis.rasters).toHaveLength(2);
+  });
+
+  it('renders the resample form, previews the output grid and validates the cell size', async () => {
+    let snapshot: ReturnType<typeof useGis> | null = null;
+    function Probe() {
+      snapshot = useGis();
+      return null;
+    }
+    render(
+      <GisProvider>
+        <AnalysisToolPanel tool='rasterResample' onBack={() => undefined} />
+        <Probe />
+      </GisProvider>,
+    );
+    await waitFor(() => expect(snapshot?.workspaceDraftLoaded).toBe(true));
+    const runButton = () => screen.getByRole('button', { name: '运行' }) as HTMLButtonElement;
+
+    await waitFor(() => expect(runButton().disabled).toBe(false));
+    expect(screen.getByText(/2 x 2 像元/)).toBeTruthy();
+
+    const cellSizeInput = screen.getByRole('spinbutton', { name: /输出像元大小/ });
+    fireEvent.change(cellSizeInput, { target: { value: '0' } });
+    expect(runButton().disabled).toBe(true);
+    expect(screen.getByRole('alert').textContent).toContain('大于 0');
+
+    fireEvent.change(cellSizeInput, { target: { value: '1' } });
+    expect(runButton().disabled).toBe(false);
+    fireEvent.click(runButton());
+    await waitFor(() => expect(snapshot!.rasters).toHaveLength(2));
+    expect(snapshot!.message).toContain('重采样完成');
+  });
+});
+
+describe('raster swipe', () => {
+  it('targets the selected raster, follows selection changes and clears when it is deleted', async () => {
+    const { result } = await createHarness();
+    expect(result.current.gis.raster?.id).toBe('dem');
+
+    act(() => { result.current.gis.toggleRasterSwipe(); });
+    expect(result.current.gis.swipeRasterId).toBe('dem');
+
+    // 新栅格成为活动（选中）图层后，卷帘目标自动跟随。
+    await act(async () => {
+      await result.current.gis.runRasterCalculator({ expression: '"dem.tif" * 2', outputName: 'calc.tif' });
+    });
+    const calc = result.current.gis.raster!;
+    expect(calc.id).not.toBe('dem');
+    await waitFor(() => expect(result.current.gis.swipeRasterId).toBe(calc.id));
+
+    act(() => { result.current.gis.setActiveRaster('dem'); });
+    expect(result.current.gis.swipeRasterId).toBe('dem');
+
+    act(() => { result.current.gis.toggleRasterSwipe(); });
+    expect(result.current.gis.swipeRasterId).toBeNull();
+
+    act(() => { result.current.gis.toggleRasterSwipe('dem'); });
+    expect(result.current.gis.swipeRasterId).toBe('dem');
+    act(() => { result.current.gis.deleteRasterLayer('dem'); });
+    await waitFor(() => expect(result.current.gis.swipeRasterId).toBeNull());
+
+    act(() => { result.current.gis.disableRasterSwipe(); });
+    expect(result.current.gis.swipeRasterId).toBeNull();
   });
 });

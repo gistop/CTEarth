@@ -2,6 +2,9 @@ import type {
   ExtractByMaskParameters,
   OverlayParameters,
   OverlayToolId,
+  RasterCalculatorParameters,
+  RasterReclassifyParameters,
+  RasterResampleParameters,
   TerrainToolId,
   UploadedLayer,
   VectorOverlay,
@@ -14,6 +17,9 @@ export const analysisToolTitles: Record<AnalysisToolId, string> = {
   idw: '反距离加权',
   buffer: '缓冲区',
   extractByMask: '按掩膜提取',
+  rasterCalculator: '栅格计算',
+  rasterReclassify: '重分类',
+  rasterResample: '重采样',
   intersect: '相交',
   union: '联合',
   erase: '擦除',
@@ -150,6 +156,32 @@ export function createDefaultExtractByMaskParameters(
     maskLayerId: defaultMaskLayerId(layers, vectorOverlay),
     outputName: 'extract-by-mask.tif',
     maintainDimensions: true,
+  };
+}
+
+export function createDefaultRasterCalculatorParameters(): RasterCalculatorParameters {
+  return {
+    expression: '',
+    outputName: 'raster-calculator.tif',
+  };
+}
+
+export function createDefaultRasterReclassifyParameters(): RasterReclassifyParameters {
+  return {
+    rasterId: '',
+    method: 'jenks',
+    classCount: '5',
+    customBreaks: '',
+    outputName: 'raster-reclassify.tif',
+  };
+}
+
+export function createDefaultRasterResampleParameters(): RasterResampleParameters {
+  return {
+    rasterId: '',
+    method: 'nearest',
+    cellSize: '',
+    outputName: 'raster-resample.tif',
   };
 }
 

@@ -1,5 +1,7 @@
 import type {
-  BufferParameters, GisOperationResult, IdwParameters, LayerVisibility, OverlayParameters, OverlayToolId, RasterOverlay,
+  BufferParameters, GisOperationResult, IdwParameters, LayerVisibility, OverlayParameters, OverlayToolId,
+  RasterCalculatorParameters, RasterOverlay, RasterReclassifyOutput, RasterReclassifyParameters,
+  RasterResampleOutput, RasterResampleParameters,
   SelectByLocationParameters, SelectByValueParameters, SelectionResult,
   TerrainParameters, TerrainToolId, UploadedLayer, VectorOverlay,
 } from '../../../gisStore';
@@ -8,6 +10,7 @@ export type AiGisSnapshot = {
   layer: UploadedLayer | null;
   layers: UploadedLayer[];
   raster: RasterOverlay | null;
+  rasters: RasterOverlay[];
   vectorOverlay: VectorOverlay | null;
   toolsReady: boolean;
   isRunning: boolean;
@@ -23,5 +26,8 @@ export interface AiGisPort {
   runBufferAnalysis(params: BufferParameters): Promise<GisOperationResult<UploadedLayer>>;
   runOverlayAnalysis(tool: OverlayToolId, params: OverlayParameters): Promise<GisOperationResult<UploadedLayer>>;
   runIdwInterpolation(params: IdwParameters): Promise<GisOperationResult<RasterOverlay>>;
+  runRasterCalculator(params: RasterCalculatorParameters): Promise<GisOperationResult<RasterOverlay>>;
+  runRasterReclassify(params: RasterReclassifyParameters): Promise<GisOperationResult<RasterReclassifyOutput>>;
+  runRasterResample(params: RasterResampleParameters): Promise<GisOperationResult<RasterResampleOutput>>;
   runTerrainAnalysis(tool: TerrainToolId, params: TerrainParameters): Promise<GisOperationResult<RasterOverlay>>;
 }

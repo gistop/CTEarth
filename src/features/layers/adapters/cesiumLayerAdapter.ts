@@ -1,7 +1,7 @@
 import type { MapGroupRenderEntry } from '../../../mapGroupRenderState';
 import { getRasterBasemapDefinitions } from '../../maps/components/map/rasterBasemapSources';
 import type { CesiumNamespace, CesiumViewer } from '../../maps/components/map/cesiumRuntime';
-import type { LayerEngineAdapter } from './layerAdapterTypes';
+import type { LayerEngineAdapter, RasterRenderData } from './layerAdapterTypes';
 
 type CesiumImageryLayerLike = {
   alpha: number;
@@ -32,11 +32,7 @@ export type CesiumLayerSyncRequest = {
   isActive: () => boolean;
   entries: MapGroupRenderEntry[];
   layerVisibility: { basemap: boolean; raster: boolean; vectorOverlay: boolean };
-  raster: {
-    id: string;
-    imageUrl: string;
-    coordinates: [[number, number], [number, number], [number, number], [number, number]];
-  } | null;
+  rasters: RasterRenderData[];
   rasterLayerVisibility: Record<string, boolean>;
   rasterStyle: { opacity: number };
   layers: { id: string; geojson: GeoJsonFeatureCollection }[];
@@ -74,7 +70,7 @@ async function syncCesiumLayers({
   isActive,
   entries,
   layerVisibility,
-  raster,
+  rasters,
   rasterLayerVisibility,
   rasterStyle,
   layers,
@@ -90,7 +86,18 @@ async function syncCesiumLayers({
   viewer.imageryLayers.removeAll(true);
   viewer.dataSources.removeAll(true);
 
-  entries.forEach((entry) => {
+  [...entries].reverse().forEach((entry) => {
+    const raster = rasters.find((item) => entry.layerId === `raster:${item.id}`);
+    if (raster && entry.visible && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster)) {
+      const imageryLayer = viewer.imageryLayers.addImageryProvider(new Cesium.SingleTileImageryProvider({
+        url: raster.imageUrl,
+        tileWidth: 256,
+        tileHeight: 256,
+        rectangle: createCesiumRectangle(Cesium, raster.coordinates),
+      })) as CesiumImageryLayerLike;
+      imageryLayer.alpha = rasterStyle.opacity;
+      imageryLayer.show = true;
+    }
     if (!entry.basemapId || !entry.visible || !layerVisibility.basemap) {
       return;
     }
@@ -102,22 +109,6 @@ async function syncCesiumLayers({
       imageryLayer.show = true;
     });
   });
-
-  if (!isActive()) {
-    return;
-  }
-
-  if (raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster)) {
-    const imageryLayer = viewer.imageryLayers.addImageryProvider(new Cesium.SingleTileImageryProvider({
-      url: raster.imageUrl,
-      tileWidth: 256,
-      tileHeight: 256,
-      rectangle: createCesiumRectangle(Cesium, raster.coordinates),
-    })) as CesiumImageryLayerLike;
-
-    imageryLayer.alpha = rasterStyle.opacity;
-    imageryLayer.show = true;
-  }
 
   if (!isActive()) {
     return;

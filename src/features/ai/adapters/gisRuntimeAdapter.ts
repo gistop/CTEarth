@@ -92,6 +92,27 @@ export function useGisAiPort(): { port: AiGisPort; snapshot: AiGisSnapshot } {
         }
         return result;
       },
+      async runRasterCalculator(params) {
+        const result = await current.current.runRasterCalculator(params);
+        if (result.ok) {
+          await waitForCommit((snapshot) => snapshot.rasters.some((raster) => raster === result.output) && !snapshot.isRunning);
+        }
+        return result;
+      },
+      async runRasterReclassify(params) {
+        const result = await current.current.runRasterReclassify(params);
+        if (result.ok) {
+          await waitForCommit((snapshot) => snapshot.rasters.some((raster) => raster === result.output.raster) && !snapshot.isRunning);
+        }
+        return result;
+      },
+      async runRasterResample(params) {
+        const result = await current.current.runRasterResample(params);
+        if (result.ok) {
+          await waitForCommit((snapshot) => snapshot.rasters.some((raster) => raster === result.output.raster) && !snapshot.isRunning);
+        }
+        return result;
+      },
       async runTerrainAnalysis(tool, params) {
         const result = await current.current.runTerrainAnalysis(tool, params);
         if (result.ok) {

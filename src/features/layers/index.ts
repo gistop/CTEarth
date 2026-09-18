@@ -16,6 +16,7 @@ export type { LayerAction, LayerNodeKind, LayerVisibilityState } from './types';
 export type { LayerAdapterEntry, LayerEngineAdapter } from './adapters/layerAdapterTypes';
 export {
   createMapLibreLayerAdapter,
+  syncMapLibreRasters,
   type MapLibreLayerSyncRequest,
 } from './adapters/mapLibreLayerAdapter';
 export {
@@ -24,6 +25,7 @@ export {
 } from './adapters/cesiumLayerAdapter';
 export {
   createOpenLayersLayerAdapter,
+  syncOpenLayersRasters,
   type OpenLayersBasemapLayer,
   type OpenLayersLayerSyncRequest,
 } from './adapters/openLayersLayerAdapter';

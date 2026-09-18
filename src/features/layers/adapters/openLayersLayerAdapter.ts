@@ -8,15 +8,59 @@ import {
   getRasterBasemapDefinitions,
   type RasterBasemapTileDefinition,
 } from '../../maps/components/map/rasterBasemapSources';
-import type { LayerEngineAdapter } from './layerAdapterTypes';
+import ImageLayer from 'ol/layer/Image.js';
+import ImageStatic from 'ol/source/ImageStatic.js';
+import { transform } from 'ol/proj.js';
+import type { LayerEngineAdapter, RasterRenderData } from './layerAdapterTypes';
+
+export function syncOpenLayersRasters(
+  map: Map,
+  rasterLayers: globalThis.Map<string, ImageLayer<ImageStatic>>,
+  rasters: RasterRenderData[],
+  visibility: Record<string, boolean>,
+  opacity: number,
+  fallbackVisible: boolean,
+  projection: string,
+) {
+  const expectedIds = new Set(rasters.map((raster) => raster.id));
+  rasterLayers.forEach((layer, id) => {
+    if (!expectedIds.has(id)) {
+      map.removeLayer(layer);
+      layer.dispose();
+      rasterLayers.delete(id);
+    }
+  });
+  rasters.forEach((raster) => {
+    let layer = rasterLayers.get(raster.id);
+    if (!layer) {
+      layer = new ImageLayer<ImageStatic>();
+      rasterLayers.set(raster.id, layer);
+      map.addLayer(layer);
+    }
+    const coordinates = raster.coordinates.map((coordinate) => transform(coordinate, 'EPSG:4326', projection));
+    const extent = [
+      Math.min(...coordinates.map(([x]) => x)), Math.min(...coordinates.map(([, y]) => y)),
+      Math.max(...coordinates.map(([x]) => x)), Math.max(...coordinates.map(([, y]) => y)),
+    ];
+    const source = layer.getSource();
+    if (!source || source.getUrl() !== raster.imageUrl
+      || source.getProjection()?.getCode() !== projection
+      || source.getImageExtent().some((value, index) => value !== extent[index])) {
+      layer.setSource(new ImageStatic({ imageExtent: extent, projection, url: raster.imageUrl }));
+    }
+    layer.setVisible(visibility[raster.id] ?? fallbackVisible);
+    layer.setOpacity(opacity);
+  });
+}
 
 export type OpenLayersBasemapLayer = TileLayer<OSM | XYZ>;
 
 type OpenLayersLayerOrderTargets = {
   uploadedLayer?: BaseLayer | null;
+  rasterLayers?: globalThis.Map<string, ImageLayer<ImageStatic>>;
   rasterLayer?: BaseLayer | null;
-  vectorOverlayLayer?: BaseLayer | null;
   rasterId?: string | null;
+  vectorOverlayLayer?: BaseLayer | null;
 };
 
 export type OpenLayersLayerSyncRequest = {
@@ -105,6 +149,9 @@ function syncOpenLayersLayers({
   orderTargets.rasterLayer?.setZIndex(
     zIndexByEntryId.get(orderTargets.rasterId ? `raster:${orderTargets.rasterId}` : '') ?? 0,
   );
+  orderTargets.rasterLayers?.forEach((layer, id) => {
+    layer.setZIndex(zIndexByEntryId.get(`raster:${id}`) ?? 0);
+  });
   orderTargets.vectorOverlayLayer?.setZIndex(zIndexByEntryId.get('vectorOverlay') ?? 0);
 }
 

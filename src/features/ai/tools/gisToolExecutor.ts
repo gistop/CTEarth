@@ -1,9 +1,12 @@
-import type { BufferParameters, IdwParameters, OverlayParameters, OverlayToolId, RasterOverlay, SelectByLocationParameters, SelectByValueParameters, TerrainParameters, TerrainToolId } from '../../../gisStore';
+import type { BufferParameters, IdwParameters, OverlayParameters, OverlayToolId, RasterCalculatorParameters, RasterOverlay, RasterReclassifyParameters, RasterResampleParameters, SelectByLocationParameters, SelectByValueParameters, TerrainParameters, TerrainToolId } from '../../../gisStore';
 import type { AiToolExecutor, AiToolResult } from '../types';
 import type { AiGisPort, AiGisSnapshot } from './gisPort';
 import { errorText, isAbortError, throwIfAborted } from '../services/aiErrors';
 import { displayLayerName, summarizeGisContext } from '../services/gisContextService';
 import { gisToolDefinitions } from './gisToolDefinitions';
+import { validateRasterExpression } from '../../toolbox/toolsets/general/pixel/rasterCalculatorEngine';
+import { validateRasterReclassifyParams } from '../../toolbox/toolsets/general/pixel/reclassifyEngine';
+import { validateRasterResampleParams } from '../../toolbox/toolsets/general/pixel/resampleEngine';
 import { validateToolInput } from './toolValidation';
 import { toolResult } from './toolResults';
 
@@ -18,6 +21,9 @@ const handlers: Record<string, ToolHandler> = {
   union: (input, snapshot, port) => runOverlay('union', input, snapshot, port),
   erase: (input, snapshot, port) => runOverlay('erase', input, snapshot, port),
   idw_interpolation: runIdw,
+  raster_calculator: runRasterCalculator,
+  raster_reclassify: runRasterReclassify,
+  raster_resample: runRasterResample,
   hillshade: (input, snapshot, port) => runTerrain('hillshade', input, snapshot, port),
   slope: (input, snapshot, port) => runTerrain('slope', input, snapshot, port),
   aspect: (input, snapshot, port) => runTerrain('aspect', input, snapshot, port),
@@ -57,17 +63,20 @@ export function createGisToolExecutor(port: AiGisPort): AiToolExecutor {
       });
     }
     const usesRaster = name === 'hillshade' || name === 'slope' || name === 'aspect';
+    const usesRasterList = name === 'raster_calculator' || name === 'raster_reclassify' || name === 'raster_resample';
     const usesOverlay = isOverlayToolName(name);
-    const changed = usesRaster
-      ? snapshot.raster !== expected.raster
-      : snapshot.layer?.id !== expected.layer?.id || snapshot.layer?.geojson !== expected.layer?.geojson;
+    const changed = usesRasterList
+      ? snapshot.rasters !== expected.rasters
+      : usesRaster
+        ? snapshot.raster !== expected.raster
+        : snapshot.layer?.id !== expected.layer?.id || snapshot.layer?.geojson !== expected.layer?.geojson;
     if (changed) {
       return toolResult(name, 'blocked', '当前输入图层已在本次请求期间改变，请基于新的地图状态重新发起请求。', {
         error: { code: 'GIS_STATE_CHANGED', retryable: false },
         nextAction: { type: 'ask_user' },
       });
     }
-    if ((usesRaster || usesOverlay || name === 'buffer_vector' || name === 'idw_interpolation') && !snapshot.toolsReady) {
+    if ((usesRaster || usesRasterList || usesOverlay || name === 'buffer_vector' || name === 'idw_interpolation') && !snapshot.toolsReady) {
       return toolResult(name, 'blocked', 'WASM 工具仍在加载，请稍后再运行。', {
         error: { code: 'GIS_TOOLS_NOT_READY', retryable: true },
         nextAction: { type: 'retry' },
@@ -80,6 +89,9 @@ export function createGisToolExecutor(port: AiGisPort): AiToolExecutor {
       const result = await handler(input, snapshot, port);
       throwIfAborted(signal);
       const next = port.getSnapshot();
+      if (result.status === 'success' && usesRasterList && next.rasters !== expected.rasters) {
+        expected = { ...expected, rasters: next.rasters, raster: next.raster };
+      }
       if (result.status === 'success' && (usesRaster || name === 'idw_interpolation') && next.raster?.id === result.data?.rasterId) {
         expected = { ...expected, raster: next.raster };
       }
@@ -329,6 +341,143 @@ async function runIdw(input: Record<string, unknown>, snapshot: AiGisSnapshot, p
     ? rasterResult('idw_interpolation', result.output, { sourceLayerId: layer.id, sourceLayerName: displayLayerName(layer.fileName), parameters })
     : toolResult('idw_interpolation', 'failed', result.message, {
       error: { code: 'IDW_ANALYSIS_FAILED', retryable: false },
+      nextAction: { type: 'none' },
+    });
+}
+
+async function runRasterCalculator(input: Record<string, unknown>, snapshot: AiGisSnapshot, port: AiGisPort) {
+  const expression = typeof input.expression === 'string' ? input.expression : '';
+  if (!expression.trim()) {
+    return toolResult('raster_calculator', 'blocked', '请提供地图代数表达式，例如 "dem.tif" * 2。', {
+      data: { rasters: snapshot.rasters.map((raster) => raster.name) },
+      error: { code: 'MISSING_EXPRESSION', retryable: false },
+      nextAction: { type: 'ask_user', fields: ['expression'] },
+    });
+  }
+  if (snapshot.rasters.length === 0) {
+    return toolResult('raster_calculator', 'blocked', '请先添加参与计算的 GeoTIFF 栅格。', {
+      error: { code: 'MISSING_RASTER', retryable: false },
+      nextAction: { type: 'ask_user', fields: ['raster'] },
+    });
+  }
+  const validation = validateRasterExpression(expression, snapshot.rasters);
+  if (!validation.ok) {
+    return toolResult('raster_calculator', 'blocked', validation.error, {
+      data: { expression, rasters: snapshot.rasters.map((raster) => raster.name) },
+      error: { code: 'INVALID_EXPRESSION', retryable: false, details: { rasters: snapshot.rasters.map((raster) => raster.name) } },
+      nextAction: { type: 'ask_user', fields: ['expression'] },
+    });
+  }
+
+  const parameters: RasterCalculatorParameters = {
+    expression,
+    outputName: textArg(input.outputName, 'agent-raster-calculator.tif'),
+  };
+  const result = await port.runRasterCalculator(parameters);
+  return result.ok
+    ? rasterResult('raster_calculator', result.output, { expression, referencedRasters: validation.referencedNames, parameters })
+    : toolResult('raster_calculator', 'failed', result.message, {
+      error: { code: 'RASTER_CALCULATION_FAILED', retryable: false },
+      nextAction: { type: 'none' },
+    });
+}
+
+async function runRasterReclassify(input: Record<string, unknown>, snapshot: AiGisSnapshot, port: AiGisPort) {
+  const validation = validateRasterReclassifyParams({
+    method: input.method,
+    classCount: input.classCount ?? 5,
+    customBreaks: input.customBreaks,
+  });
+  if (!validation.ok) {
+    return toolResult('raster_reclassify', 'blocked', validation.error, {
+      data: { rasters: snapshot.rasters.map((raster) => raster.name) },
+      error: { code: 'INVALID_RECLASSIFY_PARAMS', retryable: false, details: { rasters: snapshot.rasters.map((raster) => raster.name) } },
+      nextAction: { type: 'ask_user', fields: ['method', 'classCount', 'customBreaks'] },
+    });
+  }
+
+  const rasterName = textArg(input.rasterName, '');
+  const targetRaster = rasterName
+    ? findRasterSource(snapshot, rasterName)
+    : snapshot.raster;
+  if (!targetRaster) {
+    return toolResult('raster_reclassify', 'blocked', '输入栅格不存在，请先使用 list_layers 查看可用栅格名称。', {
+      data: { rasters: snapshot.rasters.map((raster) => raster.name) },
+      error: { code: 'MISSING_RASTER', retryable: false, details: { rasters: snapshot.rasters.map((raster) => raster.name) } },
+      nextAction: { type: 'ask_user', fields: ['rasterName'] },
+    });
+  }
+
+  const parameters: RasterReclassifyParameters = {
+    rasterId: targetRaster.id,
+    method: input.method as RasterReclassifyParameters['method'],
+    classCount: String(input.classCount ?? 5),
+    customBreaks: textArg(input.customBreaks, ''),
+    outputName: textArg(input.outputName, 'agent-raster-reclassify.tif'),
+  };
+  const result = await port.runRasterReclassify(parameters);
+  return result.ok
+    ? rasterResult('raster_reclassify', result.output.raster, {
+      method: result.output.method,
+      classCount: result.output.classCount,
+      breaks: result.output.breaks,
+      classHistogram: result.output.histogram,
+      sourceRasterName: targetRaster.name,
+      parameters,
+    })
+    : toolResult('raster_reclassify', 'failed', result.message, {
+      error: { code: 'RASTER_RECLASSIFICATION_FAILED', retryable: false },
+      nextAction: { type: 'none' },
+    });
+}
+
+function findRasterSource(snapshot: AiGisSnapshot, name: string): RasterOverlay | null {
+  const exact = snapshot.rasters.find((raster) => raster.name === name);
+  if (exact) {
+    return exact;
+  }
+  const base = name.replace(/\.(tif|tiff)$/i, '');
+  return snapshot.rasters.find((raster) => raster.name.replace(/\.(tif|tiff)$/i, '') === base) ?? null;
+}
+
+async function runRasterResample(input: Record<string, unknown>, snapshot: AiGisSnapshot, port: AiGisPort) {
+  const validation = validateRasterResampleParams({ method: input.method, cellSize: input.cellSize });
+  if (!validation.ok) {
+    return toolResult('raster_resample', 'blocked', validation.error, {
+      data: { rasters: snapshot.rasters.map((raster) => raster.name) },
+      error: { code: 'INVALID_RESAMPLE_PARAMS', retryable: false, details: { rasters: snapshot.rasters.map((raster) => raster.name) } },
+      nextAction: { type: 'ask_user', fields: ['method', 'cellSize'] },
+    });
+  }
+
+  const rasterName = textArg(input.rasterName, '');
+  const targetRaster = rasterName ? findRasterSource(snapshot, rasterName) : snapshot.raster;
+  if (!targetRaster) {
+    return toolResult('raster_resample', 'blocked', '输入栅格不存在，请先使用 list_layers 查看可用栅格名称。', {
+      data: { rasters: snapshot.rasters.map((raster) => raster.name) },
+      error: { code: 'MISSING_RASTER', retryable: false, details: { rasters: snapshot.rasters.map((raster) => raster.name) } },
+      nextAction: { type: 'ask_user', fields: ['rasterName'] },
+    });
+  }
+
+  const parameters: RasterResampleParameters = {
+    rasterId: targetRaster.id,
+    method: input.method as RasterResampleParameters['method'],
+    cellSize: typeof input.cellSize === 'number' ? String(input.cellSize) : textArg(input.cellSize, ''),
+    outputName: textArg(input.outputName, 'agent-raster-resample.tif'),
+  };
+  const result = await port.runRasterResample(parameters);
+  return result.ok
+    ? rasterResult('raster_resample', result.output.raster, {
+      method: result.output.method,
+      inputCellSize: result.output.inputCellSize,
+      outputCellSize: result.output.outputCellSize,
+      validCount: result.output.validCount,
+      sourceRasterName: targetRaster.name,
+      parameters,
+    })
+    : toolResult('raster_resample', 'failed', result.message, {
+      error: { code: 'RASTER_RESAMPLING_FAILED', retryable: false },
       nextAction: { type: 'none' },
     });
 }

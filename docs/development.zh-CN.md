@@ -344,7 +344,10 @@ MapLibre / Cesium / OpenLayers Adapter
 
 - 工具箱和 AI 共用 `gisStore` 的业务操作。缓冲区、相交、联合、擦除通过统一的 `addGeoJsonLayer` 登记为普通矢量图层，使用独立 ID、工具输入、字段、选择、样式、显隐和排序状态，不再写入单例 `vectorOverlay`。
 - 同名输出仍新增独立图层，不按文件名覆盖。新结果成为对应类型的活动图层；再次运行前可在图层树切回原始输入。
-- IDW、坡度、坡向、山体阴影、掩膜提取和 AOI 栅格编辑通过 `addRasterLayer` 新增栅格。新建空白矢量也不清空已有栅格或分析结果。
+- IDW、坡度、坡向、山体阴影、掩膜提取、栅格计算、栅格重分类、栅格重采样和 AOI 栅格编辑通过 `addRasterLayer` 新增栅格。新建空白矢量也不清空已有栅格或分析结果。
+- 栅格计算在工具箱"通用 > 像元分析 > 栅格计算"提供人工入口；地图代数表达式的解析、栅格解析与网格校验集中在 `features/toolbox/toolsets/general/pixel/rasterCalculatorEngine.ts` 纯服务，工具箱表单、`gisStore.runRasterCalculator` 和 AI `raster_calculator` 工具共用同一实现，逐像元求值在浏览器内完成，不经过 WASM 工具进程。
+- 重分类在工具箱"通用 > 像元分析 > 重分类"提供人工入口（方法选择、分类数/自定义间断点、实时分类预览）；间断点计算集中在同目录 `reclassifyEngine.ts` 纯服务，支持自然间断点（Jenks）、分位数、等间距与自定义间距，`gisStore.runRasterReclassify` 与 AI `raster_reclassify` 共用同一实现。
+- 重采样在工具箱"通用 > 像元分析 > 重采样"提供人工入口（方法选择、目标像元大小、实时输出网格预览）；采样核集中在同目录 `resampleEngine.ts` 纯服务，支持最邻近、双线性、三次卷积与众数，`gisStore.runRasterResample` 与 AI `raster_resample` 共用同一实现。
 - 计算成功并验证输出后才登记结果，失败不删除已有图层。分析矢量和其他普通图层一起保存到本地草稿，刷新恢复后仍可单独删除、导出、查看属性或作为后续工具输入。
 - `vectorOverlay` 仅保留旧接口兼容；新增分析结果应使用真实图层 ID，不使用该固定标识。回归测试位于 `src/gisStore.test.tsx`，覆盖真实 Provider、工具箱表单、AI 桥接、删除确认和草稿恢复，运算引擎在测试中模拟。
 
@@ -529,6 +532,7 @@ adapters   → types / 地图引擎 API / 地图源定义
 - `MapViewportContext` 保存可跨投影视图复用的 WGS84 视口范围，用于 CRS 切换和地图面板重建后的视图恢复。
 - `MapViewportFrame` 统一地图面板的状态提示、坐标读数和容器样式，MapLibre 与 OpenLayers 投影视图共享同一套 UI 外壳。
 - `mapViewportService` 负责范围计算、合法性校验和边界填充；`mapSearchService` 负责坐标解析与 Nominatim 检索，均不依赖 React 或地图实例。
+- 栅格卷帘（类似 ArcGIS Pro Swipe）：卷帘入口在功能区“分析”tab 的“查询”组（卷帘按钮，无栅格时禁用），针对当前选中（活动）的栅格生效；卷帘开启期间在图层树切换选中栅格，卷帘目标自动跟随，被卷帘栅格删除时自动退出。状态保存在 `gisStore`（`swipeRasterId` / `toggleRasterSwipe`）。`MapSwipeOverlay` 在 MapPanel 内以覆盖层 canvas 接管目标栅格的绘制——隐藏原 MapLibre 图层，把栅格四角投影到屏幕后按分割线裁剪绘制（平视任意旋转下精确，倾斜视角为仿射近似）。鼠标靠近地图边缘显示方向三角光标，按住拖动移动分割线，Esc 或再次点击卷帘按钮退出。仅平面模式可用，纯交互能力，不接入 AI 工具链。
 
 #### 5.3.3 数据流
 

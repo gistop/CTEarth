@@ -262,6 +262,15 @@ export function summarizeGisContext(gis: AiGisSnapshot) {
         epsg: gis.raster.epsg ?? null,
         visible: gis.layerVisibility.raster,
       } : null,
+      rasters: gis.rasters.map((raster) => ({
+        name: raster.name,
+        width: raster.width,
+        height: raster.height,
+        min: raster.min,
+        max: raster.max,
+        epsg: raster.epsg ?? null,
+        active: raster === gis.raster,
+      })),
       vectorOverlay: gis.vectorOverlay ? {
         id: 'vectorOverlay',
         name: displayLayerName(gis.vectorOverlay.name),

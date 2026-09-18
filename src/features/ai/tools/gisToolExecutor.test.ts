@@ -56,6 +56,22 @@ describe('GIS tool execution boundary', () => {
     ['slope', { units: 'meters' }],
     ['hillshade', { altitude: 91 }],
     ['idw_interpolation', { minPoints: 1.5 }],
+    ['raster_calculator', {}],
+    ['raster_calculator', { expression: '' }],
+    ['raster_calculator', { expression: '"missing.tif" + 1' }],
+    ['raster_calculator', { expression: '"dem.tif" *' }],
+    ['raster_calculator', { expression: 'dem * 2' }],
+    ['raster_reclassify', {}],
+    ['raster_reclassify', { method: 'natural' }],
+    ['raster_reclassify', { method: 'jenks', classCount: 1.5 }],
+    ['raster_reclassify', { method: 'custom' }],
+    ['raster_reclassify', { method: 'custom', customBreaks: '5, 3' }],
+    ['raster_reclassify', { method: 'jenks', rasterName: 'missing.tif' }],
+    ['raster_resample', {}],
+    ['raster_resample', { method: 'lanczos' }],
+    ['raster_resample', { method: 'nearest', cellSize: 0 }],
+    ['raster_resample', { method: 'bilinear', cellSize: 'abc' }],
+    ['raster_resample', { method: 'bilinear', rasterName: 'missing.tif' }],
     ['select_by_value', { field: 'missing', operator: 'equals' }],
     ['select_by_location', { referenceLayerId: 'missing' }],
     ['toString', {}],
@@ -66,6 +82,9 @@ describe('GIS tool execution boundary', () => {
     expect(port.runBufferAnalysis).not.toHaveBeenCalled();
     expect(port.runTerrainAnalysis).not.toHaveBeenCalled();
     expect(port.runIdwInterpolation).not.toHaveBeenCalled();
+    expect(port.runRasterCalculator).not.toHaveBeenCalled();
+    expect(port.runRasterReclassify).not.toHaveBeenCalled();
+    expect(port.runRasterResample).not.toHaveBeenCalled();
     expect(port.selectByValue).not.toHaveBeenCalled();
     expect(port.selectByLocation).not.toHaveBeenCalled();
   });
@@ -131,6 +150,177 @@ describe('GIS tool execution boundary', () => {
     const result = await createGisToolExecutor(port)('idw_interpolation', { cellSize: 1000 });
     expect(result.status).toBe('success');
     expect(port.runIdwInterpolation).toHaveBeenCalledWith(expect.objectContaining({ layerId: 'roads', field: 'value', cellSize: '1000' }));
+  });
+
+  it('executes raster_calculator through the GIS business action and returns a chainable raster result', async () => {
+    const { port } = createGisFixture();
+    const result = await createGisToolExecutor(port)('raster_calculator', { expression: '"dem.tif" * 2', outputName: 'calc.tif' });
+    expect(port.runRasterCalculator).toHaveBeenCalledWith({ expression: '"dem.tif" * 2', outputName: 'calc.tif' });
+    expect(result).toMatchObject({
+      status: 'success',
+      data: {
+        resultRaster: { id: 'raster-calculator-result', name: 'raster-calculator.tif', kind: 'raster' },
+        rasterId: 'raster-calculator-result',
+        expression: '"dem.tif" * 2',
+        referencedRasters: ['dem.tif'],
+        width: 2,
+        height: 2,
+      },
+      error: null,
+      nextAction: { type: 'none' },
+    });
+  });
+
+  it('propagates raster calculator failures from the business action', async () => {
+    const { port } = createGisFixture();
+    port.runRasterCalculator.mockResolvedValue({ ok: false, message: 'GeoTIFF 缺少有效的 GeoTransform，无法导出修改结果。' });
+    const result = await createGisToolExecutor(port)('raster_calculator', { expression: '"dem.tif" * 2' });
+    expect(result).toMatchObject({
+      status: 'failed',
+      message: 'GeoTIFF 缺少有效的 GeoTransform，无法导出修改结果。',
+      data: null,
+      error: { code: 'RASTER_CALCULATION_FAILED', retryable: false },
+      nextAction: { type: 'none' },
+    });
+  });
+
+  it('blocks raster_calculator while WASM tools are loading and after unrelated raster changes', async () => {
+    const { port, raster, setSnapshot } = createGisFixture();
+    setSnapshot({ toolsReady: false });
+    const execute = createGisToolExecutor(port);
+    expect((await execute('raster_calculator', { expression: '"dem.tif" * 2' })).status).toBe('blocked');
+    expect(port.runRasterCalculator).not.toHaveBeenCalled();
+
+    setSnapshot({ toolsReady: true });
+    expect((await execute('raster_calculator', { expression: '"dem.tif" * 2' })).status).toBe('success');
+
+    setSnapshot({ rasters: [raster, { ...raster, id: 'slope', name: 'slope.tif' }] });
+    const result = await execute('raster_calculator', { expression: '"dem.tif" * 2' });
+    expect(result).toMatchObject({ status: 'blocked', error: { code: 'GIS_STATE_CHANGED' } });
+    expect(port.runRasterCalculator).toHaveBeenCalledTimes(1);
+  });
+
+  it('executes raster_reclassify through the GIS business action and returns breaks and class counts', async () => {
+    const { port } = createGisFixture();
+    const result = await createGisToolExecutor(port)('raster_reclassify', {
+      method: 'quantile',
+      classCount: 4,
+      rasterName: 'dem.tif',
+      outputName: 'reclass.tif',
+    });
+    expect(port.runRasterReclassify).toHaveBeenCalledWith({
+      rasterId: 'dem',
+      method: 'quantile',
+      classCount: '4',
+      customBreaks: '',
+      outputName: 'reclass.tif',
+    });
+    expect(result).toMatchObject({
+      status: 'success',
+      data: {
+        resultRaster: { id: 'raster-reclassify-result', name: 'raster-reclassify.tif', kind: 'raster' },
+        rasterId: 'raster-reclassify-result',
+        method: 'quantile',
+        classCount: 3,
+        breaks: [2.5, 3.5],
+        classHistogram: [1, 1, 2],
+        sourceRasterName: 'dem.tif',
+      },
+      error: null,
+      nextAction: { type: 'none' },
+    });
+  });
+
+  it('defaults raster_reclassify to the active raster and resolves names without the tif extension', async () => {
+    const { port } = createGisFixture();
+    await createGisToolExecutor(port)('raster_reclassify', { method: 'equalInterval', classCount: 3 });
+    expect(port.runRasterReclassify).toHaveBeenCalledWith(expect.objectContaining({
+      rasterId: 'dem',
+      method: 'equalInterval',
+      classCount: '3',
+      outputName: 'agent-raster-reclassify.tif',
+    }));
+    await createGisToolExecutor(port)('raster_reclassify', { method: 'custom', customBreaks: '10, 20' });
+    expect(port.runRasterReclassify).toHaveBeenLastCalledWith(expect.objectContaining({ rasterId: 'dem', customBreaks: '10, 20' }));
+  });
+
+  it('propagates raster reclassification failures from the business action', async () => {
+    const { port } = createGisFixture();
+    port.runRasterReclassify.mockResolvedValue({ ok: false, message: '有效像元值全部相同，无法分级。' });
+    const result = await createGisToolExecutor(port)('raster_reclassify', { method: 'jenks', classCount: 5 });
+    expect(result).toMatchObject({
+      status: 'failed',
+      message: '有效像元值全部相同，无法分级。',
+      data: null,
+      error: { code: 'RASTER_RECLASSIFICATION_FAILED', retryable: false },
+      nextAction: { type: 'none' },
+    });
+  });
+
+  it('blocks raster_reclassify after unrelated raster changes during the request', async () => {
+    const { port, raster, setSnapshot } = createGisFixture();
+    const execute = createGisToolExecutor(port);
+    expect((await execute('raster_reclassify', { method: 'jenks', classCount: 5 })).status).toBe('success');
+    setSnapshot({ rasters: [raster, { ...raster, id: 'slope', name: 'slope.tif' }] });
+    expect(await execute('raster_reclassify', { method: 'jenks', classCount: 5 })).toMatchObject({
+      status: 'blocked',
+      error: { code: 'GIS_STATE_CHANGED' },
+    });
+    expect(port.runRasterReclassify).toHaveBeenCalledTimes(1);
+  });
+
+  it('executes raster_resample through the GIS business action and reports the resolution change', async () => {
+    const { port } = createGisFixture();
+    const result = await createGisToolExecutor(port)('raster_resample', {
+      method: 'bilinear',
+      cellSize: 1,
+      rasterName: 'dem.tif',
+      outputName: 'resampled.tif',
+    });
+    expect(port.runRasterResample).toHaveBeenCalledWith({
+      rasterId: 'dem',
+      method: 'bilinear',
+      cellSize: '1',
+      outputName: 'resampled.tif',
+    });
+    expect(result).toMatchObject({
+      status: 'success',
+      data: {
+        resultRaster: { id: 'raster-resample-result', name: 'raster-resample.tif', kind: 'raster' },
+        rasterId: 'raster-resample-result',
+        method: 'bilinear',
+        inputCellSize: 0.5,
+        outputCellSize: 1,
+        validCount: 4,
+        sourceRasterName: 'dem.tif',
+      },
+      error: null,
+      nextAction: { type: 'none' },
+    });
+  });
+
+  it('defaults raster_resample to the active raster and keeps the resolution when cellSize is omitted', async () => {
+    const { port } = createGisFixture();
+    await createGisToolExecutor(port)('raster_resample', { method: 'majority' });
+    expect(port.runRasterResample).toHaveBeenCalledWith({
+      rasterId: 'dem',
+      method: 'majority',
+      cellSize: '',
+      outputName: 'agent-raster-resample.tif',
+    });
+  });
+
+  it('propagates raster resampling failures from the business action', async () => {
+    const { port } = createGisFixture();
+    port.runRasterResample.mockResolvedValue({ ok: false, message: '仅支持北向上（无旋转）且具有有效像元大小的栅格进行重采样。' });
+    const result = await createGisToolExecutor(port)('raster_resample', { method: 'cubic', cellSize: 2 });
+    expect(result).toMatchObject({
+      status: 'failed',
+      message: '仅支持北向上（无旋转）且具有有效像元大小的栅格进行重采样。',
+      data: null,
+      error: { code: 'RASTER_RESAMPLING_FAILED', retryable: false },
+      nextAction: { type: 'none' },
+    });
   });
 
   it.each(['intersect', 'union', 'erase'] as const)('executes %s through the GIS business action and returns a chainable layer result', async (tool) => {

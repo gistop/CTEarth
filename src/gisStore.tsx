@@ -22,8 +22,13 @@ import {
 } from './workspaceDraftStore';
 import { displayLayerName, normalizeLayerOrder } from './features/layers/services/layerService';
 import { getLayerFields } from './features/layers/services/layerFieldService';
+import { planRasterCalculator } from './features/toolbox/toolsets/general/pixel/rasterCalculatorEngine';
+import { planRasterReclassify, rasterReclassifyMethodLabels, type RasterReclassifyMethod } from './features/toolbox/toolsets/general/pixel/reclassifyEngine';
+import { planRasterResample, rasterResampleMethodLabels, type RasterResampleMethod } from './features/toolbox/toolsets/general/pixel/resampleEngine';
 
 export { displayLayerName } from './features/layers/services/layerService';
+export type { RasterReclassifyMethod } from './features/toolbox/toolsets/general/pixel/reclassifyEngine';
+export type { RasterResampleMethod } from './features/toolbox/toolsets/general/pixel/resampleEngine';
 
 export type PointFeature = {
   type: 'Feature';
@@ -133,6 +138,42 @@ export type RasterEditParameters = {
   outputName?: string;
 };
 
+export type RasterCalculatorParameters = {
+  expression: string;
+  outputName: string;
+};
+
+export type RasterReclassifyParameters = {
+  rasterId: string;
+  method: RasterReclassifyMethod;
+  classCount: string;
+  customBreaks: string;
+  outputName: string;
+};
+
+export type RasterReclassifyOutput = {
+  raster: RasterOverlay;
+  method: RasterReclassifyMethod;
+  breaks: number[];
+  classCount: number;
+  histogram: number[];
+};
+
+export type RasterResampleParameters = {
+  rasterId: string;
+  method: RasterResampleMethod;
+  cellSize: string;
+  outputName: string;
+};
+
+export type RasterResampleOutput = {
+  raster: RasterOverlay;
+  method: RasterResampleMethod;
+  inputCellSize: number;
+  outputCellSize: number;
+  validCount: number;
+};
+
 export type SelectionMode = 'new' | 'add' | 'remove' | 'subset';
 
 export type SelectByValueOperator =
@@ -177,7 +218,7 @@ export type SelectionResult = {
 export type GisToolExecutionResult = {
   ok: boolean;
   status: 'success' | 'blocked' | 'failed';
-  tool: 'idw_interpolation' | 'buffer_vector' | 'select_by_value' | 'select_by_location' | 'extract_by_mask' | OverlayToolId;
+  tool: 'idw_interpolation' | 'buffer_vector' | 'select_by_value' | 'select_by_location' | 'extract_by_mask' | 'raster_calculator' | 'raster_reclassify' | 'raster_resample' | OverlayToolId;
   message: string;
   qa: {
     passed: boolean;
@@ -268,6 +309,9 @@ type GisContextValue = {
   isRunning: boolean;
   workspaceDraftLoaded: boolean;
   message: string;
+  swipeRasterId: string | null;
+  toggleRasterSwipe: (rasterId?: string) => void;
+  disableRasterSwipe: () => void;
   uploadShapefileZip: (file: File) => Promise<void>;
   uploadCsv: (file: File) => Promise<void>;
   uploadGeoJson: (file: File) => Promise<void>;
@@ -305,6 +349,9 @@ type GisContextValue = {
   selectByValue: (params: SelectByValueParameters) => Promise<SelectionResult | null>;
   selectByLocation: (params: SelectByLocationParameters) => Promise<SelectionResult | null>;
   runIdwInterpolation: (params: IdwParameters) => Promise<GisOperationResult<RasterOverlay>>;
+  runRasterCalculator: (params: RasterCalculatorParameters) => Promise<GisOperationResult<RasterOverlay>>;
+  runRasterReclassify: (params: RasterReclassifyParameters) => Promise<GisOperationResult<RasterReclassifyOutput>>;
+  runRasterResample: (params: RasterResampleParameters) => Promise<GisOperationResult<RasterResampleOutput>>;
   runBufferAnalysis: (params: BufferParameters) => Promise<GisOperationResult<UploadedLayer>>;
   runOverlayAnalysis: (tool: OverlayToolId, params: OverlayParameters) => Promise<GisOperationResult<UploadedLayer>>;
   runTerrainAnalysis: (tool: TerrainToolId, params: TerrainParameters) => Promise<GisOperationResult<RasterOverlay>>;
@@ -399,6 +446,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [isRunning, setIsRunning] = useState(false);
   const [workspaceDraftLoaded, setWorkspaceDraftLoaded] = useState(false);
   const [message, setMessage] = useState('');
+  const [swipeRasterId, setSwipeRasterId] = useState<string | null>(null);
 
   const layer = useMemo(
     () => layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null,
@@ -415,6 +463,34 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setRasterLayerVisibilityState((current) => ({ ...current, [nextRaster.id]: true }));
     setLayerOrder((current) => [`raster:${nextRaster.id}`, ...current.filter((id) => id !== 'raster' && id !== `raster:${nextRaster.id}`)]);
   }, []);
+
+  const toggleRasterSwipe = useCallback((rasterId?: string) => {
+    const target = rasterId ?? activeRasterId;
+    if (!target) {
+      return;
+    }
+    setSwipeRasterId((current) => (current === target ? null : target));
+  }, [activeRasterId]);
+
+  const disableRasterSwipe = useCallback(() => {
+    setSwipeRasterId(null);
+  }, []);
+
+  // 卷帘目标的生命周期：目标被删除时退出卷帘；否则跟随当前选中（活动）的栅格，
+  // 与 ArcGIS Pro 的选中图层语义一致。两个规则必须在一个 effect 内按优先级执行，
+  // 避免删除目标时被“跟随”规则重新定向到回退的活动栅格。
+  useEffect(() => {
+    if (!swipeRasterId) {
+      return;
+    }
+    if (!rasters.some((item) => item.id === swipeRasterId)) {
+      setSwipeRasterId(null);
+      return;
+    }
+    if (activeRasterId && swipeRasterId !== activeRasterId && rasters.some((item) => item.id === activeRasterId)) {
+      setSwipeRasterId(activeRasterId);
+    }
+  }, [activeRasterId, rasters, swipeRasterId]);
 
   const setLayerVisibility = useCallback((id: LayerVisibilityId, visible: boolean) => {
     setLayerVisibilityState((current) => ({ ...current, [id]: visible }));
@@ -1293,8 +1369,273 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     }
   }, [layer, layers, toolsReady]);
 
-  const runBufferAnalysis = useCallback(async (params: BufferParameters): Promise<GisOperationResult<UploadedLayer>> => {
-    const analysis = createAnalysisLogContext('buffer_vector');
+  const runRasterCalculator = useCallback(async (params: RasterCalculatorParameters): Promise<GisOperationResult<RasterOverlay>> => {
+    const analysis = createAnalysisLogContext('raster_calculator');
+    logAnalysisEvent(analysis, 'start', {
+      rawParams: { ...params },
+      availableRasters: rasters.map((item) => item.name),
+    });
+    if (!toolsReady) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
+      const message = 'WASM 工具仍在加载，请稍后再运行。';
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    if (rasters.length === 0) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'raster_missing' });
+      const message = '请先添加参与计算的 GeoTIFF 栅格。';
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const planned = planRasterCalculator(params.expression, rasters);
+    if (!planned.ok) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'invalid_expression', error: planned.error });
+      const message = planned.error;
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    try {
+      await ensureWasmReady();
+      setIsRunning(true);
+      setMessage('正在计算地图代数表达式');
+      logAnalysisEvent(analysis, 'invoke', {
+        expression: params.expression,
+        referencedRasters: planned.plan.referencedNames,
+        grid: { width: planned.plan.width, height: planned.plan.height },
+      });
+      const { pixels, validCount } = planned.plan.evaluate();
+      if (validCount === 0) {
+        throw new Error('表达式结果没有有效像元。');
+      }
+      const outputName = ensureTifName(params.outputName || 'raster-calculator.tif');
+      const outputBytes = writeRasterGeoTiff({
+        width: planned.plan.width,
+        height: planned.plan.height,
+        epsg: planned.plan.epsg,
+        geoTransform: planned.plan.geoTransform,
+        nodata: planned.plan.nodata,
+        pixels,
+      });
+      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+      logAnalysisEvent(analysis, 'success', {
+        outputName,
+        expression: params.expression,
+        referencedRasters: planned.plan.referencedNames,
+        validCount,
+        raster: {
+          width: nextRaster.width,
+          height: nextRaster.height,
+          epsg: nextRaster.epsg ?? null,
+          min: nextRaster.min,
+          max: nextRaster.max,
+        },
+      });
+      addRasterLayer(nextRaster);
+      setLayerVisibilityState((current) => ({ ...current, raster: true }));
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
+      setMessage(`栅格计算完成：${nextRaster.width} x ${nextRaster.height}`);
+      return { ok: true, output: nextRaster };
+    } catch (error) {
+      const message = errorMessage(error);
+      logAnalysisError(analysis, 'error', error, { expression: params.expression });
+      setMessage(message);
+      return { ok: false, message };
+    } finally {
+      setIsRunning(false);
+    }
+  }, [rasters, toolsReady]);
+
+  const runRasterReclassify = useCallback(async (params: RasterReclassifyParameters): Promise<GisOperationResult<RasterReclassifyOutput>> => {
+    const analysis = createAnalysisLogContext('raster_reclassify');
+    logAnalysisEvent(analysis, 'start', {
+      rawParams: { ...params },
+      availableRasters: rasters.map((item) => item.name),
+    });
+    if (!toolsReady) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
+      const message = 'WASM 工具仍在加载，请稍后再运行。';
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const inputRaster = rasters.find((item) => item.id === params.rasterId) ?? raster;
+    if (!inputRaster) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'raster_missing' });
+      const message = '请先添加参与重分类的 GeoTIFF 栅格。';
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const planned = planRasterReclassify(inputRaster.pixels, inputRaster.nodata, {
+      method: params.method,
+      classCount: params.classCount,
+      customBreaks: params.customBreaks,
+    });
+    if (!planned.ok) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'invalid_params', error: planned.error });
+      const message = planned.error;
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const methodLabel = rasterReclassifyMethodLabels[params.method];
+    try {
+      await ensureWasmReady();
+      setIsRunning(true);
+      setMessage(`正在按${methodLabel}重分类栅格`);
+      logAnalysisEvent(analysis, 'invoke', {
+        method: params.method,
+        classCount: params.classCount,
+        customBreaks: params.customBreaks,
+        inputRaster: inputRaster.name,
+      });
+      const { pixels, validCount, histogram } = planned.plan.evaluate();
+      const outputName = ensureTifName(params.outputName || 'raster-reclassify.tif');
+      const outputBytes = writeRasterGeoTiff({
+        width: inputRaster.width,
+        height: inputRaster.height,
+        epsg: inputRaster.epsg,
+        geoTransform: inputRaster.geoTransform,
+        nodata: inputRaster.nodata,
+        pixels,
+      });
+      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+      logAnalysisEvent(analysis, 'success', {
+        outputName,
+        method: params.method,
+        breaks: planned.plan.breaks,
+        classCount: planned.plan.classCount,
+        histogram,
+        validCount,
+        raster: {
+          width: nextRaster.width,
+          height: nextRaster.height,
+          epsg: nextRaster.epsg ?? null,
+        },
+      });
+      addRasterLayer(nextRaster);
+      setLayerVisibilityState((current) => ({ ...current, raster: true }));
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
+      setMessage(`重分类完成：${planned.plan.classCount} 类（${methodLabel}），${nextRaster.width} x ${nextRaster.height}`);
+      return {
+        ok: true,
+        output: {
+          raster: nextRaster,
+          method: params.method,
+          breaks: planned.plan.breaks,
+          classCount: planned.plan.classCount,
+          histogram,
+        },
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      logAnalysisError(analysis, 'error', error, { method: params.method });
+      setMessage(message);
+      return { ok: false, message };
+    } finally {
+      setIsRunning(false);
+    }
+  }, [raster, rasters, toolsReady]);
+
+  const runRasterResample = useCallback(async (params: RasterResampleParameters): Promise<GisOperationResult<RasterResampleOutput>> => {
+    const analysis = createAnalysisLogContext('raster_resample');
+    logAnalysisEvent(analysis, 'start', {
+      rawParams: { ...params },
+      availableRasters: rasters.map((item) => item.name),
+    });
+    if (!toolsReady) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'tools_not_ready' });
+      const message = 'WASM 工具仍在加载，请稍后再运行。';
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const inputRaster = rasters.find((item) => item.id === params.rasterId) ?? raster;
+    if (!inputRaster) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'raster_missing' });
+      const message = '请先添加参与重采样的 GeoTIFF 栅格。';
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const planned = planRasterResample(
+      {
+        width: inputRaster.width,
+        height: inputRaster.height,
+        geoTransform: inputRaster.geoTransform,
+        nodata: inputRaster.nodata,
+        pixels: inputRaster.pixels,
+      },
+      { method: params.method, cellSize: params.cellSize },
+    );
+    if (!planned.ok) {
+      logAnalysisEvent(analysis, 'blocked', { reason: 'invalid_params', error: planned.error });
+      const message = planned.error;
+      setMessage(message);
+      return { ok: false, message };
+    }
+
+    const methodLabel = rasterResampleMethodLabels[params.method];
+    try {
+      await ensureWasmReady();
+      setIsRunning(true);
+      setMessage(`正在按${methodLabel}重采样栅格`);
+      logAnalysisEvent(analysis, 'invoke', {
+        method: params.method,
+        cellSize: planned.plan.cellSize,
+        inputRaster: inputRaster.name,
+        outputGrid: { width: planned.plan.width, height: planned.plan.height },
+      });
+      const { pixels, validCount } = planned.plan.evaluate();
+      const outputName = ensureTifName(params.outputName || 'raster-resample.tif');
+      const outputBytes = writeRasterGeoTiff({
+        width: planned.plan.width,
+        height: planned.plan.height,
+        epsg: inputRaster.epsg,
+        geoTransform: planned.plan.geoTransform,
+        nodata: inputRaster.nodata,
+        pixels,
+      });
+      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+      logAnalysisEvent(analysis, 'success', {
+        outputName,
+        method: params.method,
+        cellSize: planned.plan.cellSize,
+        validCount,
+        raster: {
+          width: nextRaster.width,
+          height: nextRaster.height,
+          epsg: nextRaster.epsg ?? null,
+        },
+      });
+      addRasterLayer(nextRaster);
+      setLayerVisibilityState((current) => ({ ...current, raster: true }));
+      setLayerOrder((current) => current.filter((id) => id !== 'raster'));
+      setMessage(`重采样完成（${methodLabel}）：${nextRaster.width} x ${nextRaster.height}`);
+      return {
+        ok: true,
+        output: {
+          raster: nextRaster,
+          method: params.method,
+          inputCellSize: planned.plan.inputCellSize,
+          outputCellSize: planned.plan.cellSize,
+          validCount,
+        },
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      logAnalysisError(analysis, 'error', error, { method: params.method });
+      setMessage(message);
+      return { ok: false, message };
+    } finally {
+      setIsRunning(false);
+    }
+  }, [raster, rasters, toolsReady]);
+
+  const runBufferAnalysis = useCallback(async (params: BufferParameters): Promise<GisOperationResult<UploadedLayer>> => {    const analysis = createAnalysisLogContext('buffer_vector');
     logAnalysisEvent(analysis, 'start', {
       rawParams: { ...params },
       activeLayer: summarizeUploadedLayerForAnalysis(layer),
@@ -1731,6 +2072,9 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     isRunning,
     workspaceDraftLoaded,
     message,
+    swipeRasterId,
+    toggleRasterSwipe,
+    disableRasterSwipe,
     uploadShapefileZip,
     uploadCsv,
     uploadGeoJson,
@@ -1768,13 +2112,16 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     selectByValue,
     selectByLocation,
     runIdwInterpolation,
+    runRasterCalculator,
+    runRasterReclassify,
+    runRasterResample,
     runBufferAnalysis,
     runOverlayAnalysis,
     runTerrainAnalysis,
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, disableRasterSwipe, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runRasterCalculator, runRasterReclassify, runRasterResample, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, swipeRasterId, toggleRasterSwipe, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -1885,7 +2232,7 @@ function namespaceVectorToolInput(toolInput: ShapefileInput, prefix: 'input' | '
   };
 }
 
-type AnalysisLogTool = 'idw_interpolation' | 'buffer_vector' | OverlayToolId;
+type AnalysisLogTool = 'idw_interpolation' | 'buffer_vector' | 'raster_calculator' | 'raster_reclassify' | 'raster_resample' | OverlayToolId;
 type AnalysisLogPhase = 'start' | 'validated' | 'invoke' | 'result' | 'success' | 'blocked' | 'error';
 
 type AnalysisLogContext = {
@@ -1939,6 +2286,18 @@ function analysisToolLabel(tool: AnalysisLogTool) {
 
   if (tool === 'buffer_vector') {
     return '缓冲区';
+  }
+
+  if (tool === 'raster_calculator') {
+    return '栅格计算';
+  }
+
+  if (tool === 'raster_reclassify') {
+    return '重分类';
+  }
+
+  if (tool === 'raster_resample') {
+    return '重采样';
   }
 
   return overlayToolLabel(tool);

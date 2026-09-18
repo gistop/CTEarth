@@ -12,6 +12,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   ChevronDown,
+  Columns2,
   Database,
   Download,
   Earth,
@@ -246,24 +247,47 @@ function createMapRibbonGroups({
   clearSelection,
   activeTab,
   hasLayers,
+  hasRasters,
   identifyActive,
   selectionActive,
   setIdentifyActive,
   setSelectionActive,
+  swipeActive,
+  toggleRasterSwipe,
   toggleIdentifyActive,
   toggleSelectionActive,
 }: {
   clearSelection: ReturnType<typeof useGis>['clearSelection'];
   activeTab: RibbonTab;
   hasLayers: boolean;
+  hasRasters: boolean;
   identifyActive: boolean;
   selectionActive: boolean;
   setIdentifyActive: (active: boolean) => void;
   setSelectionActive: (active: boolean) => void;
+  swipeActive: boolean;
+  toggleRasterSwipe: (rasterId?: string) => void;
   toggleIdentifyActive: () => void;
   toggleSelectionActive: () => void;
 }): RibbonGroup[] {
   const groups = baseRibbonGroups.map((group, groupIndex) => {
+    if (groupIndex === 4 && activeTab === '分析') {
+      return {
+        ...group,
+        tools: [
+          {
+            label: '卷帘',
+            icon: Columns2,
+            active: swipeActive,
+            disabled: !hasRasters,
+            muted: !hasRasters,
+            onClick: () => toggleRasterSwipe(),
+          },
+          ...group.tools,
+        ],
+      };
+    }
+
     if (groupIndex === 1) {
       return {
         ...group,
@@ -506,7 +530,7 @@ function Ribbon({
 }) {
   const fieldGroups = useAttributeFieldRibbonGroups(fieldContextVisible ? fieldDatasetId : null);
   const editGroups = useDigitizeRibbonGroups(activeTab === editRibbonTab);
-  const { clearSelection, layers } = useGis();
+  const { clearSelection, layers, rasters, swipeRasterId, toggleRasterSwipe } = useGis();
   const { identifyActive, setIdentifyActive, toggleIdentifyActive } = useMapIdentify();
   const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
   const activeGroups: RibbonGroup[] = fieldContextSelected
@@ -538,10 +562,13 @@ function Ribbon({
         activeTab,
         clearSelection,
         hasLayers: layers.length > 0,
+        hasRasters: rasters.length > 0,
         identifyActive,
         selectionActive,
         setIdentifyActive,
         setSelectionActive,
+        swipeActive: Boolean(swipeRasterId),
+        toggleRasterSwipe,
         toggleIdentifyActive,
         toggleSelectionActive,
       });

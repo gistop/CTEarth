@@ -3823,6 +3823,111 @@ button {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.tool-expression {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid #b9c4ce;
+  background: white;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.tool-operator-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tool-operator-row button {
+  min-width: 32px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid #b9c4ce;
+  background: white;
+  color: #37485a;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+}
+
+.tool-operator-row button:hover {
+  border-color: #b6d8ec;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.tool-expression-error {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid #e5b8c0;
+  background: #fdf1f3;
+  color: #c2415a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tool-reclass-preview {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #b9c4ce;
+  background: white;
+  font-size: 12px;
+}
+
+.tool-reclass-preview-header,
+.tool-reclass-preview-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 64px;
+  gap: 6px;
+  padding: 3px 8px;
+  line-height: 1.5;
+}
+
+.tool-reclass-preview-header {
+  background: #eef3f7;
+  color: #37485a;
+  font-weight: 600;
+}
+
+.tool-reclass-preview-row:nth-child(odd) {
+  background: #f7fafc;
+}
+
+.tool-reclass-preview-row span:first-child,
+.tool-reclass-preview-row span:last-child,
+.tool-reclass-preview-header span:first-child,
+.tool-reclass-preview-header span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-resample-preview {
+  padding: 6px 8px;
+  border: 1px solid #b9c4ce;
+  background: white;
+  color: #37485a;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-swipe-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.map-swipe-overlay canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .tool-detail-actions {
   display: flex;
   align-items: center;

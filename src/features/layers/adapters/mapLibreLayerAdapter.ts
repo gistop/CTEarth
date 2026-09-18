@@ -4,9 +4,42 @@ import {
   getRasterBasemapDefinitions,
   type RasterBasemapTileDefinition,
 } from '../../maps/components/map/rasterBasemapSources';
-import type { LayerEngineAdapter } from './layerAdapterTypes';
+import type { LayerEngineAdapter, RasterRenderData } from './layerAdapterTypes';
 
-const RASTER_LAYER_IDS = ['idw-interpolation'];
+const RASTER_PREFIX = 'raster-overlay-';
+
+export function syncMapLibreRasters(
+  map: maplibregl.Map,
+  rasters: RasterRenderData[],
+  visibility: Record<string, boolean>,
+  opacity: number,
+  fallbackVisible: boolean,
+) {
+  const expectedIds = new Set(rasters.map((raster) => `${RASTER_PREFIX}${raster.id}`));
+  const style = map.getStyle();
+  style.layers?.filter((layer) => layer.id.startsWith(RASTER_PREFIX) && !expectedIds.has(layer.id))
+    .forEach((layer) => map.removeLayer(layer.id));
+  Object.keys(style.sources).filter((id) => id.startsWith(RASTER_PREFIX) && !expectedIds.has(id))
+    .forEach((id) => map.removeSource(id));
+
+  rasters.forEach((raster) => {
+    const id = `${RASTER_PREFIX}${raster.id}`;
+    const source = map.getSource(id) as maplibregl.ImageSource | undefined;
+    if (!source) {
+      map.addSource(id, { type: 'image', url: raster.imageUrl, coordinates: raster.coordinates });
+    } else {
+      const previous = style.sources[id] as maplibregl.ImageSourceSpecification;
+      if (previous.url !== raster.imageUrl || JSON.stringify(previous.coordinates) !== JSON.stringify(raster.coordinates)) {
+        source.updateImage({ url: raster.imageUrl, coordinates: raster.coordinates });
+      }
+    }
+    if (!map.getLayer(id)) {
+      map.addLayer({ id, type: 'raster', source: id, paint: { 'raster-fade-duration': 0 } });
+    }
+    map.setLayoutProperty(id, 'visibility', (visibility[raster.id] ?? fallbackVisible) ? 'visible' : 'none');
+    map.setPaintProperty(id, 'raster-opacity', opacity);
+  });
+}
 const VECTOR_OVERLAY_LAYER_IDS = ['buffer-fill', 'buffer-outline'];
 
 type MapLibreSourceSpecification = Parameters<maplibregl.Map['addSource']>[1];
@@ -15,7 +48,7 @@ export type MapLibreLayerSyncRequest = {
   map: maplibregl.Map;
   entries: MapGroupRenderEntry[];
   uploadedLayers: { id: string }[];
-  rasterId: string | null;
+  rasters: { id: string }[];
   hasVectorOverlay: boolean;
   basemapVisible: boolean;
 };
@@ -33,7 +66,7 @@ function syncMapLibreLayers({
   map,
   entries,
   uploadedLayers,
-  rasterId,
+  rasters,
   hasVectorOverlay,
   basemapVisible,
 }: MapLibreLayerSyncRequest) {
@@ -41,7 +74,7 @@ function syncMapLibreLayers({
 
   const uploadedIds = new Set(uploadedLayers.map((item) => item.id));
   const layerGroups = entries
-    .map((entry) => layerGroupIdsForEntry(entry, uploadedIds, rasterId, hasVectorOverlay))
+    .map((entry) => layerGroupIdsForEntry(entry, uploadedIds, rasters, hasVectorOverlay))
     .filter((ids) => ids.length > 0);
 
   [...layerGroups].reverse().forEach((groupIds) => {
@@ -133,7 +166,7 @@ function syncBasemapLayers(
 function layerGroupIdsForEntry(
   entry: MapGroupRenderEntry,
   uploadedIds: Set<string>,
-  rasterId: string | null,
+  rasters: { id: string }[],
   hasVectorOverlay: boolean,
 ) {
   if (entry.layerId === 'basemap' && entry.basemapId) {
@@ -154,7 +187,8 @@ function layerGroupIdsForEntry(
   }
 
   if (entry.layerId.startsWith('raster:')) {
-    return rasterId && entry.layerId === `raster:${rasterId}` ? RASTER_LAYER_IDS : [];
+    const raster = rasters.find((item) => entry.layerId === `raster:${item.id}`);
+    return raster ? [`${RASTER_PREFIX}${raster.id}`] : [];
   }
 
   return [];

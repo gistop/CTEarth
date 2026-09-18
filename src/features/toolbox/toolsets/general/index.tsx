@@ -3,6 +3,7 @@ import { AnalysisToolPanel } from './components/AnalysisToolPanel';
 import { extractionToolGroup } from './extraction';
 import { interpolationToolGroup } from './interpolation';
 import { overlayToolGroup } from './overlay';
+import { pixelToolboxGroup } from './pixel';
 import { proximityToolGroup } from './proximity';
 import { analysisToolTitles } from './services/analysisToolService';
 import { selectionToolDefinitions, selectionToolboxGroup } from './selection';
@@ -19,6 +20,7 @@ export const generalToolset: ToolboxNode = {
     extractionToolGroup,
     terrainToolGroup,
     selectionToolboxGroup,
+    pixelToolboxGroup,
   ],
 };
 
@@ -32,6 +34,9 @@ const analysisToolIds: readonly AnalysisToolId[] = [
   'hillshade',
   'slope',
   'aspect',
+  'rasterCalculator',
+  'rasterReclassify',
+  'rasterResample',
 ];
 
 const analysisToolDefinitions: readonly ToolboxToolDefinition[] = analysisToolIds.map((tool) => ({

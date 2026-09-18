@@ -4,10 +4,12 @@ import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type Uploa
 import {
   createCesiumLayerAdapter,
   createMapLibreLayerAdapter,
+  syncMapLibreRasters,
   useLayerStore,
 } from '../../layers';
 import { DigitizeMap, useDigitize, type DigitizeMapHandle } from '../../digitize';
 import { MapFeatureIdentify } from './map/MapFeatureIdentify';
+import { MapSwipeOverlay } from './MapSwipeOverlay';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { MapMeasurePanel } from './map/MapMeasurePanel';
@@ -223,15 +225,18 @@ export function MapPanel() {
     layerVisibility,
     uploadedLayerVisibility,
     raster,
+    rasters,
     rasterLayerVisibility,
     rasterStyle,
+    swipeRasterId,
+    disableRasterSwipe,
     vectorOverlay,
     vectorOverlayStyle,
     uploadedLayerStyles,
     workspaceDraftLoaded,
   } = useLayerStore();
   const layersRef = useRef(layers);
-  const rasterRef = useRef(raster);
+  const rastersRef = useRef(rasters);
   const vectorOverlayRef = useRef(vectorOverlay);
   const mapGroupEntriesRef = useRef(mapGroupRenderState.entries);
   const basemapVisibleRef = useRef(layerVisibility.basemap);
@@ -275,8 +280,8 @@ export function MapPanel() {
   }, [layers]);
 
   useEffect(() => {
-    rasterRef.current = raster;
-  }, [raster]);
+    rastersRef.current = rasters;
+  }, [rasters]);
 
   useEffect(() => {
     vectorOverlayRef.current = vectorOverlay;
@@ -365,7 +370,7 @@ export function MapPanel() {
           map,
           entries: mapGroupEntriesRef.current,
           uploadedLayers: layersRef.current,
-          rasterId: rasterRef.current?.id ?? null,
+          rasters: rastersRef.current,
           hasVectorOverlay: Boolean(vectorOverlayRef.current),
           basemapVisible: basemapVisibleRef.current,
         });
@@ -612,7 +617,7 @@ export function MapPanel() {
           isActive,
           entries: mapGroupRenderState.entries,
           layerVisibility,
-          raster,
+          rasters,
           rasterLayerVisibility,
           rasterStyle,
           layers,
@@ -648,7 +653,7 @@ export function MapPanel() {
       isCancelled = true;
       cesiumSyncGenerationRef.current += 1;
     };
-  }, [layerVisibility, layers, mapCommandState.cesiumTerrain, mapCommandState.mapMode, mapGroupRenderState.entries, raster, rasterLayerVisibility, rasterStyle.opacity, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay, vectorOverlayStyle]);
+  }, [layerVisibility, layers, mapCommandState.cesiumTerrain, mapCommandState.mapMode, mapGroupRenderState.entries, rasters, rasterLayerVisibility, rasterStyle.opacity, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay, vectorOverlayStyle]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -673,7 +678,7 @@ export function MapPanel() {
       map,
       entries: mapGroupRenderState.entries,
       uploadedLayers: layers,
-      rasterId: raster?.id ?? null,
+      rasters,
       hasVectorOverlay: Boolean(vectorOverlay),
       basemapVisible: layerVisibility.basemap,
     });
@@ -695,59 +700,24 @@ export function MapPanel() {
       return;
     }
 
-    if (map.getLayer('idw-interpolation')) {
-      map.removeLayer('idw-interpolation');
-    }
-
-    if (map.getSource('idw-interpolation')) {
-      map.removeSource('idw-interpolation');
-    }
-
-    if (!raster) {
-      lastAutoFitRasterIdRef.current = null;
-      return;
-    }
-
-    map.addSource('idw-interpolation', {
-      type: 'image',
-      url: raster.imageUrl,
-      coordinates: raster.coordinates,
-    });
-    map.addLayer(
-      {
-        id: 'idw-interpolation',
-        type: 'raster',
-        source: 'idw-interpolation',
-        paint: {
-          'raster-opacity': rasterStyle.opacity,
-          'raster-fade-duration': 0,
-        },
-      },
-    );
-    setLayersVisibility(map, rasterLayerIds, rasterLayerVisibility[raster.id] ?? layerVisibility.raster);
+    syncMapLibreRasters(map, rasters, rasterLayerVisibility, rasterStyle.opacity, layerVisibility.raster);
     createMapLibreLayerAdapter().sync({
       map,
       entries: mapGroupRenderState.entries,
       uploadedLayers: layers,
-      rasterId: raster?.id ?? null,
+      rasters,
       hasVectorOverlay: Boolean(vectorOverlay),
       basemapVisible: layerVisibility.basemap,
     });
-    if (lastAutoFitRasterIdRef.current !== raster.id) {
-      fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
-      lastAutoFitRasterIdRef.current = raster.id;
-    }
-  }, [layerVisibility.basemap, layerVisibility.raster, layers, mapGroupRenderState.entries, mapReady, raster, rasterLayerVisibility, vectorOverlay]);
+  }, [layerVisibility.basemap, layerVisibility.raster, layers, mapGroupRenderState.entries, mapReady, rasters, rasterLayerVisibility, rasterStyle.opacity, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
-
-    if (!mapReady || !map || !map.getLayer('idw-interpolation')) {
-      return;
+    if (mapReady && map && raster && lastAutoFitRasterIdRef.current !== raster.id) {
+      fitValidLngLatBounds(map, boundsFromCoordinates(raster.coordinates), 80, 700);
+      lastAutoFitRasterIdRef.current = raster.id;
     }
-
-    map.setPaintProperty('idw-interpolation', 'raster-opacity', rasterStyle.opacity);
-  }, [mapReady, rasterStyle]);
+  }, [mapReady, raster]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -804,7 +774,7 @@ export function MapPanel() {
       map,
       entries: mapGroupRenderState.entries,
       uploadedLayers: layers,
-      rasterId: raster?.id ?? null,
+      rasters,
       hasVectorOverlay: Boolean(vectorOverlay),
       basemapVisible: layerVisibility.basemap,
     });
@@ -1056,6 +1026,17 @@ export function MapPanel() {
       readout={coords}
     >
       <div className={`map-canvas${mapCommandState.mapMode === 'globe' ? ' is-hidden' : ''}`} ref={containerRef} />
+      <MapSwipeOverlay
+        active={Boolean(swipeRasterId) && mapCommandState.mapMode !== 'globe' && !editingActive}
+        map={mapRef.current}
+        mapReady={mapReady}
+        raster={swipeRasterId ? rasters.find((item) => item.id === swipeRasterId) ?? null : null}
+        rasterVisible={swipeRasterId
+          ? (rasterLayerVisibility[swipeRasterId] ?? layerVisibility.raster)
+          : false}
+        opacity={rasterStyle.opacity}
+        onExit={disableRasterSwipe}
+      />
       <MapFeatureIdentify active={featureIdentifyActive} map={mapRef.current} mapReady={mapReady} />
       <MapFeatureSelection active={featureSelectionActive} map={mapRef.current} mapReady={mapReady} />
       {hasLoadedDigitizeMap ? (

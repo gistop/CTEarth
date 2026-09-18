@@ -259,4 +259,86 @@ export const gisToolDefinitions: AiToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'raster_calculator',
+    description: 'Evaluate a map-algebra expression cell by cell over the uploaded GeoTIFF rasters and add the result as a new raster. Quote raster names exactly as listed by list_layers, for example "dem.tif" * 2 + "slope.tif".',
+    parameters: {
+      type: 'object',
+      properties: {
+        expression: {
+          type: 'string',
+          description: 'Map-algebra expression referencing rasters by name in double quotes. Supports numbers, + - * / %, comparisons < <= > >= == !=, && || !, parentheses, and functions abs sqrt ln log log10 exp pow min max floor ceil round con(condition, trueValue, falseValue) isnull(value).',
+        },
+        outputName: {
+          type: 'string',
+          description: 'Optional output GeoTIFF file name.',
+        },
+      },
+      required: ['expression'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'raster_reclassify',
+    description: 'Reclassify a GeoTIFF raster into sequential classes (1..N) and add the result as a new raster. Supports Jenks natural breaks, quantile, equal interval, or custom break values; nodata cells stay nodata.',
+    parameters: {
+      type: 'object',
+      properties: {
+        method: {
+          type: 'string',
+          enum: ['jenks', 'quantile', 'equalInterval', 'custom'],
+          description: 'Classification method: jenks natural breaks, quantile, equalInterval, or custom break values.',
+        },
+        classCount: {
+          type: 'integer',
+          minimum: 2,
+          maximum: 64,
+          description: 'Number of classes for jenks, quantile, and equalInterval. Default is 5.',
+        },
+        customBreaks: {
+          type: 'string',
+          description: 'Comma-separated strictly ascending break values for the custom method, for example "100,200,500"; classes equal breaks + 1.',
+        },
+        rasterName: {
+          type: 'string',
+          description: 'Optional input raster name exactly as listed by list_layers. Defaults to the active raster.',
+        },
+        outputName: {
+          type: 'string',
+          description: 'Optional output GeoTIFF file name.',
+        },
+      },
+      required: ['method'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'raster_resample',
+    description: 'Resample a GeoTIFF raster to a new cell size using nearest, bilinear, cubic convolution, or majority resampling, and add the result as a new raster.',
+    parameters: {
+      type: 'object',
+      properties: {
+        method: {
+          type: 'string',
+          enum: ['nearest', 'bilinear', 'cubic', 'majority'],
+          description: 'Resampling method. Use nearest for categorical data, bilinear or cubic for continuous surfaces, and majority for downsampling categorical rasters.',
+        },
+        cellSize: {
+        exclusiveMinimum: 0,
+          type: 'number',
+          description: 'Target cell size in the raster coordinate units. Omit to keep the current cell size.',
+        },
+        rasterName: {
+          type: 'string',
+          description: 'Optional input raster name exactly as listed by list_layers. Defaults to the active raster.',
+        },
+        outputName: {
+          type: 'string',
+          description: 'Optional output GeoTIFF file name.',
+        },
+      },
+      required: ['method'],
+      additionalProperties: false,
+    },
+  },
 ];

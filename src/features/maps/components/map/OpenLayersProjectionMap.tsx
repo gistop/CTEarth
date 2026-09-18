@@ -20,6 +20,7 @@ import { useMapViewport } from './MapViewportContext';
 import { useMapGroupRenderState } from '../../../../mapGroupRenderState';
 import {
   createOpenLayersLayerAdapter,
+  syncOpenLayersRasters,
   type OpenLayersBasemapLayer,
   useLayerStore,
 } from '../../../layers';
@@ -48,7 +49,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
   const [mapInstance, setMapInstance] = useState<Map | null>(null);
   const uploadedSourceRef = useRef(new VectorSource<Feature<Geometry>>());
   const vectorOverlaySourceRef = useRef(new VectorSource<Feature<Geometry>>());
-  const rasterLayerRef = useRef<ImageLayer<ImageStatic> | null>(null);
+  const rasterLayersRef = useRef(new globalThis.Map<string, ImageLayer<ImageStatic>>());
   const vectorOverlayLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const uploadedLayerRef = useRef<VectorLayer<VectorSource<Feature<Geometry>>> | null>(null);
   const basemapLayersRef = useRef(new globalThis.Map<string, OpenLayersBasemapLayer>());
@@ -61,6 +62,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     layerVisibility,
     layers,
     raster,
+    rasters,
     rasterLayerVisibility,
     rasterZoomRequest,
     rasterStyle,
@@ -128,10 +130,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       return;
     }
 
-    const rasterLayer = new ImageLayer<ImageStatic>({
-      opacity: rasterStyle.opacity,
-      visible: false,
-    });
     const vectorOverlayLayer = new VectorLayer({
       source: vectorOverlaySourceRef.current,
       style: createVectorOverlayStyle,
@@ -144,7 +142,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       target: container,
       controls: defaultControls({ zoom: false }),
       layers: [
-        rasterLayer,
         vectorOverlayLayer,
         uploadedLayer,
       ],
@@ -183,7 +180,6 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       });
     }
 
-    rasterLayerRef.current = rasterLayer;
     vectorOverlayLayerRef.current = vectorOverlayLayer;
     uploadedLayerRef.current = uploadedLayer;
     mapRef.current = map;
@@ -203,7 +199,11 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
         map.removeLayer(layer);
       });
       basemapLayersRef.current.clear();
-      rasterLayerRef.current = null;
+      rasterLayersRef.current.forEach((layer) => {
+        map.removeLayer(layer);
+        layer.dispose();
+      });
+      rasterLayersRef.current.clear();
       vectorOverlayLayerRef.current = null;
       uploadedLayerRef.current = null;
     };
@@ -230,6 +230,8 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       return;
     }
 
+    syncOpenLayersRasters(map, rasterLayersRef.current, rasters, rasterLayerVisibility,
+      rasterStyle.opacity, layerVisibility.raster, projectionCode);
     createOpenLayersLayerAdapter().sync({
       map,
       entries: mapGroupRenderState.entries,
@@ -238,36 +240,11 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
       stacking: 'ordered',
       orderTargets: {
         uploadedLayer: uploadedLayerRef.current,
-        rasterLayer: rasterLayerRef.current,
+        rasterLayers: rasterLayersRef.current,
         vectorOverlayLayer: vectorOverlayLayerRef.current,
-        rasterId: raster?.id,
       },
     });
-  }, [mapGroupRenderState.entries, raster?.id]);
-
-  useEffect(() => {
-    const layer = rasterLayerRef.current;
-
-    if (!layer) {
-      return;
-    }
-
-    const isRasterVisible = Boolean(raster && (rasterLayerVisibility[raster.id] ?? layerVisibility.raster));
-
-    layer.setOpacity(rasterStyle.opacity);
-    layer.setVisible(isRasterVisible);
-
-    if (!raster) {
-      layer.setSource(null);
-      return;
-    }
-
-    layer.setSource(new ImageStatic({
-      imageExtent: rasterExtent(raster.coordinates, projectionCode),
-      projection: projectionCode,
-      url: raster.imageUrl,
-    }));
-  }, [layerVisibility.raster, projectionCode, raster, rasterLayerVisibility, rasterStyle.opacity]);
+  }, [mapInstance, mapGroupRenderState.entries, rasters, rasterLayerVisibility, rasterStyle.opacity, layerVisibility.raster, projectionCode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -385,22 +362,6 @@ function zoomOpenLayersByDelta(map: Map | null, delta: number) {
 
   const view = map.getView();
   view.setZoom((view.getZoom() ?? CHINA_ZOOM) + delta);
-}
-
-function rasterExtent(
-  coordinates: [[number, number], [number, number], [number, number], [number, number]],
-  projectionCode: string,
-) {
-  const projected = coordinates.map((coordinate) => transform(coordinate, 'EPSG:4326', projectionCode));
-  const xs = projected.map((coordinate) => coordinate[0]);
-  const ys = projected.map((coordinate) => coordinate[1]);
-
-  return [
-    Math.min(...xs),
-    Math.min(...ys),
-    Math.max(...xs),
-    Math.max(...ys),
-  ];
 }
 
 function rasterBoundsFromCoordinates(

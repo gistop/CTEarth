@@ -5,6 +5,9 @@ import type {
   IdwParameters as IdwRunParameters,
   OverlayParameters as OverlayRunParameters,
   OverlayToolId,
+  RasterCalculatorParameters as RasterCalculatorRunParameters,
+  RasterReclassifyParameters as RasterReclassifyRunParameters,
+  RasterResampleParameters as RasterResampleRunParameters,
   TerrainParameters as TerrainRunParameters,
   TerrainToolId,
 } from '../../../../../gisStore';
@@ -12,9 +15,15 @@ import { useGis } from '../../../../../gisStore';
 import { GeoprocessingEnvironmentForm } from '../../../components/GeoprocessingEnvironmentForm';
 import { ToolDetailShell } from '../../../components/ToolDetailShell';
 import type { ToolDetailTabId } from '../../../types';
+import { validateRasterExpression } from '../pixel/rasterCalculatorEngine';
+import { validateRasterReclassifyParams } from '../pixel/reclassifyEngine';
+import { validateRasterResampleParams } from '../pixel/resampleEngine';
 import {
   createDefaultExtractByMaskParameters,
   createDefaultOverlayParameters,
+  createDefaultRasterCalculatorParameters,
+  createDefaultRasterReclassifyParameters,
+  createDefaultRasterResampleParameters,
   defaultIdwLayerId,
   defaultMaskLayerId,
   isIdwLayerAvailable,
@@ -33,6 +42,9 @@ import {
   ExtractByMaskParametersForm,
   IdwParametersForm,
   OverlayParametersForm,
+  RasterCalculatorForm,
+  RasterReclassifyForm,
+  RasterResampleForm,
   TerrainParametersForm,
 } from './AnalysisToolForms';
 
@@ -48,10 +60,14 @@ export function AnalysisToolPanel({
     layer,
     layers,
     raster,
+    rasters,
     runBufferAnalysis,
     runExtractByMask,
     runIdwInterpolation,
     runOverlayAnalysis,
+    runRasterCalculator,
+    runRasterReclassify,
+    runRasterResample,
     runTerrainAnalysis,
     toolsReady,
     vectorOverlay,
@@ -68,6 +84,9 @@ export function AnalysisToolPanel({
   const [terrainParamsByTool, setTerrainParamsByTool] = useState<Record<TerrainToolId, TerrainRunParameters>>(
     createDefaultTerrainParameters,
   );
+  const [rasterCalcParams, setRasterCalcParams] = useState<RasterCalculatorRunParameters>(createDefaultRasterCalculatorParameters);
+  const [rasterReclassifyParams, setRasterReclassifyParams] = useState<RasterReclassifyRunParameters>(createDefaultRasterReclassifyParameters);
+  const [rasterResampleParams, setRasterResampleParams] = useState<RasterResampleRunParameters>(createDefaultRasterResampleParameters);
   const terrainTool = isTerrainTool(tool) ? tool : null;
   const overlayTool = isOverlayTool(tool) ? tool : null;
   const terrainParams = terrainTool ? terrainParamsByTool[terrainTool] : terrainParamsByTool.hillshade;
@@ -77,6 +96,18 @@ export function AnalysisToolPanel({
   const hasOverlayLayers = isOverlayLayerAvailable(layers, vectorOverlay, overlayParams.inputLayerId)
     && isOverlayLayerAvailable(layers, vectorOverlay, overlayParams.overlayLayerId)
     && overlayParams.inputLayerId !== overlayParams.overlayLayerId;
+  const rasterCalcReady = validateRasterExpression(rasterCalcParams.expression, rasters).ok;
+  const rasterReclassifyReady = rasters.length > 0
+    && validateRasterReclassifyParams({
+      method: rasterReclassifyParams.method,
+      classCount: rasterReclassifyParams.classCount,
+      customBreaks: rasterReclassifyParams.customBreaks,
+    }).ok;
+  const rasterResampleReady = rasters.length > 0
+    && validateRasterResampleParams({
+      method: rasterResampleParams.method,
+      cellSize: rasterResampleParams.cellSize,
+    }).ok;
 
   useEffect(() => {
     const idwLayerId = defaultIdwLayerId(layers, layer);
@@ -115,12 +146,28 @@ export function AnalysisToolPanel({
     }));
   }, [layers, vectorOverlay]);
 
+  useEffect(() => {
+    setRasterReclassifyParams((current) => (
+      rasters.some((item) => item.id === current.rasterId)
+        ? current
+        : { ...current, rasterId: raster?.id ?? '' }
+    ));
+    setRasterResampleParams((current) => (
+      rasters.some((item) => item.id === current.rasterId)
+        ? current
+        : { ...current, rasterId: raster?.id ?? '' }
+    ));
+  }, [raster, rasters]);
+
   const runDisabled = !toolsReady
     || (tool === 'buffer' && !layer)
     || (tool === 'idw' && !hasPointLayer)
     || (tool === 'extractByMask' && (!raster || !hasMaskLayer))
     || (Boolean(terrainTool) && !raster)
-    || (Boolean(overlayTool) && !hasOverlayLayers);
+    || (Boolean(overlayTool) && !hasOverlayLayers)
+    || (tool === 'rasterCalculator' && !rasterCalcReady)
+    || (tool === 'rasterReclassify' && !rasterReclassifyReady)
+    || (tool === 'rasterResample' && !rasterResampleReady);
 
   const runActiveTool = () => {
     if (tool === 'idw') {
@@ -131,6 +178,12 @@ export function AnalysisToolPanel({
       void runOverlayAnalysis(overlayTool, overlayParams);
     } else if (tool === 'extractByMask') {
       void runExtractByMask(extractByMaskParams);
+    } else if (tool === 'rasterCalculator') {
+      void runRasterCalculator(rasterCalcParams);
+    } else if (tool === 'rasterReclassify') {
+      void runRasterReclassify(rasterReclassifyParams);
+    } else if (tool === 'rasterResample') {
+      void runRasterResample(rasterResampleParams);
     } else if (terrainTool) {
       void runTerrainAnalysis(terrainTool, terrainParams);
     }
@@ -150,6 +203,12 @@ export function AnalysisToolPanel({
       }));
     } else if (tool === 'extractByMask') {
       setExtractByMaskParams(createDefaultExtractByMaskParameters(layers, vectorOverlay));
+    } else if (tool === 'rasterCalculator') {
+      setRasterCalcParams(createDefaultRasterCalculatorParameters());
+    } else if (tool === 'rasterReclassify') {
+      setRasterReclassifyParams(createDefaultRasterReclassifyParameters());
+    } else if (tool === 'rasterResample') {
+      setRasterResampleParams(createDefaultRasterResampleParameters());
     } else if (terrainTool) {
       setTerrainParamsByTool((current) => ({
         ...current,
@@ -176,6 +235,12 @@ export function AnalysisToolPanel({
     );
   } else if (tool === 'extractByMask') {
     parameters = <ExtractByMaskParametersForm params={extractByMaskParams} onChange={(name, value) => setExtractByMaskParams((current) => ({ ...current, [name]: value }))} />;
+  } else if (tool === 'rasterCalculator') {
+    parameters = <RasterCalculatorForm params={rasterCalcParams} onChange={(name, value) => setRasterCalcParams((current) => ({ ...current, [name]: value }))} />;
+  } else if (tool === 'rasterReclassify') {
+    parameters = <RasterReclassifyForm params={rasterReclassifyParams} onChange={(name, value) => setRasterReclassifyParams((current) => ({ ...current, [name]: value }))} />;
+  } else if (tool === 'rasterResample') {
+    parameters = <RasterResampleForm params={rasterResampleParams} onChange={(name, value) => setRasterResampleParams((current) => ({ ...current, [name]: value }))} />;
   } else if (terrainTool) {
     parameters = (
       <TerrainParametersForm
