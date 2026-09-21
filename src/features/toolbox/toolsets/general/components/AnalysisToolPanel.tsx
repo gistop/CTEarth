@@ -118,12 +118,15 @@ export function AnalysisToolPanel({
       return {
         ...current,
         layerId: nextLayerId,
+        maskLayerId: current.maskLayerId && isMaskLayerAvailable(layers, vectorOverlay, current.maskLayerId)
+          ? current.maskLayerId
+          : '',
         field: selectedLayer && (!current.field || !selectedLayer.numericFields.includes(current.field))
           ? selectedLayer.selectedField || selectedLayer.numericFields[0] || ''
           : current.field,
       };
     });
-  }, [layer, layers]);
+  }, [layer, layers, vectorOverlay]);
 
   useEffect(() => {
     setOverlayParamsByTool((current) => {
@@ -257,7 +260,14 @@ export function AnalysisToolPanel({
   return (
     <ToolDetailShell
       activeTab={activeTab}
-      environment={<GeoprocessingEnvironmentForm />}
+      environment={(
+        <GeoprocessingEnvironmentForm
+          maskLayerId={tool === 'idw' ? idwParams.maskLayerId : undefined}
+          onMaskLayerChange={tool === 'idw'
+            ? (maskLayerId) => setIdwParams((current) => ({ ...current, maskLayerId }))
+            : undefined}
+        />
+      )}
       isRunning={isRunning}
       onBack={onBack}
       onChangeTab={setActiveTab}
@@ -282,6 +292,7 @@ function createDefaultIdwParameters(
     field: selectedLayer?.selectedField || selectedLayer?.numericFields[0] || '',
     outputName: 'idw-interpolation.tif',
     cellSize: '0.001',
+    maskLayerId: '',
     weight: '2',
     radius: '0',
     minPoints: '0',

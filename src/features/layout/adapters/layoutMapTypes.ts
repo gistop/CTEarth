@@ -8,7 +8,7 @@ export type LayoutMapInput = {
   vectorOverlay: VectorOverlay | null;
   layerVisibility: LayerVisibility;
   rasterLayerVisibility: Record<string, boolean>;
-  rasterStyle: RasterLayerStyle;
+  rasterStyles: Record<string, RasterLayerStyle>;
   uploadedLayerStyles: Record<string, UploadedLayerStyle>;
   uploadedLayerVisibility: Record<string, boolean>;
   vectorOverlayStyle: VectorOverlayStyle;

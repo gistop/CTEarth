@@ -65,7 +65,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     rasters,
     rasterLayerVisibility,
     rasterZoomRequest,
-    rasterStyle,
+    rasterStyles,
     uploadedLayerStyles,
     uploadedLayerVisibility,
     vectorOverlay,
@@ -231,7 +231,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
     }
 
     syncOpenLayersRasters(map, rasterLayersRef.current, rasters, rasterLayerVisibility,
-      rasterStyle.opacity, layerVisibility.raster, projectionCode);
+      rasterStyles, layerVisibility.raster, projectionCode);
     createOpenLayersLayerAdapter().sync({
       map,
       entries: mapGroupRenderState.entries,
@@ -244,7 +244,7 @@ function OpenLayersProjectionMap({ basemap, displayCrs, identifyActive, onCoordi
         vectorOverlayLayer: vectorOverlayLayerRef.current,
       },
     });
-  }, [mapInstance, mapGroupRenderState.entries, rasters, rasterLayerVisibility, rasterStyle.opacity, layerVisibility.raster, projectionCode]);
+  }, [mapInstance, mapGroupRenderState.entries, rasters, rasterLayerVisibility, rasterStyles, layerVisibility.raster, projectionCode]);
 
   useEffect(() => {
     const map = mapRef.current;

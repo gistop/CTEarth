@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { AlertTriangle, Trash2, X } from 'lucide-react';
 
 export type DeleteLayerConfirmTarget = {
-  kind: 'layer' | 'basemap';
+  kind: 'layer' | 'basemap' | 'map';
   name: string;
 };
 
@@ -46,7 +46,10 @@ export function DeleteLayerConfirmDialog({ target, onCancel, onConfirm }: Delete
     return null;
   }
 
-  const title = target.kind === 'basemap' ? '\u5220\u9664\u5e95\u56fe' : '\u5220\u9664\u56fe\u5c42';
+  const title = target.kind === 'basemap' ? '删除底图' : target.kind === 'map' ? '删除地图' : '删除图层';
+  const warning = target.kind === 'map'
+    ? '地图中的图层将移动到相邻地图，删除后无法恢复，请确认当前选择。'
+    : '删除后无法恢复，请确认当前选择。';
 
   return (
     <div
@@ -80,7 +83,7 @@ export function DeleteLayerConfirmDialog({ target, onCancel, onConfirm }: Delete
         <p id="delete-dialog-description" className="delete-dialog-description">
           {'\u786e\u5b9a\u8981\u5220\u9664\u201c'}<strong>{target.name}</strong>{'\u201d\u5417\uff1f'}
         </p>
-        <p className="delete-dialog-warning">{'\u5220\u9664\u540e\u65e0\u6cd5\u6062\u590d\uff0c\u8bf7\u786e\u8ba4\u5f53\u524d\u9009\u62e9\u3002'}</p>
+        <p className="delete-dialog-warning">{warning}</p>
         <div className="delete-dialog-actions">
           <button type="button" className="delete-dialog-cancel" ref={cancelButtonRef} onClick={onCancel}>
             {'\u53d6\u6d88'}

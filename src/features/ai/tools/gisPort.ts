@@ -1,5 +1,5 @@
 import type {
-  BufferParameters, GisOperationResult, IdwParameters, LayerVisibility, OverlayParameters, OverlayToolId,
+  BufferParameters, EditableGeometryType, GisOperationResult, IdwParameters, LayerVisibility, OverlayParameters, OverlayToolId,
   RasterCalculatorParameters, RasterOverlay, RasterReclassifyOutput, RasterReclassifyParameters,
   RasterResampleOutput, RasterResampleParameters,
   SelectByLocationParameters, SelectByValueParameters, SelectionResult,
@@ -21,6 +21,11 @@ export type AiGisSnapshot = {
 
 export interface AiGisPort {
   getSnapshot(): AiGisSnapshot;
+  createBlankGeoJsonLayer(params: { fileName?: string; geometryType: EditableGeometryType }): {
+    layerId: string;
+    fileName: string;
+    geometryType: EditableGeometryType;
+  };
   selectByValue(params: SelectByValueParameters): Promise<SelectionResult | null>;
   selectByLocation(params: SelectByLocationParameters): Promise<SelectionResult | null>;
   runBufferAnalysis(params: BufferParameters): Promise<GisOperationResult<UploadedLayer>>;

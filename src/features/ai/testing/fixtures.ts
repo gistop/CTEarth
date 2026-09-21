@@ -37,6 +37,11 @@ export function createGisFixture() {
   const selection: SelectionResult = { layerId: layer.id, layerName: 'roads', totalCount: 1, selectedCount: 1, matchedCount: 1 };
   const port = {
     getSnapshot: () => snapshot,
+    createBlankGeoJsonLayer: vi.fn((params: { fileName?: string; geometryType: 'Point' | 'LineString' | 'Polygon' }) => ({
+      layerId: 'created-layer',
+      fileName: params.fileName ?? `${params.geometryType.toLowerCase()}-layer.geojson`,
+      geometryType: params.geometryType,
+    })),
     selectByValue: vi.fn(async (): Promise<SelectionResult | null> => selection),
     selectByLocation: vi.fn(async (): Promise<SelectionResult | null> => selection),
     runBufferAnalysis: vi.fn(async (): Promise<GisOperationResult<UploadedLayer>> => ({ ok: true, output: generatedLayer })),

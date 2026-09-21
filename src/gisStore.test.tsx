@@ -262,6 +262,35 @@ describe('generated layer lifecycle', () => {
     expect(result.current.gis.raster).toBe(second);
   });
 
+  it('applies the selected mask after IDW interpolation', async () => {
+    const { result } = await createHarness();
+
+    await act(async () => {
+      await result.current.gis.runIdwInterpolation({
+        layerId: 'points',
+        field: 'value',
+        outputName: 'masked-idw.tif',
+        cellSize: '0.01',
+        weight: '2',
+        radius: '0',
+        minPoints: '0',
+        maskLayerId: 'mask',
+      });
+    });
+
+    const calls = vi.mocked(runTool).mock.calls;
+    const idwCall = calls.find(([tool]) => tool === 'idw_interpolation');
+    const maskCall = calls.find(([tool]) => tool === 'clip_raster_to_polygon');
+
+    expect(idwCall?.[1]?.args).toContain('--output=/work/masked-idw-unmasked.tif');
+    expect(maskCall?.[1]?.args).toEqual(expect.arrayContaining([
+      '--input=/work/masked-idw-unmasked.tif',
+      '--polygons=/work/mask.geojson',
+      '--output=/work/masked-idw.tif',
+      '--maintain_dimensions=false',
+    ]));
+    expect(result.current.gis.raster?.name).toBe('masked-idw.tif');
+  });
   it('persists, restores and subsequently deletes each generated layer independently', async () => {
     const firstMount = await createHarness();
     vi.useFakeTimers();
@@ -302,7 +331,7 @@ describe('generated layer lifecycle', () => {
     const second = result.current.gis.layer!;
     expect(result.current.gis.layers).toContain(first);
     fireEvent.click(screen.getByRole('treeitem', { name: 'ai-buffer' }));
-    const deleteButton = screen.getByRole('button', { name: '删除选中图层' }) as HTMLButtonElement;
+    const deleteButton = screen.getByRole('button', { name: '删除选中图层或地图' }) as HTMLButtonElement;
     expect(deleteButton.disabled).toBe(false);
     fireEvent.click(deleteButton);
     fireEvent.click(within(screen.getByRole('dialog', { name: '删除图层' })).getByRole('button', { name: '取消' }));
@@ -642,5 +671,150 @@ describe('raster swipe', () => {
 
     act(() => { result.current.gis.disableRasterSwipe(); });
     expect(result.current.gis.swipeRasterId).toBeNull();
+  });
+});
+
+describe('raster styles', () => {
+  it('applies opacity per raster without affecting other rasters', async () => {
+    const { result } = await createHarness();
+    await act(async () => {
+      await result.current.gis.runRasterCalculator({ expression: '"dem.tif" * 2', outputName: 'calc.tif' });
+    });
+    const calc = result.current.gis.raster!;
+
+    expect(result.current.gis.rasterStyles.dem).toEqual({ opacity: 0.82 });
+    expect(result.current.gis.rasterStyles[calc.id]).toEqual({ opacity: 0.82 });
+
+    act(() => { result.current.gis.setRasterStyle(calc.id, { opacity: 0.3 }); });
+    expect(result.current.gis.rasterStyles[calc.id]).toEqual({ opacity: 0.3 });
+    expect(result.current.gis.rasterStyles.dem).toEqual({ opacity: 0.82 });
+
+    act(() => { result.current.gis.setRasterStyle(calc.id, { opacity: 0.55 }); });
+    expect(result.current.gis.rasterStyles[calc.id]).toEqual({ opacity: 0.55 });
+    expect(result.current.gis.rasterStyles.dem).toEqual({ opacity: 0.82 });
+
+    act(() => { result.current.gis.deleteRasterLayer(calc.id); });
+    expect(result.current.gis.rasterStyles[calc.id]).toBeUndefined();
+    expect(result.current.gis.rasterStyles.dem).toEqual({ opacity: 0.82 });
+  });
+});
+
+describe('create blank layer', () => {
+  it('opens the dialog from the layer panel, supports geometry selection and creates the layer', async () => {
+    const { result } = await createHarness(true);
+    const before = result.current.gis.layers.length;
+
+    fireEvent.click(screen.getByRole('button', { name: '新建空白 GeoJSON 图层' }));
+    expect(screen.getByRole('dialog', { name: '新建空白图层' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('图层名称'), { target: { value: 'roads.geojson' } });
+    fireEvent.click(screen.getByRole('radio', { name: '线' }));
+    fireEvent.click(screen.getByRole('button', { name: '新建' }));
+
+    await waitFor(() => expect(result.current.gis.layers).toHaveLength(before + 1));
+    const created = result.current.gis.layers.at(-1)!;
+    expect(created.fileName).toBe('roads.geojson');
+    expect(created.geometryType).toBe('LineString');
+    expect(result.current.gis.layer!.id).toBe(created.id);
+    expect(screen.queryByRole('dialog', { name: '新建空白图层' })).toBeNull();
+  });
+
+  it('cancels the dialog without creating anything', async () => {
+    const { result } = await createHarness(true);
+    const before = result.current.gis.layers;
+
+    fireEvent.click(screen.getByRole('button', { name: '新建空白 GeoJSON 图层' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(result.current.gis.layers).toBe(before);
+    expect(screen.queryByRole('dialog', { name: '新建空白图层' })).toBeNull();
+  });
+
+  it('creates a blank layer through the AI boundary', async () => {
+    const { result } = await createHarness();
+    const execute = createGisToolExecutor(result.current.port);
+    const aiResult = await execute('create_layer', { geometryType: 'Point', fileName: 'wells.geojson' });
+    expect(aiResult).toMatchObject({ status: 'success', data: { resultLayer: { name: 'wells.geojson', kind: 'vector' } } });
+    await waitFor(() => expect(result.current.gis.layers.at(-1)!.fileName).toBe('wells.geojson'));
+    const created = result.current.gis.layers.at(-1)!;
+    expect(created.geometryType).toBe('Point');
+    await waitFor(() => expect(result.current.gis.layer!.id).toBe(created.id));
+  });
+});
+
+describe('create map group', () => {
+  it('opens a dialog with the next default name, validates duplicates and creates the map', async () => {
+    await createHarness(true);
+    const promptSpy = vi.spyOn(window, 'prompt');
+    const alertSpy = vi.spyOn(window, 'alert');
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建地图…' }));
+    expect(screen.getByRole('dialog', { name: '新建地图' })).toBeTruthy();
+    expect(promptSpy).not.toHaveBeenCalled();
+
+    const nameInput = screen.getByLabelText('地图名称') as HTMLInputElement;
+    expect(nameInput.value).toBe('地图 2');
+
+    fireEvent.change(nameInput, { target: { value: '地图' } });
+    expect(screen.getByRole('alert').textContent).toContain('地图名称不能重复');
+    expect((screen.getByRole('button', { name: '新建' }) as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.change(nameInput, { target: { value: '   ' } });
+    expect(screen.getByRole('alert').textContent).toContain('不能为空');
+
+    fireEvent.change(nameInput, { target: { value: '规划图' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '新建' }));
+
+    expect(await screen.findByRole('treeitem', { name: '规划图' })).toBeTruthy();
+    expect(screen.getByRole('treeitem', { name: '地图' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: '新建地图' })).toBeNull();
+    expect(alertSpy).not.toHaveBeenCalled();
+  });
+
+  it('cancels the dialog without creating a map or touching GIS data', async () => {
+    const { result } = await createHarness(true);
+    const before = result.current.gis.rasters;
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建地图…' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(screen.queryByRole('dialog', { name: '新建地图' })).toBeNull();
+    expect(screen.queryByRole('treeitem', { name: '地图 2' })).toBeNull();
+    expect(result.current.gis.rasters).toBe(before);
+  });
+});
+
+describe('delete selected map', () => {
+  it('deletes the current map after confirmation, migrates its layers and keeps the last map undeletable', async () => {
+    const { result } = await createHarness(true);
+    const layerCountBefore = result.current.gis.layers.length;
+    await screen.findByRole('treeitem', { name: 'points' });
+
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建地图…' }));
+    fireEvent.change(screen.getByLabelText('地图名称'), { target: { value: '规划图' } });
+    fireEvent.click(screen.getByRole('button', { name: '新建' }));
+    expect(await screen.findByRole('treeitem', { name: '规划图' })).toBeTruthy();
+
+    const deleteButton = screen.getByRole('button', { name: '删除选中图层或地图' }) as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+    fireEvent.click(deleteButton);
+
+    const dialog = screen.getByRole('dialog', { name: '删除地图' });
+    expect(dialog.textContent).toContain('地图');
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(screen.getByRole('treeitem', { name: '地图' })).toBeTruthy();
+
+    fireEvent.click(deleteButton);
+    fireEvent.click(within(screen.getByRole('dialog', { name: '删除地图' })).getByRole('button', { name: '删除' }));
+
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: '地图' })).toBeNull());
+    expect(screen.getByRole('treeitem', { name: '规划图' })).toBeTruthy();
+    expect(await screen.findByRole('treeitem', { name: 'points' })).toBeTruthy();
+    expect(result.current.gis.layers).toHaveLength(layerCountBefore);
+    expect(deleteButton.disabled).toBe(true);
   });
 });

@@ -4,7 +4,7 @@ import {
   getRasterBasemapDefinitions,
   type RasterBasemapTileDefinition,
 } from '../../maps/components/map/rasterBasemapSources';
-import type { LayerEngineAdapter, RasterRenderData } from './layerAdapterTypes';
+import { resolveRasterOpacity, type LayerEngineAdapter, type RasterRenderData, type RasterStyleLookup } from './layerAdapterTypes';
 
 const RASTER_PREFIX = 'raster-overlay-';
 
@@ -12,7 +12,7 @@ export function syncMapLibreRasters(
   map: maplibregl.Map,
   rasters: RasterRenderData[],
   visibility: Record<string, boolean>,
-  opacity: number,
+  styles: RasterStyleLookup,
   fallbackVisible: boolean,
 ) {
   const expectedIds = new Set(rasters.map((raster) => `${RASTER_PREFIX}${raster.id}`));
@@ -37,7 +37,7 @@ export function syncMapLibreRasters(
       map.addLayer({ id, type: 'raster', source: id, paint: { 'raster-fade-duration': 0 } });
     }
     map.setLayoutProperty(id, 'visibility', (visibility[raster.id] ?? fallbackVisible) ? 'visible' : 'none');
-    map.setPaintProperty(id, 'raster-opacity', opacity);
+    map.setPaintProperty(id, 'raster-opacity', resolveRasterOpacity(styles, raster.id));
   });
 }
 const VECTOR_OVERLAY_LAYER_IDS = ['buffer-fill', 'buffer-outline'];

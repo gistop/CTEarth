@@ -11,14 +11,14 @@ import {
 import ImageLayer from 'ol/layer/Image.js';
 import ImageStatic from 'ol/source/ImageStatic.js';
 import { transform } from 'ol/proj.js';
-import type { LayerEngineAdapter, RasterRenderData } from './layerAdapterTypes';
+import { resolveRasterOpacity, type LayerEngineAdapter, type RasterRenderData, type RasterStyleLookup } from './layerAdapterTypes';
 
 export function syncOpenLayersRasters(
   map: Map,
   rasterLayers: globalThis.Map<string, ImageLayer<ImageStatic>>,
   rasters: RasterRenderData[],
   visibility: Record<string, boolean>,
-  opacity: number,
+  styles: RasterStyleLookup,
   fallbackVisible: boolean,
   projection: string,
 ) {
@@ -49,7 +49,7 @@ export function syncOpenLayersRasters(
       layer.setSource(new ImageStatic({ imageExtent: extent, projection, url: raster.imageUrl }));
     }
     layer.setVisible(visibility[raster.id] ?? fallbackVisible);
-    layer.setOpacity(opacity);
+    layer.setOpacity(resolveRasterOpacity(styles, raster.id));
   });
 }
 

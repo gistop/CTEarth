@@ -6,6 +6,7 @@ import type {
   RasterToolInput,
   UploadedLayerStyle,
 } from './gisStore';
+import type { SourceCrs } from './coordinateReferenceSystem';
 
 export type WorkspaceVectorLayer = {
   id: string;
@@ -15,6 +16,11 @@ export type WorkspaceVectorLayer = {
     type: 'FeatureCollection';
     features: unknown[];
   };
+  sourceInput?: {
+    inputName: string;
+    files: Record<string, Uint8Array>;
+  };
+  sourceCrs?: SourceCrs;
   selectedField: string;
   selectedFeatureIndexes: number[];
 };
@@ -23,6 +29,8 @@ export type WorkspaceRasterLayer = {
   id: string;
   name: string;
   toolInput: RasterToolInput;
+  /** 每个栅格独立的渲染样式；旧版草稿没有该字段，回退到顶层 rasterStyle。 */
+  style?: RasterLayerStyle;
 };
 
 export type WorkspaceDraft = {

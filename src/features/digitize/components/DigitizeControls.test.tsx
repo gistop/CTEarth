@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { Fragment } from 'react';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DigitizeProvider } from './DigitizeProvider';
@@ -28,7 +29,9 @@ function ClearButton() {
 function Ribbon({ active = true }: { active?: boolean }) {
   const groups = useDigitizeRibbonGroups(active);
   return <>{groups.map(group => <section key={group.title} aria-label={group.title}>
-    {group.tools.map(tool => <button key={tool.label} disabled={tool.disabled} aria-pressed={tool.active} onClick={tool.onClick}>{tool.label}</button>)}
+    {group.tools.map(tool => tool.render
+      ? <Fragment key={tool.label}>{tool.render()}</Fragment>
+      : <button key={tool.label} disabled={tool.disabled} aria-pressed={tool.active} onClick={tool.onClick}>{tool.label}</button>)}
     {group.accessory}
   </section>)}</>;
 }
@@ -73,7 +76,16 @@ describe('digitize manual controls and provider', () => {
     fireEvent.click(screen.getByText('Save As')); expect(gis.saveGeoJsonLayer).toHaveBeenCalledWith('points', { saveAs: true });
     fireEvent.change(screen.getByLabelText('当前编辑图层'), { target: { value: 'points' } }); expect(gis.setActiveLayer).toHaveBeenCalledWith('points');
     vi.spyOn(window, 'prompt').mockReturnValue('new.geojson');
-    fireEvent.click(screen.getByText('New Poly')); expect(gis.createBlankGeoJsonLayer).toHaveBeenCalledWith({ fileName: 'new.geojson', geometryType: 'Polygon' });
+    gis.createBlankGeoJsonLayer.mockImplementation((({ fileName, geometryType }: { fileName: string; geometryType: 'Point' | 'LineString' | 'Polygon' }) => {
+      gis.layers = [...gis.layers, { ...createEditableLayer(), id: 'created', fileName, geometryType }];
+      gis.activeLayerId = 'created';
+    }));
+    fireEvent.click(screen.getByText('New Poly'));
+    expect(window.prompt).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('radio', { name: '线' }));
+    fireEvent.click(screen.getByRole('button', { name: '新建' }));
+    expect(gis.createBlankGeoJsonLayer).toHaveBeenCalledWith({ fileName: 'linestring-layer.geojson', geometryType: 'LineString' });
+    expect(store.getSnapshot().activeTool).toBe('LineString');
   });
 
   it('coordinates tool geometry and deactivates editing when leaving the edit tab', () => {

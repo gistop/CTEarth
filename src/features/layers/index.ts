@@ -1,4 +1,6 @@
 export { LayerList } from './components/LayerList';
+export { CreateBlankLayerDialog, blankLayerGeometryLabels, defaultBlankLayerFileName } from './components/CreateBlankLayerDialog';
+export type { CreateBlankLayerParams, CreateBlankLayerTarget } from './components/CreateBlankLayerDialog';
 export { addLayerFields, readLayerFieldDefinitions } from './services/layerFieldService';
 export { useLayerStore, type LayerStore } from './stores/layerStore';
 export { useMapGroupStore, type MapGroupStore } from './stores/mapGroupStore';

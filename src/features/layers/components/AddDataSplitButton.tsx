@@ -85,7 +85,6 @@ export function AddDataSplitButton() {
         onClick={() => fileInputRef.current?.click()}
       >
         <FolderPlus size={16} />
-        <span>本地</span>
       </button>
       <button
         className={isMenuOpen ? 'add-data-toggle is-open' : 'add-data-toggle'}

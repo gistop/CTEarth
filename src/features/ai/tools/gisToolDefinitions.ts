@@ -341,4 +341,24 @@ export const gisToolDefinitions: AiToolDefinition[] = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'create_layer',
+    description: 'Create a new blank editable GeoJSON layer for digitizing points, lines, or polygons. One layer holds a single geometry type; the new layer becomes the active layer and is ready for drawing in the edit tab.',
+    parameters: {
+      type: 'object',
+      properties: {
+        geometryType: {
+          type: 'string',
+          enum: ['Point', 'LineString', 'Polygon'],
+          description: 'Geometry type of the new layer.',
+        },
+        fileName: {
+          type: 'string',
+          description: 'Optional GeoJSON file name, for example "parcels.geojson". Defaults to a type-based name such as "polygon-layer.geojson".',
+        },
+      },
+      required: ['geometryType'],
+      additionalProperties: false,
+    },
+  },
 ];

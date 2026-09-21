@@ -21,7 +21,7 @@ export function useLayerStore() {
     activeRasterId: gis.activeRasterId,
     vectorOverlay: gis.vectorOverlay,
     basemapStyle: gis.basemapStyle,
-    rasterStyle: gis.rasterStyle,
+    rasterStyles: gis.rasterStyles,
     vectorOverlayStyle: gis.vectorOverlayStyle,
     uploadedLayerStyles: gis.uploadedLayerStyles,
     layerVisibility: gis.layerVisibility,

@@ -5,14 +5,12 @@ import initGeoLibre, {
   CogStream,
   GeoTiffReader,
   transform_points_epsg,
-  vector_to_geojson_reproject,
 } from 'geolibre-wasm';
 import { extractCogSubset, initTools, runTool } from 'geolibre-wasm/tools';
 import type { RunToolOptions, ToolResult } from 'geolibre-wasm/tools';
 import { FeatureColumn, GeoPackageDataType, GeometryType } from '@ngageoint/geopackage';
 import geoPackageSqlWasmUrl from '@ngageoint/geopackage/dist/sql-wasm.wasm?url';
 import JSZip from 'jszip';
-import shp from 'shpjs';
 import {
   deleteWorkspaceDraft,
   readWorkspaceDraft,
@@ -25,6 +23,9 @@ import { getLayerFields } from './features/layers/services/layerFieldService';
 import { planRasterCalculator } from './features/toolbox/toolsets/general/pixel/rasterCalculatorEngine';
 import { planRasterReclassify, rasterReclassifyMethodLabels, type RasterReclassifyMethod } from './features/toolbox/toolsets/general/pixel/reclassifyEngine';
 import { planRasterResample, rasterResampleMethodLabels, type RasterResampleMethod } from './features/toolbox/toolsets/general/pixel/resampleEngine';
+import type { SourceCrs } from './coordinateReferenceSystem';
+import { sourceCrsFromEpsg } from './coordinateReferenceSystem';
+import type { UploadDataKind, UploadRasterData, UploadWorkerResponse } from './uploadDataWorkerTypes';
 
 export { displayLayerName } from './features/layers/services/layerService';
 export type { RasterReclassifyMethod } from './features/toolbox/toolsets/general/pixel/reclassifyEngine';
@@ -55,6 +56,7 @@ export type RasterOverlay = {
   min: number;
   max: number;
   epsg?: number;
+  sourceCrs?: SourceCrs;
   geoTransform: number[];
   nodata?: number;
   pixels: Float64Array;
@@ -87,6 +89,7 @@ export type IdwParameters = {
   weight: string;
   radius: string;
   minPoints: string;
+  maskLayerId?: string;
 };
 
 export type BufferParameters = {
@@ -248,6 +251,8 @@ export type UploadedLayer = {
   fileName: string;
   geometryType?: EditableGeometryType;
   toolInput: ShapefileInput;
+  sourceInput?: ShapefileInput;
+  sourceCrs?: SourceCrs;
   geojson: {
     type: 'FeatureCollection';
     features: unknown[];
@@ -298,7 +303,7 @@ type GisContextValue = {
   activeRasterId: string | null;
   vectorOverlay: VectorOverlay | null;
   basemapStyle: BasemapLayerStyle;
-  rasterStyle: RasterLayerStyle;
+  rasterStyles: Record<string, RasterLayerStyle>;
   vectorOverlayStyle: VectorOverlayStyle;
   uploadedLayerStyles: Record<string, UploadedLayerStyle>;
   layerVisibility: LayerVisibility;
@@ -320,7 +325,7 @@ type GisContextValue = {
   uploadGeoPackage: (file: File) => Promise<void>;
   uploadGeoTiff: (file: File) => Promise<void>;
   uploadGeoTiffUrl: (url: string) => Promise<void>;
-  createBlankGeoJsonLayer: (params: { fileName?: string; geometryType: EditableGeometryType }) => string;
+  createBlankGeoJsonLayer: (params: { fileName?: string; geometryType: EditableGeometryType }) => UploadedLayer;
   deleteUploadedLayer: (layerId?: string) => void;
   deleteRasterLayer: (rasterId?: string) => void;
   saveGeoJsonLayer: (layerId?: string, options?: { saveAs?: boolean; fileName?: string }) => Promise<void>;
@@ -330,7 +335,7 @@ type GisContextValue = {
   setUploadedLayerVisibility: (id: string, visible: boolean) => void;
   setAllLayerVisibility: (visible: boolean) => void;
   setBasemapStyle: (patch: Partial<BasemapLayerStyle>) => void;
-  setRasterStyle: (patch: Partial<RasterLayerStyle>) => void;
+  setRasterStyle: (rasterId: string, patch: Partial<RasterLayerStyle>) => void;
   setVectorOverlayStyle: (patch: Partial<VectorOverlayStyle>) => void;
   setUploadedLayerStyle: (id: string, patch: Partial<UploadedLayerStyle>) => void;
   renameUploadedLayer: (id: string, name: string) => void;
@@ -435,7 +440,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [activeRasterId, setActiveRasterId] = useState<string | null>(null);
   const [vectorOverlay, setVectorOverlay] = useState<VectorOverlay | null>(null);
   const [basemapStyle, setBasemapStyleState] = useState<BasemapLayerStyle>(defaultBasemapStyle);
-  const [rasterStyle, setRasterStyleState] = useState<RasterLayerStyle>(defaultRasterStyle);
+  const [rasterStyles, setRasterStyles] = useState<Record<string, RasterLayerStyle>>({});
   const [vectorOverlayStyle, setVectorOverlayStyleState] = useState<VectorOverlayStyle>(defaultVectorOverlayStyle);
   const [uploadedLayerStyles, setUploadedLayerStyles] = useState<Record<string, UploadedLayerStyle>>({});
   const [layerVisibility, setLayerVisibilityState] = useState<LayerVisibility>(defaultLayerVisibility);
@@ -461,6 +466,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setRasters((current) => [nextRaster, ...current]);
     setActiveRasterId(nextRaster.id);
     setRasterLayerVisibilityState((current) => ({ ...current, [nextRaster.id]: true }));
+    setRasterStyles((current) => (current[nextRaster.id] ? current : { ...current, [nextRaster.id]: defaultRasterStyle }));
     setLayerOrder((current) => [`raster:${nextRaster.id}`, ...current.filter((id) => id !== 'raster' && id !== `raster:${nextRaster.id}`)]);
   }, []);
 
@@ -522,8 +528,11 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setBasemapStyleState((current) => ({ ...current, ...patch }));
   }, []);
 
-  const setRasterStyle = useCallback((patch: Partial<RasterLayerStyle>) => {
-    setRasterStyleState((current) => ({ ...current, ...patch }));
+  const setRasterStyle = useCallback((rasterId: string, patch: Partial<RasterLayerStyle>) => {
+    setRasterStyles((current) => ({
+      ...current,
+      [rasterId]: { ...(current[rasterId] ?? defaultRasterStyle), ...patch },
+    }));
   }, []);
 
   const setVectorOverlayStyle = useCallback((patch: Partial<VectorOverlayStyle>) => {
@@ -611,7 +620,12 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     fileName: string,
     geojson: GeoJsonFeatureCollection,
     formatLabel: string,
-    options?: { geometryType?: EditableGeometryType; style?: Partial<UploadedLayerStyle> },
+    options?: {
+      geometryType?: EditableGeometryType;
+      style?: Partial<UploadedLayerStyle>;
+      sourceCrs?: SourceCrs;
+      sourceInput?: ShapefileInput;
+    },
   ) => {
     const points = geojson.features.filter(isPointFeature);
     const fields = getLayerFields(geojson);
@@ -621,6 +635,8 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       fileName,
       geometryType: options?.geometryType,
       toolInput: createGeoJsonToolInput(geoJsonToolInputName(fileName), geojson),
+      sourceInput: options?.sourceInput,
+      sourceCrs: options?.sourceCrs,
       geojson,
       points: {
         type: 'FeatureCollection',
@@ -666,7 +682,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
           setUploadedLayerVisibilityState(draft.uploadedLayerVisibility ?? {});
           setUploadedLayerStyles(draft.uploadedLayerStyles ?? {});
           setRasterLayerVisibilityState(draft.rasterLayerVisibility ?? {});
-          setRasterStyleState(draft.rasterStyle ?? defaultRasterStyle);
+          setRasterStyles(Object.fromEntries(nextRasters.map((item) => [
+            item.id,
+            draft.rasterLayers.find((layer) => layer.id === item.id)?.style ?? draft.rasterStyle ?? defaultRasterStyle,
+          ])));
           setLayerVisibilityState(draft.layerVisibility ?? defaultLayerVisibility);
           setLayerOrder([
             ...draft.layerOrder.filter((id) => (
@@ -719,11 +738,11 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         activeLayerId,
         activeRasterId,
         vectorLayers: layers.map(layerToWorkspaceDraftLayer),
-        rasterLayers: rasters.map(rasterToWorkspaceDraftLayer),
+        rasterLayers: rasters.map((raster) => rasterToWorkspaceDraftLayer(raster, rasterStyles[raster.id] ?? defaultRasterStyle)),
         uploadedLayerStyles,
         uploadedLayerVisibility,
         rasterLayerVisibility,
-        rasterStyle,
+        rasterStyle: defaultRasterStyle,
         layerVisibility,
         layerOrder,
       });
@@ -737,7 +756,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     layerVisibility,
     layers,
     rasterLayerVisibility,
-    rasterStyle,
+    rasterStyles,
     rasters,
     uploadedLayerStyles,
     uploadedLayerVisibility,
@@ -751,7 +770,8 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
 
       const bytes = new Uint8Array(await file.arrayBuffer());
       const shapefileInput = await zipToToolInput(bytes);
-      const geojson = normalizeGeoJson(await shp(bytes));
+      const processed = await readUploadInWorker('shapefile', file.name, bytes);
+      const geojson = normalizeGeoJson(processed.geojson);
       const points = geojson.features.filter(isPointFeature);
       const fields = getLayerFields(geojson);
       const numericFields = getNumericFields(points);
@@ -759,6 +779,8 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         id: createLayerId(file.name),
         fileName: file.name,
         toolInput: shapefileInput,
+        sourceInput: shapefileInput,
+        sourceCrs: processed.sourceCrs,
         geojson,
         points: {
           type: 'FeatureCollection',
@@ -792,9 +814,12 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setVectorOverlay(null);
 
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const text = new TextDecoder().decode(bytes);
-      const geojson = normalizeGeoJson(JSON.parse(text));
-      addGeoJsonLayer(file.name || 'input.geojson', geojson, 'GeoJSON');
+      const fileName = file.name || 'input.geojson';
+      const processed = await readUploadInWorker('geojson', fileName, bytes);
+      addGeoJsonLayer(fileName, normalizeGeoJson(processed.geojson), 'GeoJSON', {
+        sourceCrs: processed.sourceCrs,
+        sourceInput: { inputName: fileName, files: { [fileName]: bytes } },
+      });
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -806,13 +831,17 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setVectorOverlay(null);
 
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const { coordinateMode, geojson, skippedRows } = csvToPointGeoJson(decodeCsvText(bytes));
+      const fileName = file.name || 'input.csv';
+      const processed = await readUploadInWorker('csv', fileName, bytes);
+      const geojson = normalizeGeoJson(processed.geojson);
 
-      addGeoJsonLayer(file.name || 'input.csv', geojson, 'CSV');
+      addGeoJsonLayer(fileName, geojson, 'CSV', {
+        sourceCrs: processed.sourceCrs,
+        sourceInput: { inputName: fileName, files: { [fileName]: bytes } },
+      });
       setMessage(
-        `已加载 CSV 点图层：${file.name || 'input.csv'}，${geojson.features.length} 个点`
-        + (skippedRows > 0 ? `，跳过 ${skippedRows} 行无效坐标` : '')
-        + (coordinateMode === 'webMercator' ? '，已从 EPSG:3857 转为 WGS84' : ''),
+        `已加载 CSV 点图层：${fileName}，${geojson.features.length} 个点`
+        + (processed.sourceCrs.epsg === 3857 ? '，已从 EPSG:3857 转为 WGS84' : ''),
       );
     } catch (error) {
       setMessage(errorMessage(error));
@@ -824,10 +853,13 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setMessage('正在读取 GeoParquet');
       setVectorOverlay(null);
 
-      const { readGeoParquetFile } = await import('./geoParquet');
-      const geojson = await readGeoParquetFile(file);
-
-      addGeoJsonLayer(file.name || 'input.geoparquet', geojson, 'GeoParquet');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const fileName = file.name || 'input.geoparquet';
+      const processed = await readUploadInWorker('geoparquet', fileName, bytes);
+      addGeoJsonLayer(fileName, normalizeGeoJson(processed.geojson), 'GeoParquet', {
+        sourceCrs: processed.sourceCrs,
+        sourceInput: { inputName: fileName, files: { [fileName]: bytes } },
+      });
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -858,12 +890,14 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     try {
       setMessage('正在读取 GeoPackage');
       setVectorOverlay(null);
-      await ensureGeoLibreReady();
 
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const geojson = normalizeGeoJson(JSON.parse(vector_to_geojson_reproject(bytes, 'geopackage', 4326, 0)));
-
-      addGeoJsonLayer(file.name || 'input.gpkg', geojson, 'GeoPackage');
+      const fileName = file.name || 'input.gpkg';
+      const processed = await readUploadInWorker('geopackage', fileName, bytes);
+      addGeoJsonLayer(fileName, normalizeGeoJson(processed.geojson), 'GeoPackage', {
+        sourceCrs: processed.sourceCrs,
+        sourceInput: { inputName: fileName, files: { [fileName]: bytes } },
+      });
     } catch (error) {
       setMessage(errorMessage(error));
     }
@@ -873,11 +907,13 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     try {
       setMessage('正在读取 GeoTIFF');
       setVectorOverlay(null);
-      await ensureGeoLibreReady();
-
       const bytes = new Uint8Array(await file.arrayBuffer());
       const inputName = file.name || 'raster.tif';
-      const nextRaster = readRasterOverlay(bytes, inputName, inputName);
+      const processed = await readUploadInWorker('geotiff', inputName, bytes);
+      if (!processed.raster) {
+        throw new Error('GeoTIFF Worker 未返回栅格数据。');
+      }
+      const nextRaster = createRasterOverlay(processed.raster, inputName, inputName, processed.sourceCrs, bytes);
 
       addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({
@@ -938,7 +974,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     const nextLayer = addGeoJsonLayer(fileName, geojson, 'GeoJSON', { geometryType: params.geometryType });
     setMessage(`已新建空白 GeoJSON 图层：${fileName}`);
 
-    return nextLayer.id;
+    return nextLayer;
   }, [addGeoJsonLayer]);
 
   const deleteUploadedLayer = useCallback((layerId?: string) => {
@@ -992,6 +1028,10 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         : nextActiveRasterId
     ));
     setRasterLayerVisibilityState((current) => {
+      const { [targetRaster.id]: _removed, ...next } = current;
+      return next;
+    });
+    setRasterStyles((current) => {
       const { [targetRaster.id]: _removed, ...next } = current;
       return next;
     });
@@ -1278,12 +1318,19 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       const requestedRadius = nonNegativeNumber(params.radius || '0', '搜索半径');
       const minPoints = nonNegativeInteger(params.minPoints || '0', '点数');
       const outputName = ensureTifName(params.outputName || 'idw-interpolation.tif');
+      const maskLayer = params.maskLayerId
+        ? findRasterMaskInput(layers, vectorOverlay, params.maskLayerId)
+        : null;
+      if (params.maskLayerId && !maskLayer) {
+        throw new Error('所选掩膜图层不存在，请重新选择。');
+      }
+      const idwOutputName = maskLayer ? idwUnmaskedName(outputName) : outputName;
       const field = params.field || inputLayer.selectedField;
       const idwResolution = normalizeIdwResolution(requestedCellSize, requestedRadius, inputLayer);
       const args = [
         `--points=/work/${inputLayer.toolInput.inputName}`,
         `--field_name=${field}`,
-        `--output=/work/${outputName}`,
+        `--output=/work/${idwOutputName}`,
         `--cell_size=${idwResolution.cellSize}`,
         `--weight=${weight}`,
         `--radius=${idwResolution.radius}`,
@@ -1312,6 +1359,8 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
           radiusUnit: idwResolution.radiusUnit,
           minPoints,
           outputName,
+          idwOutputName,
+          maskLayerId: params.maskLayerId || '',
           field,
           inputBbox: idwResolution.inputBbox,
           estimatedRasterSize: idwResolution.estimatedRasterSize,
@@ -1319,28 +1368,72 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         inputLayer: summarizeUploadedLayerForAnalysis(inputLayer),
         wasmArgs: args,
         wasmInput: summarizeShapefileInput(inputLayer.toolInput),
+        maskLayer: maskLayer ? { id: maskLayer.id, name: maskLayer.name } : null,
       });
 
-      const result = await runTool('idw_interpolation', {
+      const result = await runToolInWorker('idw_interpolation', {
         args,
         input: inputLayer.toolInput.files,
+      }, {
+        timeoutMs: 120_000,
+        timeoutMessage: '反距离加权插值超过 120 秒，已停止。请增大输出像元大小后重试。',
       });
 
-      logAnalysisEvent(analysis, 'result', summarizeToolResultForAnalysis(result, outputName));
+      logAnalysisEvent(analysis, 'result', summarizeToolResultForAnalysis(result, idwOutputName));
 
       if (result.exitCode !== 0) {
-        logAnalysisError(analysis, 'error', new Error(`tool exit code ${result.exitCode}`), summarizeToolResultForAnalysis(result, outputName));
+        logAnalysisError(analysis, 'error', new Error(`tool exit code ${result.exitCode}`), summarizeToolResultForAnalysis(result, idwOutputName));
         throw new Error(result.stdout.join('\n') || `工具运行失败，退出码 ${result.exitCode}`);
       }
 
-      const tiffBytes = result.files[outputName];
+      const tiffBytes = result.files[idwOutputName];
 
       if (!tiffBytes) {
-        logAnalysisError(analysis, 'error', new Error('missing expected GeoTIFF output'), summarizeToolResultForAnalysis(result, outputName));
+        logAnalysisError(analysis, 'error', new Error('missing expected GeoTIFF output'), summarizeToolResultForAnalysis(result, idwOutputName));
         throw new Error(`没有获得 GeoTIFF 输出。工具输出：${result.stdout.join('\n')}`);
       }
 
-      const nextRaster = readRasterOverlay(tiffBytes, outputName);
+      let outputBytes = tiffBytes;
+      if (maskLayer) {
+        setMessage('正在使用掩膜裁剪插值结果');
+        const maskStartedAt = performance.now();
+        logAnalysisEvent(analysis, 'invoke', {
+          stage: 'mask',
+          maskLayerId: maskLayer.id,
+          rasterBytes: tiffBytes.byteLength,
+        });
+        const maskedResult = await runToolInWorker('clip_raster_to_polygon', {
+          args: [
+            `--input=/work/${idwOutputName}`,
+            `--polygons=/work/${maskLayer.toolInput.inputName}`,
+            `--output=/work/${outputName}`,
+            '--maintain_dimensions=false',
+          ],
+          input: {
+            [idwOutputName]: tiffBytes,
+            ...maskLayer.toolInput.files,
+          },
+        }, {
+          timeoutMs: 120_000,
+          timeoutMessage: '掩膜裁剪超过 120 秒，已停止。请简化掩膜边界或增大输出像元大小后重试。',
+        });
+
+        logAnalysisEvent(analysis, 'mask_result', {
+          ...summarizeToolResultForAnalysis(maskedResult, outputName),
+          elapsedMs: performance.now() - maskStartedAt,
+        });
+
+        if (maskedResult.exitCode !== 0) {
+          throw new Error(maskedResult.stdout.join('\n') || `掩膜处理失败，退出码 ${maskedResult.exitCode}`);
+        }
+
+        outputBytes = maskedResult.files[outputName];
+        if (!outputBytes) {
+          throw new Error(`没有获得掩膜处理后的 GeoTIFF 输出。工具输出：${maskedResult.stdout.join('\n')}`);
+        }
+      }
+
+      const nextRaster = readRasterOverlay(outputBytes, outputName);
       logAnalysisEvent(analysis, 'success', {
         outputName,
         raster: {
@@ -1367,7 +1460,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsRunning(false);
     }
-  }, [layer, layers, toolsReady]);
+  }, [layer, layers, toolsReady, vectorOverlay]);
 
   const runRasterCalculator = useCallback(async (params: RasterCalculatorParameters): Promise<GisOperationResult<RasterOverlay>> => {
     const analysis = createAnalysisLogContext('raster_calculator');
@@ -2061,7 +2154,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     activeRasterId,
     vectorOverlay,
     basemapStyle,
-    rasterStyle,
+    rasterStyles,
     vectorOverlayStyle,
     uploadedLayerStyles,
     layerVisibility,
@@ -2121,7 +2214,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, disableRasterSwipe, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyle, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runRasterCalculator, runRasterReclassify, runRasterResample, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, swipeRasterId, toggleRasterSwipe, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, disableRasterSwipe, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyles, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runRasterCalculator, runRasterReclassify, runRasterResample, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, swipeRasterId, toggleRasterSwipe, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }
@@ -2150,16 +2243,73 @@ type ToolWorkerResponse = {
   message: string;
 };
 
+type UploadWorkerSuccess = Extract<UploadWorkerResponse, { ok: true }>;
+
+let nextUploadWorkerRequestId = 0;
+
+function readUploadInWorker(kind: UploadDataKind, fileName: string, bytes: Uint8Array): Promise<Omit<UploadWorkerSuccess, 'id'>> {
+  const id = nextUploadWorkerRequestId + 1;
+  nextUploadWorkerRequestId = id;
+  const workerBytes = bytes.slice();
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./gisUploadWorker.ts', import.meta.url), { type: 'module' });
+    const cleanup = () => worker.terminate();
+    const fail = (message: string) => {
+      cleanup();
+      reject(new Error(message));
+    };
+
+    worker.addEventListener('message', (event: MessageEvent<UploadWorkerResponse>) => {
+      const message = event.data;
+
+      if (message.id !== id) return;
+      cleanup();
+
+      if (message.ok) {
+        const { id: _id, ...result } = message;
+        resolve(result);
+      } else {
+        reject(new Error(message.message));
+      }
+    });
+    worker.addEventListener('error', (event) => fail(event.message || '上传数据 Worker 运行失败。'));
+    worker.addEventListener('messageerror', () => fail('无法读取上传数据 Worker 返回结果。'));
+
+    try {
+      worker.postMessage({ id, kind, fileName, bytes: workerBytes.buffer }, [workerBytes.buffer]);
+    } catch (error) {
+      fail(errorMessage(error));
+    }
+  });
+}
+
 let nextToolWorkerRequestId = 0;
 
-function runToolInWorker(tool: string, options: RunToolOptions): Promise<ToolResult> {
+function runToolInWorker(
+  tool: string,
+  options: RunToolOptions,
+  limits?: { timeoutMs: number; timeoutMessage: string },
+): Promise<ToolResult> {
   const id = nextToolWorkerRequestId + 1;
 
   nextToolWorkerRequestId = id;
 
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL('./gisToolWorker.ts', import.meta.url), { type: 'module' });
-    const cleanup = () => worker.terminate();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      clearTimeout(timeout);
+      worker.terminate();
+    };
+    const fail = (message: string) => {
+      cleanup();
+      reject(new Error(message));
+    };
+
+    if (limits) {
+      timeout = setTimeout(() => fail(limits.timeoutMessage), limits.timeoutMs);
+    }
 
     worker.addEventListener('message', (event: MessageEvent<ToolWorkerResponse>) => {
       const message = event.data;
@@ -2177,10 +2327,16 @@ function runToolInWorker(tool: string, options: RunToolOptions): Promise<ToolRes
       }
     });
     worker.addEventListener('error', (event) => {
-      cleanup();
-      reject(new Error(event.message || 'WASM Worker 运行失败。'));
+      fail(event.message || 'WASM Worker 运行失败。');
     });
-    worker.postMessage({ id, tool, options });
+    worker.addEventListener('messageerror', () => {
+      fail('无法读取 WASM Worker 返回结果。');
+    });
+    try {
+      worker.postMessage({ id, tool, options });
+    } catch (error) {
+      fail(errorMessage(error));
+    }
   });
 }
 
@@ -2233,7 +2389,7 @@ function namespaceVectorToolInput(toolInput: ShapefileInput, prefix: 'input' | '
 }
 
 type AnalysisLogTool = 'idw_interpolation' | 'buffer_vector' | 'raster_calculator' | 'raster_reclassify' | 'raster_resample' | OverlayToolId;
-type AnalysisLogPhase = 'start' | 'validated' | 'invoke' | 'result' | 'success' | 'blocked' | 'error';
+type AnalysisLogPhase = 'start' | 'validated' | 'invoke' | 'result' | 'mask_result' | 'success' | 'blocked' | 'error';
 
 type AnalysisLogContext = {
   runId: string;
@@ -2536,6 +2692,8 @@ function layerToWorkspaceDraftLayer(layer: UploadedLayer): WorkspaceVectorLayer 
     fileName: ensureGeoJsonName(layer.fileName || 'draft-layer.geojson'),
     geometryType: layer.geometryType,
     geojson: layer.geojson,
+    sourceInput: layer.sourceInput,
+    sourceCrs: layer.sourceCrs,
     selectedField: layer.selectedField,
     selectedFeatureIndexes: layer.selectedFeatureIndexes,
   };
@@ -2552,6 +2710,8 @@ function draftLayerToUploadedLayer(layer: WorkspaceVectorLayer): UploadedLayer {
     fileName: ensureGeoJsonName(layer.fileName || 'draft-layer.geojson'),
     geometryType: layer.geometryType,
     toolInput: createGeoJsonToolInput(layer.fileName || 'draft-layer.geojson', geojson),
+    sourceInput: layer.sourceInput,
+    sourceCrs: layer.sourceCrs,
     geojson,
     points: {
       type: 'FeatureCollection',
@@ -2564,11 +2724,12 @@ function draftLayerToUploadedLayer(layer: WorkspaceVectorLayer): UploadedLayer {
   };
 }
 
-function rasterToWorkspaceDraftLayer(raster: RasterOverlay): WorkspaceRasterLayer {
+function rasterToWorkspaceDraftLayer(raster: RasterOverlay, style: RasterLayerStyle): WorkspaceRasterLayer {
   return {
     id: raster.id,
     name: raster.name,
     toolInput: raster.toolInput,
+    style,
   };
 }
 
@@ -2661,7 +2822,7 @@ function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name
     throw new Error('GeoTIFF 没有有效像元。');
   }
 
-  const raster = {
+  const raster: UploadRasterData = {
     width: reader.width,
     height: reader.height,
     epsg: reader.epsg,
@@ -2670,22 +2831,41 @@ function readRasterOverlay(tiffBytes: Uint8Array, name: string, inputName = name
     pixels,
     min,
     max,
+    coordinates: rasterCoordinates4326({
+      width: reader.width,
+      height: reader.height,
+      epsg: reader.epsg,
+      geoTransform: Array.from(reader.geo_transform()),
+    }),
   };
+
+  return createRasterOverlay(raster, name, inputName, sourceCrsFromEpsg(reader.epsg ?? 4326, !reader.epsg), tiffBytes);
+}
+
+function createRasterOverlay(
+  raster: UploadRasterData,
+  name: string,
+  inputName: string,
+  sourceCrs: SourceCrs,
+  sourceBytes: Uint8Array,
+): RasterOverlay {
+  const displayRaster = raster.display ?? raster;
 
   return {
     id: createLayerId(name),
     name,
     toolInput: {
       inputName,
-      files: { [inputName]: tiffBytes },
+      files: { [inputName]: sourceBytes },
     },
-    imageUrl: rasterToCanvas(raster).toDataURL('image/png'),
-    coordinates: rasterCoordinates4326(raster),
+    imageUrl: rasterToCanvas({ ...raster, ...displayRaster }).toDataURL('image/png'),
+    coordinates: displayRaster.coordinates,
     width: raster.width,
     height: raster.height,
     min: raster.min,
     max: raster.max,
     epsg: raster.epsg,
+    sourceCrs,
     geoTransform: raster.geoTransform,
     nodata: raster.nodata,
     pixels: raster.pixels,
@@ -2985,6 +3165,10 @@ function editedRasterName(name: string) {
 
 function extractByMaskName(name: string) {
   return ensureTifName(name.replace(/\.tiff?$/i, '') + '-extract-mask.tif');
+}
+
+function idwUnmaskedName(name: string) {
+  return ensureTifName(name.replace(/\.tiff?$/i, '') + '-unmasked.tif');
 }
 
 function rasterToCanvas(raster: {

@@ -9,6 +9,7 @@ import {
 } from 'hyparquet';
 import { compressors } from 'hyparquet-compressors';
 import initGeoLibre, { transform_points_epsg } from 'geolibre-wasm';
+import { sourceCrsFromDefinition, sourceCrsFromEpsg, type SourceCrs } from './coordinateReferenceSystem';
 
 type GeoJsonGeometry = {
   type: string;
@@ -41,6 +42,11 @@ export type GeoParquetFeatureCollection = {
   features: GeoJsonFeature[];
 };
 
+export type GeoParquetReadResult = {
+  geojson: GeoParquetFeatureCollection;
+  sourceCrs: SourceCrs;
+};
+
 const geoJsonGeometryTypes = new Set([
   'Point',
   'MultiPoint',
@@ -53,14 +59,18 @@ const geoJsonGeometryTypes = new Set([
 const wgs84Epsg = 4326;
 
 export async function readGeoParquetFile(file: File): Promise<GeoParquetFeatureCollection> {
+  return (await readGeoParquetFileWithMetadata(file)).geojson;
+}
+
+export async function readGeoParquetFileWithMetadata(file: File): Promise<GeoParquetReadResult> {
   return readGeoParquetBuffer(fileToAsyncBuffer(file));
 }
 
 export async function readGeoParquetUrl(url: string): Promise<GeoParquetFeatureCollection> {
-  return readGeoParquetBuffer(await asyncBufferFromUrl({ url }));
+  return (await readGeoParquetBuffer(await asyncBufferFromUrl({ url }))).geojson;
 }
 
-async function readGeoParquetBuffer(file: AsyncBuffer): Promise<GeoParquetFeatureCollection> {
+async function readGeoParquetBuffer(file: AsyncBuffer): Promise<GeoParquetReadResult> {
   const metadata = await parquetMetadataAsync(file);
   const geometryField = metadata.schema.find((field) => isGeometryLogicalType(field.logical_type));
   const rows = await parquetReadObjects({
@@ -79,7 +89,7 @@ async function readGeoParquetBuffer(file: AsyncBuffer): Promise<GeoParquetFeatur
       throw new Error('GeoParquet 几何列声明了未知 CRS，且坐标不在经纬度范围内；请先转为 EPSG:4326，或在 GeoParquet CRS 元数据中写入可识别的 EPSG 编码。');
     }
 
-    return geojson;
+    return { geojson, sourceCrs: sourceCrsFromEpsg(wgs84Epsg, true) };
   }
 
   if (sourceProjection.kind === 'epsg' && sourceProjection.epsg === wgs84Epsg) {
@@ -87,10 +97,24 @@ async function readGeoParquetBuffer(file: AsyncBuffer): Promise<GeoParquetFeatur
       throw new Error('GeoParquet 坐标超出经纬度范围，但未在 CRS 元数据中识别到可转换的 EPSG 编码；请检查 GeoParquet 的 geo.columns.<geometry>.crs 是否声明了实际投影坐标系。');
     }
 
-    return geojson;
+    return { geojson, sourceCrs: sourceCrsFromEpsg(wgs84Epsg) };
   }
 
-  return reprojectFeatureCollection(geojson, sourceProjection);
+  return {
+    geojson: await reprojectFeatureCollection(geojson, sourceProjection),
+    sourceCrs: sourceCrsForProjection(sourceProjection),
+  };
+}
+
+function sourceCrsForProjection(sourceProjection: GeoParquetSourceProjection): SourceCrs {
+  if (sourceProjection.kind === 'epsg') {
+    return sourceCrsFromEpsg(sourceProjection.epsg);
+  }
+
+  return {
+    ...sourceCrsFromDefinition(sourceProjection.crsName),
+    name: sourceProjection.crsName,
+  };
 }
 
 function rowsToGeoJson(rows: Record<string, unknown>[], preferredGeometryColumn?: string): GeoParquetFeatureCollection {

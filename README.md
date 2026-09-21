@@ -41,12 +41,17 @@ If a previous PWA cache causes stale content during development, use a different
 npm run dev -- --port 5174
 ```
 
-## Technical Documentation
+## 文档
+
+### 快速上手
+
+- `docs/quick-start.zh-CN.md`：快速了解坐标系、数据上传、地图模式、编辑、分析与导出。
+
+### 技术文档
 
 Developer notes live in `docs/`.
 
-- `docs/map-projection.md`: language index for map engines, CRS conventions,
-  supported projections, projection conversion rules, and development caveats.
+- `docs/map-projection.md`：坐标系、地图引擎、CRS 约定、支持的投影、投影转换规则和开发注意事项。
 - `docs/data-storage.md`: language index for vector import persistence, GeoJSON
   normalization, IndexedDB storage, and local restore behavior.
 - `docs/ai-assistant.zh-CN.md`: AI assistant module boundaries, browser-direct

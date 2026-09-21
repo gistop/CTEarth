@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type ExpressionSpecification } from 'maplibre-gl';
-import { defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type UploadedLayerStyle } from '../../../gisStore';
+import { defaultRasterStyle, defaultUploadedLayerStyle, getGeoJsonBounds, getPointBounds, type UploadedLayerStyle } from '../../../gisStore';
 import {
   createCesiumLayerAdapter,
   createMapLibreLayerAdapter,
@@ -227,7 +227,7 @@ export function MapPanel() {
     raster,
     rasters,
     rasterLayerVisibility,
-    rasterStyle,
+    rasterStyles,
     swipeRasterId,
     disableRasterSwipe,
     vectorOverlay,
@@ -619,7 +619,7 @@ export function MapPanel() {
           layerVisibility,
           rasters,
           rasterLayerVisibility,
-          rasterStyle,
+          rasterStyles,
           layers,
           uploadedLayerStyles,
           uploadedLayerVisibility,
@@ -653,7 +653,7 @@ export function MapPanel() {
       isCancelled = true;
       cesiumSyncGenerationRef.current += 1;
     };
-  }, [layerVisibility, layers, mapCommandState.cesiumTerrain, mapCommandState.mapMode, mapGroupRenderState.entries, rasters, rasterLayerVisibility, rasterStyle.opacity, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay, vectorOverlayStyle]);
+  }, [layerVisibility, layers, mapCommandState.cesiumTerrain, mapCommandState.mapMode, mapGroupRenderState.entries, rasters, rasterLayerVisibility, rasterStyles, uploadedLayerStyles, uploadedLayerVisibility, vectorOverlay, vectorOverlayStyle]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -700,7 +700,7 @@ export function MapPanel() {
       return;
     }
 
-    syncMapLibreRasters(map, rasters, rasterLayerVisibility, rasterStyle.opacity, layerVisibility.raster);
+    syncMapLibreRasters(map, rasters, rasterLayerVisibility, rasterStyles, layerVisibility.raster);
     createMapLibreLayerAdapter().sync({
       map,
       entries: mapGroupRenderState.entries,
@@ -709,7 +709,7 @@ export function MapPanel() {
       hasVectorOverlay: Boolean(vectorOverlay),
       basemapVisible: layerVisibility.basemap,
     });
-  }, [layerVisibility.basemap, layerVisibility.raster, layers, mapGroupRenderState.entries, mapReady, rasters, rasterLayerVisibility, rasterStyle.opacity, vectorOverlay]);
+  }, [layerVisibility.basemap, layerVisibility.raster, layers, mapGroupRenderState.entries, mapReady, rasters, rasterLayerVisibility, rasterStyles, vectorOverlay]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1034,7 +1034,7 @@ export function MapPanel() {
         rasterVisible={swipeRasterId
           ? (rasterLayerVisibility[swipeRasterId] ?? layerVisibility.raster)
           : false}
-        opacity={rasterStyle.opacity}
+        opacity={rasterStyles[swipeRasterId ?? '']?.opacity ?? defaultRasterStyle.opacity}
         onExit={disableRasterSwipe}
       />
       <MapFeatureIdentify active={featureIdentifyActive} map={mapRef.current} mapReady={mapReady} />

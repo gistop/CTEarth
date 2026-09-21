@@ -189,7 +189,7 @@ describe('OpenLayers layout runtime', () => {
     const controller = new AbortController();
     const pending = runtime.capture(1504, 1008, controller.signal);
     if (cause === 'cancel') controller.abort();
-    if (cause === 'data-change') runtime.sync({ ...input, rasterStyle: { opacity: 0.5 } });
+    if (cause === 'data-change') runtime.sync({ ...input, rasterStyles: { unused: { opacity: 0.5 } } });
     if (cause === 'dispose') runtime.dispose();
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(map.hasListener('rendercomplete')).toBe(false);

@@ -4,6 +4,7 @@ import { displayLayerName, type EditableGeometryType, type useGis } from '../../
 import { useLayerStore } from '../../layers';
 import { useDigitize } from '../stores/DigitizeContext';
 import type { DigitizeGeometryType } from '../types';
+import { NewLayerButton } from './NewLayerButton';
 import { RasterEditControls } from './RasterEditControls';
 
 export type DigitizeRibbonTool = { active?: boolean; disabled?: boolean; label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }>; muted?: boolean; render?: () => ReactNode; onClick?: () => void };
@@ -43,17 +44,7 @@ function createEditRibbonGroups({
   const createLayerTool = (geometryType: EditableGeometryType, label: string, icon: DigitizeRibbonTool['icon']): DigitizeRibbonTool => ({
     icon,
     label,
-    onClick: () => {
-      const defaultName = `${geometryType.toLowerCase()}-layer.geojson`;
-      const fileName = window.prompt('GeoJSON layer name', defaultName);
-
-      if (fileName === null) {
-        return;
-      }
-
-      createBlankGeoJsonLayer({ fileName, geometryType });
-      digitize.setActiveTool(geometryType);
-    },
+    render: () => <NewLayerButton geometryType={geometryType} label={label} icon={icon} />,
   });
   const drawTool = (tool: DigitizeGeometryType, label: string, icon: DigitizeRibbonTool['icon']): DigitizeRibbonTool => ({
     active: digitize.activeTool === tool && !digitize.modifyEnabled && !digitize.rasterAoiActive,

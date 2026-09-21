@@ -72,6 +72,8 @@ describe('GIS tool execution boundary', () => {
     ['raster_resample', { method: 'nearest', cellSize: 0 }],
     ['raster_resample', { method: 'bilinear', cellSize: 'abc' }],
     ['raster_resample', { method: 'bilinear', rasterName: 'missing.tif' }],
+    ['create_layer', {}],
+    ['create_layer', { geometryType: 'MultiPoint' }],
     ['select_by_value', { field: 'missing', operator: 'equals' }],
     ['select_by_location', { referenceLayerId: 'missing' }],
     ['toString', {}],
@@ -85,6 +87,7 @@ describe('GIS tool execution boundary', () => {
     expect(port.runRasterCalculator).not.toHaveBeenCalled();
     expect(port.runRasterReclassify).not.toHaveBeenCalled();
     expect(port.runRasterResample).not.toHaveBeenCalled();
+    expect(port.createBlankGeoJsonLayer).not.toHaveBeenCalled();
     expect(port.selectByValue).not.toHaveBeenCalled();
     expect(port.selectByLocation).not.toHaveBeenCalled();
   });
@@ -376,5 +379,29 @@ describe('GIS tool execution boundary', () => {
     const { port } = createGisFixture();
     port.runBufferAnalysis.mockRejectedValueOnce(new DOMException('disposed', 'AbortError'));
     await expect(createGisToolExecutor(port)('buffer_vector', { distance: 1 })).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('creates a blank layer through create_layer with a type-based default name', async () => {
+    const { port } = createGisFixture();
+    const result = await createGisToolExecutor(port)('create_layer', { geometryType: 'LineString' });
+    expect(port.createBlankGeoJsonLayer).toHaveBeenCalledWith({ fileName: 'linestring-layer.geojson', geometryType: 'LineString' });
+    expect(result).toMatchObject({
+      status: 'success',
+      data: {
+        resultLayer: { id: 'created-layer', name: 'linestring-layer.geojson', kind: 'vector' },
+        layerId: 'created-layer',
+        geometryType: 'LineString',
+      },
+      error: null,
+      nextAction: { type: 'none' },
+    });
+  });
+
+  it('passes an explicit file name through create_layer and allows execution after layer switches', async () => {
+    const { port, layer, setSnapshot } = createGisFixture();
+    setSnapshot({ layer: { ...layer, id: 'other-layer' } });
+    const result = await createGisToolExecutor(port)('create_layer', { geometryType: 'Polygon', fileName: 'parcels.geojson' });
+    expect(port.createBlankGeoJsonLayer).toHaveBeenCalledWith({ fileName: 'parcels.geojson', geometryType: 'Polygon' });
+    expect(result.status).toBe('success');
   });
 });

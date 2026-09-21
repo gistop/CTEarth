@@ -54,6 +54,46 @@ export function normalizeMapGroupName(name: string) {
   return name.trim().toLocaleLowerCase();
 }
 
+export type RemoveMapGroupResult = {
+  groups: MapGroup[];
+  nextCurrentGroupId: string | null;
+};
+
+export function removeMapGroup(groups: MapGroup[], groupId: string, currentMapGroupId: string): RemoveMapGroupResult {
+  const index = groups.findIndex((group) => group.id === groupId);
+
+  if (index < 0) {
+    return { groups, nextCurrentGroupId: null };
+  }
+
+  const removedGroup = groups[index];
+  const nextGroups = groups.filter((group) => group.id !== groupId);
+
+  if (nextGroups.length === 0) {
+    return { groups, nextCurrentGroupId: null };
+  }
+
+  const wasCurrent = groupId === currentMapGroupId;
+  const nextCurrentGroupId = wasCurrent
+    ? (nextGroups[Math.min(index, nextGroups.length - 1)]?.id ?? nextGroups[0].id)
+    : null;
+  const targetGroupId = wasCurrent ? (nextCurrentGroupId as string) : currentMapGroupId;
+  const migratedLayerItems = removedGroup.layerItems.filter((item) => item.layerId !== 'basemap');
+
+  if (migratedLayerItems.length === 0) {
+    return { groups: nextGroups, nextCurrentGroupId };
+  }
+
+  return {
+    groups: nextGroups.map((group) => (
+      group.id === targetGroupId
+        ? { ...group, layerItems: [...group.layerItems, ...migratedLayerItems] }
+        : group
+    )),
+    nextCurrentGroupId,
+  };
+}
+
 export function nextMapGroupName(groups: MapGroup[]) {
   const names = new Set(groups.map((group) => normalizeMapGroupName(group.name)));
   let index = groups.length + 1;

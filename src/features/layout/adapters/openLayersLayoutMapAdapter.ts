@@ -156,7 +156,7 @@ export function createOpenLayersLayoutMap(container: HTMLElement, initialOptions
         }
         const rasterVisible = Boolean(input.raster && visible(input, `raster:${input.raster.id}`, input.rasterLayerVisibility[input.raster.id] ?? input.layerVisibility.raster));
         rasterLayer.setVisible(rasterVisible);
-        rasterLayer.setOpacity(input.rasterStyle.opacity);
+        rasterLayer.setOpacity(input.raster ? input.rasterStyles[input.raster.id]?.opacity ?? 0.82 : 1);
         if (input.raster !== previous?.raster) rasterLayer.setSource(input.raster ? new ImageStatic({ imageExtent: layoutRasterExtent(input.raster.coordinates), url: input.raster.imageUrl, projection: 'EPSG:3857', crossOrigin: 'anonymous' }) : null);
         vectorLayer.setVisible(Boolean(input.vectorOverlay && visible(input, 'vectorOverlay', input.layerVisibility.vectorOverlay)));
         if (input.vectorOverlayStyle !== previous?.vectorOverlayStyle) vectorLayer.setStyle(createLayoutVectorOverlayStyle(input.vectorOverlayStyle));

@@ -14,6 +14,7 @@ type ToolHandler = (input: Record<string, unknown>, snapshot: AiGisSnapshot, por
 
 const handlers: Record<string, ToolHandler> = {
   list_layers: async (_input, snapshot) => toolResult('list_layers', 'success', '已读取当前 GIS 状态。', { data: summarizeGisContext(snapshot) }),
+  create_layer: runCreateLayer,
   buffer_vector: runBuffer,
   select_by_value: runSelectByValue,
   select_by_location: runSelectByLocation,
@@ -65,11 +66,15 @@ export function createGisToolExecutor(port: AiGisPort): AiToolExecutor {
     const usesRaster = name === 'hillshade' || name === 'slope' || name === 'aspect';
     const usesRasterList = name === 'raster_calculator' || name === 'raster_reclassify' || name === 'raster_resample';
     const usesOverlay = isOverlayToolName(name);
-    const changed = usesRasterList
-      ? snapshot.rasters !== expected.rasters
-      : usesRaster
-        ? snapshot.raster !== expected.raster
-        : snapshot.layer?.id !== expected.layer?.id || snapshot.layer?.geojson !== expected.layer?.geojson;
+    // 新建空白图层不依赖任何现有输入，允许在图层切换后仍然执行。
+    const stateGuarded = name !== 'create_layer';
+    const changed = stateGuarded
+      ? usesRasterList
+        ? snapshot.rasters !== expected.rasters
+        : usesRaster
+          ? snapshot.raster !== expected.raster
+          : snapshot.layer?.id !== expected.layer?.id || snapshot.layer?.geojson !== expected.layer?.geojson
+      : false;
     if (changed) {
       return toolResult(name, 'blocked', '当前输入图层已在本次请求期间改变，请基于新的地图状态重新发起请求。', {
         error: { code: 'GIS_STATE_CHANGED', retryable: false },
@@ -487,6 +492,28 @@ type VectorSource = {
   name: string;
   geojson: { type: 'FeatureCollection'; features: unknown[] };
 };
+
+async function runCreateLayer(input: Record<string, unknown>, _snapshot: AiGisSnapshot, port: AiGisPort): Promise<AiToolResult> {
+  const geometryType = input.geometryType;
+  const labels: Record<string, string> = { Point: '点', LineString: '线', Polygon: '面' };
+  if (typeof geometryType !== 'string' || !Object.hasOwn(labels, geometryType)) {
+    return toolResult('create_layer', 'blocked', '几何类型必须是 Point（点）、LineString（线）或 Polygon（面）。', {
+      error: { code: 'INVALID_GEOMETRY_TYPE', retryable: false },
+      nextAction: { type: 'ask_user', fields: ['geometryType'] },
+    });
+  }
+  const fileName = textArg(input.fileName, `${geometryType.toLowerCase()}-layer.geojson`);
+  const created = port.createBlankGeoJsonLayer({ fileName, geometryType: geometryType as 'Point' | 'LineString' | 'Polygon' });
+  return toolResult('create_layer', 'success', `已新建空白${labels[geometryType]}图层：${created.fileName}，可在编辑选项卡中绘制要素。`, {
+    data: {
+      resultLayer: { id: created.layerId, name: created.fileName, kind: 'vector' },
+      layerId: created.layerId,
+      outputName: created.fileName,
+      geometryType,
+      parameters: { fileName, geometryType },
+    },
+  });
+}
 
 function findVectorSource(snapshot: AiGisSnapshot, layerId: string): VectorSource | null {
   if (layerId === 'vectorOverlay' && snapshot.vectorOverlay) {

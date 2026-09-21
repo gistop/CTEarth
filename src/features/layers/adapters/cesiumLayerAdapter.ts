@@ -1,7 +1,7 @@
 import type { MapGroupRenderEntry } from '../../../mapGroupRenderState';
 import { getRasterBasemapDefinitions } from '../../maps/components/map/rasterBasemapSources';
 import type { CesiumNamespace, CesiumViewer } from '../../maps/components/map/cesiumRuntime';
-import type { LayerEngineAdapter, RasterRenderData } from './layerAdapterTypes';
+import { resolveRasterOpacity, type LayerEngineAdapter, type RasterRenderData, type RasterStyleLookup } from './layerAdapterTypes';
 
 type CesiumImageryLayerLike = {
   alpha: number;
@@ -34,7 +34,7 @@ export type CesiumLayerSyncRequest = {
   layerVisibility: { basemap: boolean; raster: boolean; vectorOverlay: boolean };
   rasters: RasterRenderData[];
   rasterLayerVisibility: Record<string, boolean>;
-  rasterStyle: { opacity: number };
+  rasterStyles: RasterStyleLookup;
   layers: { id: string; geojson: GeoJsonFeatureCollection }[];
   uploadedLayerVisibility: Record<string, boolean>;
   uploadedLayerStyles: Record<string, UploadedStyle>;
@@ -72,7 +72,7 @@ async function syncCesiumLayers({
   layerVisibility,
   rasters,
   rasterLayerVisibility,
-  rasterStyle,
+  rasterStyles,
   layers,
   uploadedLayerVisibility,
   uploadedLayerStyles,
@@ -95,7 +95,7 @@ async function syncCesiumLayers({
         tileHeight: 256,
         rectangle: createCesiumRectangle(Cesium, raster.coordinates),
       })) as CesiumImageryLayerLike;
-      imageryLayer.alpha = rasterStyle.opacity;
+      imageryLayer.alpha = resolveRasterOpacity(rasterStyles, raster.id);
       imageryLayer.show = true;
     }
     if (!entry.basemapId || !entry.visible || !layerVisibility.basemap) {

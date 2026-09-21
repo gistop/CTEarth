@@ -55,6 +55,10 @@ export function useGisAiPort(): { port: AiGisPort; snapshot: AiGisSnapshot } {
 
     const port: AiGisPort = {
       getSnapshot: () => current.current,
+      createBlankGeoJsonLayer(params) {
+        const layer = current.current.createBlankGeoJsonLayer(params);
+        return { layerId: layer.id, fileName: layer.fileName, geometryType: params.geometryType };
+      },
       async selectByValue(params) {
         const before = current.current.layer;
         const result = await current.current.selectByValue(params);

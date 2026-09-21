@@ -12,7 +12,7 @@ export type DigitizeMapInput = {
   defaultStyle: UploadedLayerStyle;
   layerVisibility: LayerVisibility;
   raster: RasterOverlay | null;
-  rasterStyle: RasterLayerStyle;
+  rasterStyles: Record<string, RasterLayerStyle>;
   rasterLayerVisibility: Record<string, boolean>;
   vectorOverlay: VectorOverlay | null;
   vectorOverlayStyle: VectorOverlayStyle;

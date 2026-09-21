@@ -1,25 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Database,
-  Grid2X2,
-  Layers,
-  Map as MapIcon,
-  PenTool,
   Plus,
   Save,
   Search,
   TableProperties,
   Trash2,
-  ZoomIn,
 } from 'lucide-react';
 import { useAttributeTableActions } from '../../attributes';
 import { AddDataSplitButton } from './AddDataSplitButton';
+import { CreateBlankLayerDialog, type CreateBlankLayerTarget } from './CreateBlankLayerDialog';
+import { CreateMapGroupDialog, type CreateMapGroupTarget } from './CreateMapGroupDialog';
 import { DeleteLayerConfirmDialog, type DeleteLayerConfirmTarget } from './DeleteLayerConfirmDialog';
 import { InlineRenameLabel } from './InlineRenameLabel';
 import { MapGroupEditPanel } from './MapGroupEditPanel';
-import { MapGroupSplitButton } from './MapGroupSplitButton';
 import { MapGroupSection, type MapGroup, type MapGroupLayerItem, type MapGroupLayerItemId } from './MapGroupSection';
-import { SaveAsSplitButton } from './SaveAsSplitButton';
+import { MoreActionsMenu } from './MoreActionsMenu';
 import { LayerBadge } from './LayerBadge';
 import { LayerRow } from './LayerRow';
 import { LayerStylePanel } from './LayerStylePanel';
@@ -41,13 +36,12 @@ import {
   getMapGroupLayerSelectionId,
   getTargetBasemapItem,
   getVisibleMapGroupLayerIds,
-  isDuplicateMapGroupName,
   moveLayerItemByOffset,
   moveLayerItemInMapGroups,
   moveMapGroupByOffset,
   moveMapGroupsInOrder,
-  nextMapGroupName,
   normalizeMapGroupName,
+  removeMapGroup,
   type LayerDragDescriptor,
   type LayerDropDescriptor,
   type MapGroupDragDescriptor,
@@ -59,8 +53,6 @@ import {
   defaultUploadedLayerStyle,
   defaultVectorOverlayStyle,
   displayLayerName,
-  getGeoJsonBounds,
-  getPointBounds,
   type BasemapLayerStyle,
   type EditableGeometryType,
   type LayerOrderId,
@@ -75,7 +67,8 @@ type EditTarget =
 type PendingDeleteTarget =
   | { kind: 'uploaded'; id: string; name: string }
   | { kind: 'raster'; id: string; name: string }
-  | { kind: 'basemap'; groupId: string; instanceId: string; name: string };
+  | { kind: 'basemap'; groupId: string; instanceId: string; name: string }
+  | { kind: 'group'; groupId: string; name: string };
 
 export function LayerPanel() {
   const [draggingItem, setDraggingItem] = useState<LayerDragDescriptor | null>(null);
@@ -91,7 +84,7 @@ export function LayerPanel() {
     rasters,
     vectorOverlay,
     message,
-    rasterStyle,
+    rasterStyles,
     vectorOverlayStyle,
     uploadedLayerStyles,
     layerVisibility,
@@ -103,6 +96,8 @@ export function LayerPanel() {
     deleteRasterLayer,
     saveGeoJsonLayer,
     saveGeoPackageLayer,
+    uploadGeoParquetUrl,
+    uploadGeoTiffUrl,
     setLayerVisibility,
     setLayerDrawOrder,
     setRasterLayerVisibility,
@@ -124,6 +119,8 @@ export function LayerPanel() {
   const { openTable: openAttributeTable } = useAttributeTableActions();
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDeleteTarget | null>(null);
+  const [createDialogTarget, setCreateDialogTarget] = useState<CreateBlankLayerTarget | null>(null);
+  const [createMapGroupTarget, setCreateMapGroupTarget] = useState<CreateMapGroupTarget | null>(null);
   const [editValue, setEditValue] = useState('');
   const renameTarget = expandedEditTarget;
   const renameValue = editValue;
@@ -233,7 +230,6 @@ export function LayerPanel() {
     ? rasters.find((item) => `raster:${item.id}` === selectedItemId) ?? null
     : null;
   const selectedVectorOverlay = selectedItemId === 'vectorOverlay' ? vectorOverlay : null;
-  const selectedLayerBounds = selectedUploadedLayer ? getLayerBounds(selectedUploadedLayer) : null;
 
   useEffect(() => {
     if (activeLayerId) {
@@ -501,22 +497,14 @@ export function LayerPanel() {
   const commitEditPanel = () => commitRename();
 
   const handleCreateBlankLayer = () => {
-    const fileName = window.prompt('GeoJSON layer name', 'polygon-layer.geojson');
-
-    if (fileName === null) {
-      return;
-    }
-
-    createBlankGeoJsonLayer({ fileName, geometryType: 'Polygon' });
+    setCreateDialogTarget({ geometryType: 'Polygon' });
   };
 
   const handleCreateMapGroup = () => {
-    const name = promptForUniqueMapGroupName(mapGroups);
+    setCreateMapGroupTarget({ groups: mapGroups });
+  };
 
-    if (!name) {
-      return;
-    }
-
+  const confirmCreateMapGroup = (name: string) => {
     const id = createMapGroupId();
     const nextGroup: MapGroup = {
       id,
@@ -525,6 +513,7 @@ export function LayerPanel() {
       layerItems: [createMapGroupLayerItem('basemap', mapCommandState.basemap, mapCommandState.basemapSourceKind, mapCommandState.cesiumImagery)],
     };
 
+    setCreateMapGroupTarget(null);
     setMapGroups((current) => [...current, nextGroup]);
     setSelectedItemId(null);
     closeEditPanel();
@@ -668,6 +657,19 @@ export function LayerPanel() {
         instanceId: selectedBasemapItem.instanceId,
         name: getMapGroupBasemapLabel(selectedBasemapItem.basemapId, selectedBasemapItem.basemapSourceKind, selectedBasemapItem.cesiumImageryId),
       });
+      return;
+    }
+
+    if (mapGroups.length > 1) {
+      const currentGroup = mapGroups.find((group) => group.id === currentMapGroupId);
+
+      if (currentGroup) {
+        setPendingDelete({
+          kind: 'group',
+          groupId: currentGroup.id,
+          name: currentGroup.name,
+        });
+      }
     }
   };
 
@@ -680,6 +682,24 @@ export function LayerPanel() {
       deleteUploadedLayer(pendingDelete.id);
     } else if (pendingDelete.kind === 'raster') {
       deleteRasterLayer(pendingDelete.id);
+    } else if (pendingDelete.kind === 'group') {
+      const removal = removeMapGroup(mapGroups, pendingDelete.groupId, currentMapGroupId);
+
+      setMapGroups(removal.groups);
+
+      if (removal.nextCurrentGroupId) {
+        setCurrentMapGroupId(removal.nextCurrentGroupId);
+      }
+
+      setCollapsedMapGroupIds((current) => {
+        if (!current.has(pendingDelete.groupId)) {
+          return current;
+        }
+
+        const next = new Set(current);
+        next.delete(pendingDelete.groupId);
+        return next;
+      });
     } else {
       setMapGroups((current) => current.map((group) => (
         group.id === pendingDelete.groupId
@@ -702,18 +722,10 @@ export function LayerPanel() {
 
   const deleteDialogTarget: DeleteLayerConfirmTarget | null = pendingDelete
     ? {
-      kind: pendingDelete.kind === 'basemap' ? 'basemap' : 'layer',
+      kind: pendingDelete.kind === 'basemap' ? 'basemap' : pendingDelete.kind === 'group' ? 'map' : 'layer',
       name: pendingDelete.name,
     }
     : null;
-
-  const handleZoomToSelectedLayer = () => {
-    if (!selectedUploadedLayer || !selectedLayerBounds) {
-      return;
-    }
-
-    zoomToLayer(selectedUploadedLayer.id);
-  };
 
   const handleDrop = (target: LayerDropDescriptor) => {
     if (!draggingItem) {
@@ -792,29 +804,7 @@ export function LayerPanel() {
         />
       </div>
       <div className="contents-tabs">
-        <Layers size={18} />
-        <Database size={18} />
-        <MapIcon size={18} />
-        <PenTool size={18} />
-        <Grid2X2 size={18} />
-        <button
-          type="button"
-          title="打开属性表"
-          aria-label="打开当前矢量图层属性表"
-          disabled={!selectedUploadedLayer && !selectedVectorOverlay}
-          onClick={() => {
-            if (selectedUploadedLayer) {
-              openAttributeTable?.(selectedUploadedLayer.id, displayLayerName(selectedUploadedLayer.fileName));
-              return;
-            }
-
-            if (selectedVectorOverlay) {
-              openAttributeTable?.('vectorOverlay', displayLayerName(selectedVectorOverlay.name));
-            }
-          }}
-        >
-          <TableProperties size={18} />
-        </button>
+        <AddDataSplitButton />
         <button
           type="button"
           title="新建空白 GeoJSON 图层"
@@ -841,8 +831,36 @@ export function LayerPanel() {
         >
           <Save size={18} />
         </button>
-        <SaveAsSplitButton
+        <button
+          type="button"
+          title="打开属性表"
+          aria-label="打开当前矢量图层属性表"
           disabled={!selectedUploadedLayer && !selectedVectorOverlay}
+          onClick={() => {
+            if (selectedUploadedLayer) {
+              openAttributeTable?.(selectedUploadedLayer.id, displayLayerName(selectedUploadedLayer.fileName));
+              return;
+            }
+
+            if (selectedVectorOverlay) {
+              openAttributeTable?.('vectorOverlay', displayLayerName(selectedVectorOverlay.name));
+            }
+          }}
+        >
+          <TableProperties size={18} />
+        </button>
+        <button
+          className="toolbar-delete"
+          type="button"
+          title="删除选中图层或地图"
+          aria-label="删除选中图层或地图"
+          disabled={!selectedUploadedLayer && !selectedRaster && !selectedBasemapItem && mapGroups.length <= 1}
+          onClick={handleDeleteSelectedLayer}
+        >
+          <Trash2 size={18} />
+        </button>
+        <MoreActionsMenu
+          exportDisabled={!selectedUploadedLayer && !selectedVectorOverlay}
           onExport={(format) => {
             if (selectedUploadedLayer) {
               if (format === 'geojson') {
@@ -862,30 +880,11 @@ export function LayerPanel() {
 
             return undefined;
           }}
-        />
-        <AddDataSplitButton />
-        <MapGroupSplitButton
           onCreateMapGroup={handleCreateMapGroup}
           onAddBasemapToCurrentMapGroup={handleAddBasemapToCurrentMapGroup}
+          onUploadGeoParquetUrl={uploadGeoParquetUrl}
+          onUploadGeoTiffUrl={uploadGeoTiffUrl}
         />
-        <button
-          type="button"
-          title="删除选中图层"
-          aria-label="删除选中图层"
-          disabled={!selectedUploadedLayer && !selectedRaster && !selectedBasemapItem}
-          onClick={handleDeleteSelectedLayer}
-        >
-          <Trash2 size={18} />
-        </button>
-        <button
-          type="button"
-          title="缩放到图层"
-          aria-label="缩放到当前图层范围"
-          disabled={!selectedUploadedLayer || !selectedLayerBounds}
-          onClick={handleZoomToSelectedLayer}
-        >
-          <ZoomIn size={18} />
-        </button>
       </div>
       <section className="layer-tree contents-layer-tree" role="tree" aria-label="地图和图层">
         {visibleMapGroupViews.map(({ group, rows, allVisible, someVisible }) => (
@@ -965,6 +964,9 @@ export function LayerPanel() {
               const layerLabel = item.kind === 'basemap'
                 ? `底图 · ${getMapGroupBasemapLabel(item.basemapId, item.basemapSourceKind, item.cesiumImageryId)}`
                 : item.label;
+              const itemRasterStyle = item.kind === 'raster'
+                ? rasterStyles[item.raster.id] ?? defaultRasterStyle
+                : defaultRasterStyle;
 
               return (
             <div className="layer-item-block" key={layerInstanceKey}>
@@ -972,7 +974,7 @@ export function LayerPanel() {
                 badge={(
                   <LayerBadge
                     item={item}
-                    rasterStyle={rasterStyle}
+                    rasterStyle={itemRasterStyle}
                     uploadedLayerStyles={uploadedLayerStyles}
                     vectorOverlayStyle={vectorOverlayStyle}
                   />
@@ -1059,7 +1061,7 @@ export function LayerPanel() {
               {isEditOpen ? (
                 <LayerStylePanel
                   item={item}
-                  rasterStyle={rasterStyle}
+                  rasterStyle={itemRasterStyle}
                   uploadedLayerStyles={uploadedLayerStyles}
                   vectorOverlayStyle={vectorOverlayStyle}
                   onClose={closeEditPanel}
@@ -1067,7 +1069,7 @@ export function LayerPanel() {
                     if (item.kind === 'uploaded') {
                       setUploadedLayerStyle(item.layer.id, defaultUploadedLayerStyle);
                     } else if (item.kind === 'raster') {
-                      setRasterStyle(defaultRasterStyle);
+                      setRasterStyle(item.raster.id, defaultRasterStyle);
                     } else if (item.kind === 'vectorOverlay') {
                       setVectorOverlayStyle(defaultVectorOverlayStyle);
                     } else {
@@ -1082,7 +1084,11 @@ export function LayerPanel() {
                   onUpdateBasemap={(patch) => {
                     handleBasemapStyleChange(group.id, groupItem, patch);
                   }}
-                  onUpdateRaster={setRasterStyle}
+                  onUpdateRaster={(patch) => {
+                    if (item.kind === 'raster') {
+                      setRasterStyle(item.raster.id, patch);
+                    }
+                  }}
                   onUpdateUploaded={setUploadedLayerStyle}
                   onUpdateVectorOverlay={setVectorOverlayStyle}
                 />
@@ -1107,34 +1113,21 @@ export function LayerPanel() {
         onCancel={handleCancelDelete}
         onConfirm={handleConfirmDelete}
       />
+      <CreateBlankLayerDialog
+        target={createDialogTarget}
+        onCancel={() => setCreateDialogTarget(null)}
+        onCreate={({ fileName, geometryType }) => {
+          setCreateDialogTarget(null);
+          createBlankGeoJsonLayer({ fileName, geometryType });
+        }}
+      />
+      <CreateMapGroupDialog
+        target={createMapGroupTarget}
+        onCancel={() => setCreateMapGroupTarget(null)}
+        onCreate={confirmCreateMapGroup}
+      />
     </section>
   );
-}
-
-function promptForUniqueMapGroupName(groups: MapGroup[]) {
-  const defaultName = nextMapGroupName(groups);
-
-  while (true) {
-    const value = window.prompt('地图名称', defaultName);
-
-    if (value === null) {
-      return null;
-    }
-
-    const name = value.trim();
-
-    if (!name) {
-      window.alert('地图名称不能为空。');
-      continue;
-    }
-
-    if (isDuplicateMapGroupName(groups, name)) {
-      window.alert('地图名称不能重复。');
-      continue;
-    }
-
-    return name;
-  }
 }
 
 function isSameLayerDragState(
@@ -1360,12 +1353,6 @@ function editableGeometryTypeToLayerGeometryKind(type: EditableGeometryType | un
   }
 
   return geometryTypeToLayerGeometryKind(type) ?? 'empty';
-}
-
-function getLayerBounds(layer: UploadedLayer) {
-  return layer.points.features.length > 0
-    ? getPointBounds(layer.points.features)
-    : getGeoJsonBounds(layer.geojson);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

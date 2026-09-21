@@ -69,7 +69,7 @@ export function createDigitizeLayerRenderer(map: Map) {
           url: input.raster.imageUrl, projection: 'EPSG:3857',
         }) : null);
       }
-      rasterLayer.setOpacity(input.rasterStyle.opacity);
+      rasterLayer.setOpacity(input.raster ? input.rasterStyles[input.raster.id]?.opacity ?? 0.82 : 1);
       rasterLayer.setVisible(Boolean(input.raster && isDigitizeLayerVisible(input, `raster:${input.raster.id}`, input.rasterLayerVisibility[input.raster.id] ?? input.layerVisibility.raster)));
       if (editableChanged) { editableSource.clear(); if (editable) editableSource.addFeatures(editable); }
       if (referenceChanged) { referenceSource.clear(); referenceSource.addFeatures(references); }
