@@ -151,6 +151,8 @@ export function MapSwipeOverlay({
     const skewY = (p3.y - p0.y) / image.height;
     ctx.setTransform(dpr * scaleX, dpr * scaleY, dpr * skewX, dpr * skewY, dpr * p0.x, dpr * p0.y);
     ctx.globalAlpha = opacity;
+    // 关掉画布平滑：卷帘时同样按最近邻放大，像元边界保持硬边
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(image, 0, 0);
     ctx.restore();
 

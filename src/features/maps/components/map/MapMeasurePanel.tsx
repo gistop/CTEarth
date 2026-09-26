@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
-import { Check, LocateFixed, MousePointer2, Ruler, Square, Undo2, X } from 'lucide-react';
+import { Check, LocateFixed, Ruler, Undo2, X } from 'lucide-react';
 import { useMapCommands, type MapViewMode } from './MapCommandContext';
 import { useMapMeasure, type MeasureMode } from './MapMeasureContext';
 import { loadCesium, type CesiumNamespace, type CesiumViewer } from './cesiumRuntime';
 import { getRasterBasemapDefinitions, type RasterBasemapTileDefinition } from './rasterBasemapSources';
-import { DistanceMeasurementResults } from './DistanceMeasurementResults';
 import {
   createDefaultDistanceMeasurementStyle,
-  type CompletedDistanceMeasurement,
   type DistanceMeasurementStyle,
 } from './distanceMeasurement';
 
-type MeasurePoint = {
+export type MeasurePoint = {
   height: number;
   lat: number;
   lon: number;
@@ -49,8 +47,6 @@ const measureModes: {
 }[] = [
   { id: 'coordinate', label: '坐标' },
   { id: 'distance', label: '距离' },
-  { id: 'area', label: '面积' },
-  { id: 'volume', label: '体积' },
 ];
 
 const MEASURE_SOURCE_ID = 'cte-measure-distance';
@@ -78,8 +74,22 @@ const CESIUM_DIMENSION_HANDLE_PIXEL_SIZE = 16;
 const CESIUM_DIMENSION_LINE_COLOR = '#46ddff';
 const CESIUM_DIMENSION_EXTENSION_COLOR = '#8ceaff';
 
+
 export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeasurePanelProps) {
-  const { closeMeasure, isMeasureOpen, mode, setMode } = useMapMeasure();
+  const {
+    addCompletedMeasurement,
+    addCoordinateResult,
+    clearCoordinateResults,
+    closeMeasure,
+    completedMeasurements,
+    coordinateResults,
+    distanceKind,
+    isMeasureOpen,
+    isPanelVisible,
+    mode,
+    setDistanceKind,
+    setMode,
+  } = useMapMeasure();
   const [points, setPoints] = useState<MeasurePoint[]>([]);
   const [previewPoint, setPreviewPoint] = useState<MeasurePoint | null>(null);
   const [locatorDraft, setLocatorDraft] = useState<MeasurePoint | null>(null);
@@ -93,21 +103,28 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
     cursorWasEnabled: undefined,
     lastY: 0,
   });
-  const [distanceKind, setDistanceKind] = useState<DistanceKind>('surface');
   const [isDrawingFinished, setIsDrawingFinished] = useState(false);
-  const [completedMeasurements, setCompletedMeasurements] = useState<CompletedDistanceMeasurement[]>([]);
+  const [coordinateHover, setCoordinateHover] = useState<MeasurePoint | null>(null);
+  const isCoordinateMode = isMeasureOpen && mode === 'coordinate';
   const isDistanceMode = isMeasureOpen && mode === 'distance';
   const isDistanceReady = isDistanceMode && (
     (mapMode === 'globe' && Boolean(cesiumScene))
     || (mapMode !== 'globe' && mapReady && Boolean(map))
   );
-  const result = useMemo(() => measureDistance(points, distanceKind), [distanceKind, points]);
+  const isTerrainDistance = distanceKind === 'surface' && mapMode === 'globe' && Boolean(cesiumScene);
+  const result = useMemo(() => (
+    cesiumScene && isTerrainDistance
+      ? measureTerrainDistance(cesiumScene.viewer, cesiumScene.Cesium, points)
+      : measureDistance(points, distanceKind)
+  ), [cesiumScene, distanceKind, isTerrainDistance, points, terrainRevision]);
   const visiblePreviewPoint = previewPoint && mapMode !== 'globe' && points.length > 0 && !isDrawingFinished ? previewPoint : null;
   const globePreviewPoint = locatorDraft && mapMode === 'globe' && isSelectingHeight && !isDrawingFinished ? locatorDraft : null;
   const activePreviewPoint = globePreviewPoint ?? visiblePreviewPoint;
   const previewResult = useMemo(
-    () => measureDistance(activePreviewPoint ? [...points, activePreviewPoint] : points, distanceKind),
-    [activePreviewPoint, distanceKind, points],
+    () => (cesiumScene && isTerrainDistance
+      ? measureTerrainDistance(cesiumScene.viewer, cesiumScene.Cesium, activePreviewPoint ? [...points, activePreviewPoint] : points)
+      : measureDistance(activePreviewPoint ? [...points, activePreviewPoint] : points, distanceKind)),
+    [activePreviewPoint, cesiumScene, distanceKind, isTerrainDistance, points, terrainRevision],
   );
 
   useEffect(() => {
@@ -164,14 +181,14 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
       : points;
 
     if (pointsToCommit.length >= 2 && !isDrawingFinished) {
-      setCompletedMeasurements((current) => [...current, {
-        id: `measurement-${Date.now()}-${current.length}`,
+      addCompletedMeasurement({
         isVisible: true,
-        name: `测量 ${current.length + 1}`,
         points: pointsToCommit.map((point) => ({ ...point })),
         style: createDefaultDistanceMeasurementStyle(),
-        totalDistance: measureDistance(pointsToCommit, distanceKind),
-      }]);
+        totalDistance: cesiumScene && mapMode === 'globe' && distanceKind === 'surface'
+          ? measureTerrainDistance(cesiumScene.viewer, cesiumScene.Cesium, pointsToCommit)
+          : measureDistance(pointsToCommit, distanceKind),
+      });
     }
     if (pointsToCommit !== points) {
       setPoints(pointsToCommit);
@@ -180,7 +197,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
     setLocatorDraft(null);
     setIsSelectingHeight(false);
     setIsDrawingFinished(pointsToCommit.length >= 2);
-  }, [distanceKind, isDrawingFinished, isSelectingHeight, locatorDraft, mapMode, points]);
+  }, [addCompletedMeasurement, cesiumScene, distanceKind, isDrawingFinished, isSelectingHeight, locatorDraft, mapMode, points]);
 
   const handleOverviewPick = useCallback((point: MeasurePoint) => {
     const height = locatorCurrentHeightRef.current;
@@ -214,12 +231,6 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
       clear();
     }
   }, [clear, isMeasureOpen]);
-
-  useEffect(() => {
-    if (isDistanceMode && mapMode === 'globe') {
-      setDistanceKind('space');
-    }
-  }, [isDistanceMode, mapMode]);
 
   useEffect(() => {
     if (!cesiumScene || !isDistanceMode || mapMode !== 'globe' || isDrawingFinished) {
@@ -388,7 +399,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
   }, [cesiumScene, distanceKind, globePreviewPoint, isDistanceMode, isDrawingFinished, isSelectingHeight, mapMode, points, previewResult, terrainRevision]);
 
   useEffect(() => {
-    if (!cesiumScene || !isDistanceMode || mapMode !== 'globe') {
+    if (!cesiumScene || mapMode !== 'globe' || cesiumScene.viewer.isDestroyed()) {
       return;
     }
 
@@ -409,7 +420,177 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
     return () => {
       entities.forEach((entity) => cesiumScene.viewer.entities.remove(entity));
     };
-  }, [cesiumScene, completedMeasurements, isDistanceMode, mapMode]);
+  }, [cesiumScene, completedMeasurements, mapMode]);
+
+  useEffect(() => {
+    if (!cesiumScene || mapMode !== 'globe' || cesiumScene.viewer.isDestroyed()) {
+      return;
+    }
+
+    const { Cesium, viewer } = cesiumScene;
+    const color = Cesium.Color.fromCssColorString('#38bdf8');
+    const entities = coordinateResults.map((result) => viewer.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(result.lon, result.lat, result.height),
+      point: {
+        color,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        outlineColor: Cesium.Color.fromCssColorString('#101820'),
+        outlineWidth: 2,
+        pixelSize: 9,
+      },
+      label: {
+        text: `${result.lon.toFixed(6)}°E, ${result.lat.toFixed(6)}°N, ${result.height.toFixed(1)} m`,
+        font: '600 12px "Segoe UI", "Microsoft YaHei", Arial, sans-serif',
+        fillColor: Cesium.Color.fromCssColorString('#e2f3ff'),
+        outlineColor: Cesium.Color.fromCssColorString('#101820'),
+        outlineWidth: 2,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        pixelOffset: new Cesium.Cartesian2(0, -16),
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    }));
+
+    return () => {
+      entities.forEach((entity) => viewer.entities.remove(entity));
+    };
+  }, [cesiumScene, coordinateResults, mapMode]);
+
+  useEffect(() => {
+    if (!cesiumScene || mapMode !== 'globe' || !isCoordinateMode || cesiumScene.viewer.isDestroyed()) {
+      return;
+    }
+
+    const { Cesium, viewer } = cesiumScene;
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    const previousCursor = viewer.canvas.style.cursor;
+
+    viewer.canvas.style.cursor = 'crosshair';
+
+    const pickPoint = (windowPosition: unknown): MeasurePoint | null => {
+      const ray = viewer.camera.getPickRay?.(windowPosition);
+      const cartesian = ray ? viewer.scene.globe.pick?.(ray, viewer.scene) : undefined;
+
+      if (!cartesian) {
+        const ellipsoid = viewer.camera.pickEllipsoid?.(windowPosition, viewer.scene.globe.ellipsoid);
+
+        if (!ellipsoid) {
+          return null;
+        }
+
+        const fallback = Cesium.Cartographic.fromCartesian(ellipsoid);
+
+        return {
+          height: 0,
+          lat: Cesium.Math.toDegrees(fallback.latitude),
+          lon: Cesium.Math.toDegrees(fallback.longitude),
+        };
+      }
+
+      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+
+      return {
+        height: cartographic.height,
+        lat: Cesium.Math.toDegrees(cartographic.latitude),
+        lon: Cesium.Math.toDegrees(cartographic.longitude),
+      };
+    };
+
+    handler.setInputAction((event) => {
+      const point = pickPoint(event.position);
+
+      if (point) {
+        addCoordinateResult(point);
+      }
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    handler.setInputAction((event) => {
+      setCoordinateHover(pickPoint(event.endPosition));
+    }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      event.preventDefault();
+      closeMeasure();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      handler.destroy();
+      viewer.canvas.style.cursor = previousCursor;
+      setCoordinateHover(null);
+    };
+  }, [addCoordinateResult, cesiumScene, closeMeasure, isCoordinateMode, mapMode]);
+
+  useEffect(() => {
+    if (!map || mapMode === 'globe' || !mapReady || !isCoordinateMode) {
+      return;
+    }
+
+    const canvas = map.getCanvas();
+    const previousCursor = canvas.style.cursor;
+
+    canvas.style.cursor = 'crosshair';
+
+    const handleClick = (event: maplibregl.MapMouseEvent) => {
+      event.preventDefault();
+      const point = pointFromMapEvent(map, event);
+
+      addCoordinateResult({ height: point.height, lat: point.lat, lon: point.lon });
+    };
+
+    const handleMouseMove = (event: maplibregl.MapMouseEvent) => {
+      setCoordinateHover(pointFromMapEvent(map, event));
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      event.preventDefault();
+      closeMeasure();
+    };
+
+    map.on('click', handleClick);
+    map.on('mousemove', handleMouseMove);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      map.off('click', handleClick);
+      map.off('mousemove', handleMouseMove);
+      window.removeEventListener('keydown', handleKeyDown);
+      canvas.style.cursor = previousCursor;
+      setCoordinateHover(null);
+    };
+  }, [addCoordinateResult, closeMeasure, isCoordinateMode, map, mapMode, mapReady]);
+
+  useEffect(() => {
+    if (!map || mapMode === 'globe' || !mapReady || mode !== 'coordinate') {
+      return;
+    }
+
+    const source = map.getSource(MEASURE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+
+    if (!source) {
+      return;
+    }
+
+    source.setData({
+      features: coordinateResults.map((result) => ({
+        geometry: { coordinates: [result.lon, result.lat], type: 'Point' },
+        properties: {
+          label: `${result.lon.toFixed(6)}°E, ${result.lat.toFixed(6)}°N, ${result.height.toFixed(1)} m`,
+        },
+        type: 'Feature',
+      })),
+      type: 'FeatureCollection',
+    });
+  }, [coordinateResults, map, mapMode, mapReady, mode]);
 
   useEffect(() => {
     if (!cesiumScene || !isDistanceReady || mapMode !== 'globe') {
@@ -428,6 +609,20 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
       controller.enableInputs = false;
     }
     viewer.canvas.addEventListener('contextmenu', preventDefault);
+
+    handler.setInputAction((event) => {
+      if (dimensionDragRef.current.annotation || isSelectingHeight || isDrawingFinished) {
+        return;
+      }
+
+      const point = pickGlobeSurfacePoint(Cesium, viewer, event.position);
+
+      if (!point) {
+        return;
+      }
+
+      setPoints((current) => appendMeasurePoint(current, point));
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
     handler.setInputAction((event) => {
       if (dimensionDragRef.current.annotation) {
@@ -535,7 +730,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
     };
   }, [cesiumScene, closeMeasure, confirmLocatorPoint, finish, isDistanceReady, isDrawingFinished, isSelectingHeight, locatorDraft, mapMode, points.length]);
 
-  if (!isMeasureOpen) {
+  if (!isMeasureOpen || !isPanelVisible) {
     return null;
   }
 
@@ -590,18 +785,13 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
             onDraftPointChange={updateLocatorDraft}
           />
         ) : (
-          <PlaceholderMeasureMode mode={mode} />
+          <CoordinateMeasureMode
+            displayPoint={coordinateHover ?? (coordinateResults[0] ?? null)}
+            mapMode={mapMode}
+            resultCount={coordinateResults.length}
+            onClear={clearCoordinateResults}
+          />
         )}
-        <DistanceMeasurementResults
-          measurements={completedMeasurements}
-          onRemove={(id) => setCompletedMeasurements((current) => current.filter((item) => item.id !== id))}
-          onStyleChange={(id, patch) => setCompletedMeasurements((current) => current.map((item) => (
-            item.id === id ? { ...item, style: { ...item.style, ...patch } } : item
-          )))}
-          onVisibilityChange={(id, isVisible) => setCompletedMeasurements((current) => current.map((item) => (
-            item.id === id ? { ...item, isVisible } : item
-          )))}
-        />
       </div>
 
       <footer className="map-measure-footer">
@@ -670,8 +860,7 @@ function DistanceMeasureMode({
           type="button"
           role="radio"
           aria-checked={distanceKind === 'surface'}
-          disabled={mapMode === 'globe'}
-          title={mapMode === 'globe' ? '三维测量使用经纬度与高度生成空间点' : '贴地折线'}
+          title="贴地折线"
           onClick={() => onDistanceKindChange('surface')}
         >
           贴地折线
@@ -736,38 +925,61 @@ function DistanceMeasureMode({
   );
 }
 
-function PlaceholderMeasureMode({ mode }: { mode: MeasureMode }) {
-  const content = {
-    coordinate: {
-      icon: LocateFixed,
-      title: '坐标提取',
-      body: '经纬度、椭球高、地形高提取入口已预留。',
-    },
-    area: {
-      icon: Square,
-      title: '面积测量',
-      body: '多边形面积测量入口已预留。',
-    },
-    volume: {
-      icon: MousePointer2,
-      title: '体积测量',
-      body: '基准面、挖方、填方和净方量入口已预留。',
-    },
-    distance: {
-      icon: Ruler,
-      title: '距离测量',
-      body: '',
-    },
-  }[mode];
-  const Icon = content.icon;
-
+function CoordinateMeasureMode({
+  displayPoint,
+  mapMode,
+  resultCount,
+  onClear,
+}: {
+  displayPoint: MeasurePoint | null;
+  mapMode: MapViewMode;
+  resultCount: number;
+  onClear: () => void;
+}) {
   return (
     <section className="map-measure-mode">
       <div className="map-measure-mode-title">
-        <Icon size={14} strokeWidth={1.8} />
-        <span>{content.title}</span>
+        <LocateFixed size={14} strokeWidth={1.8} />
+        <span>坐标测量</span>
       </div>
-      <div className="map-measure-placeholder">{content.body}</div>
+      <p className="map-measure-placeholder">
+        {mapMode === 'globe'
+          ? '在球上单击取点，读取经度、纬度与地形高程；结果进入右侧「测量结果」面板，Esc 退出。'
+          : '在地图上单击取点，读取经度、纬度与高程；结果进入右侧「测量结果」面板，Esc 退出。'}
+      </p>
+      <div className="map-measure-coordinate-grid" aria-label="当前坐标">
+        <label>
+          <span>经度</span>
+          <input type="number" readOnly value={displayPoint ? trimNumber(displayPoint.lon, 6) : ''} placeholder="--" />
+        </label>
+        <label>
+          <span>纬度</span>
+          <input type="number" readOnly value={displayPoint ? trimNumber(displayPoint.lat, 6) : ''} placeholder="--" />
+        </label>
+        <label>
+          <span>高度</span>
+          <input type="number" readOnly value={displayPoint ? trimNumber(displayPoint.height, 2) : ''} placeholder="--" />
+        </label>
+      </div>
+      <div className="map-measure-result">
+        <div className="map-measure-result-title">结果</div>
+        <dl>
+          <div>
+            <dt>点数</dt>
+            <dd>{resultCount}</dd>
+          </div>
+          <div>
+            <dt>位置</dt>
+            <dd>右侧「测量结果」面板</dd>
+          </div>
+        </dl>
+      </div>
+      <div className="map-measure-actions">
+        <button type="button" disabled={resultCount === 0} onClick={onClear}>
+          <X size={13} strokeWidth={1.8} />
+          <span>清除全部坐标</span>
+        </button>
+      </div>
     </section>
   );
 }
@@ -1001,7 +1213,40 @@ function preventDefault(event: Event) {
   event.preventDefault();
 }
 
-function appendMeasurePoint(points: MeasurePoint[], nextPoint: MeasurePoint) {
+export function pickGlobeSurfacePoint(
+  Cesium: CesiumNamespace,
+  viewer: CesiumViewer,
+  windowPosition: unknown,
+): MeasurePoint | null {
+  const ray = viewer.camera.getPickRay?.(windowPosition);
+  const cartesian = ray ? viewer.scene.globe.pick?.(ray, viewer.scene) : undefined;
+
+  if (!cartesian) {
+    const ellipsoid = viewer.camera.pickEllipsoid?.(windowPosition, viewer.scene.globe.ellipsoid);
+
+    if (!ellipsoid) {
+      return null;
+    }
+
+    const fallback = Cesium.Cartographic.fromCartesian(ellipsoid);
+
+    return {
+      height: 0,
+      lat: Cesium.Math.toDegrees(fallback.latitude),
+      lon: Cesium.Math.toDegrees(fallback.longitude),
+    };
+  }
+
+  const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+
+  return {
+    height: cartographic.height,
+    lat: Cesium.Math.toDegrees(cartographic.latitude),
+    lon: Cesium.Math.toDegrees(cartographic.longitude),
+  };
+}
+
+export function appendMeasurePoint(points: MeasurePoint[], nextPoint: MeasurePoint) {
   const previous = points.at(-1);
 
   if (previous && distanceBetweenSurfacePoints(previous, nextPoint) < 0.2) {
@@ -1203,7 +1448,7 @@ function getDistanceStatus(
   }
 
   if (mapMode === 'globe') {
-    return pointCount === 0 ? '在平面定位图单击选择经纬度' : '继续在平面定位图选择下一点';
+    return pointCount === 0 ? '在三维视图单击加点，或用平面定位图选点' : '继续单击加点，右键或双击完成';
   }
 
   if (pointCount === 0) {
@@ -1213,7 +1458,7 @@ function getDistanceStatus(
   return '继续单击添加点，双击或右键完成';
 }
 
-function pointFromMapEvent(map: maplibregl.Map, event: maplibregl.MapMouseEvent): MeasurePoint {
+export function pointFromMapEvent(map: maplibregl.Map, event: maplibregl.MapMouseEvent): MeasurePoint {
   return {
     height: getTerrainHeight(map, event.lngLat),
     lat: event.lngLat.lat,
@@ -1388,7 +1633,7 @@ function estimateCesiumViewRangeMeters(viewer: CesiumViewer) {
     : Math.max(viewer.camera.positionCartographic.height, 1000);
 }
 
-function measureDistance(points: MeasurePoint[], kind: DistanceKind) {
+export function measureDistance(points: MeasurePoint[], kind: DistanceKind) {
   if (points.length < 2) {
     return 0;
   }
@@ -1400,6 +1645,35 @@ function measureDistance(points: MeasurePoint[], kind: DistanceKind) {
       ? distanceBetweenSpacePoints(previous, point)
       : distanceBetweenSurfacePoints(previous, point));
   }, 0);
+}
+
+export function measureTerrainDistance(
+  viewer: CesiumViewer,
+  Cesium: CesiumNamespace,
+  points: MeasurePoint[],
+) {
+  if (points.length < 2) {
+    return 0;
+  }
+
+  let total = 0;
+
+  for (let index = 1; index < points.length; index += 1) {
+    const start = points[index - 1];
+    const end = points[index];
+    const sampleCount = getCesiumLineTerrainSampleCount(start, end);
+    let previousGround: MeasurePoint = { ...start, height: getCesiumGroundHeight(viewer, Cesium, start) };
+
+    for (let sampleIndex = 1; sampleIndex <= sampleCount; sampleIndex += 1) {
+      const interpolated = interpolateMeasurePoint(start, end, sampleIndex / sampleCount);
+      const ground: MeasurePoint = { ...interpolated, height: getCesiumGroundHeight(viewer, Cesium, interpolated) };
+
+      total += distanceBetweenSpacePoints(previousGround, ground);
+      previousGround = ground;
+    }
+  }
+
+  return total;
 }
 
 function distanceBetweenSurfacePoints(start: MeasurePoint, end: MeasurePoint) {
@@ -1447,7 +1721,7 @@ function toDegrees(value: number) {
   return value * 180 / Math.PI;
 }
 
-function formatDistance(value: number) {
+export function formatDistance(value: number) {
   if (!Number.isFinite(value) || value <= 0) {
     return '--';
   }
@@ -1467,7 +1741,7 @@ function trimNumber(value: number, digits: number) {
   return Number.parseFloat(value.toFixed(digits)).toString();
 }
 
-function createCesiumDistanceEntities(
+export function createCesiumDistanceEntities(
   viewer: CesiumViewer,
   Cesium: CesiumNamespace,
   points: MeasurePoint[],

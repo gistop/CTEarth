@@ -12,16 +12,28 @@ export function RasterEditControls() {
 
   return (
     <div className="ribbon-raster-edit">
-      <label className="ribbon-layer-select">
-        <Layers size={18} strokeWidth={1.7} />
-        <select value={raster ? 'raster' : ''} disabled={!raster} aria-label="当前栅格图层">
-          {raster ? (
-            <option value="raster">{displayLayerName(raster.name)}</option>
-          ) : (
-            <option value="">无栅格图层</option>
-          )}
-        </select>
-      </label>
+      <div className="ribbon-raster-edit-head">
+        <label className="ribbon-layer-select">
+          <Layers size={18} strokeWidth={1.7} />
+          <select value={raster ? 'raster' : ''} disabled={!raster} aria-label="当前栅格图层">
+            {raster ? (
+              <option value="raster">{displayLayerName(raster.name)}</option>
+            ) : (
+              <option value="">无栅格图层</option>
+            )}
+          </select>
+        </label>
+        <label className="ribbon-aoi-values" title="在 AOI 命中的像元上标注像元值">
+          <input
+            type="checkbox"
+            checked={digitize.rasterPixelValuesVisible}
+            disabled={!raster}
+            aria-label="显示像元值"
+            onChange={(event) => digitize.setRasterPixelValuesVisible(event.target.checked)}
+          />
+          <span>显示像元值</span>
+        </label>
+      </div>
       <button
         className={digitize.rasterAoiActive ? 'ribbon-aoi-button is-active' : 'ribbon-aoi-button'}
         type="button"

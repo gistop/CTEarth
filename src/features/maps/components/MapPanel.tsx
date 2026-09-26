@@ -13,9 +13,13 @@ import { MapSwipeOverlay } from './MapSwipeOverlay';
 import { MapFeatureSelection } from './map/MapFeatureSelection';
 import { type MapViewMode, useMapCommands } from './map/MapCommandContext';
 import { MapMeasurePanel } from './map/MapMeasurePanel';
+import { RibbonDistanceMeasureOverlay } from './map/RibbonDistanceMeasure';
 import { useMapMeasure } from './map/MapMeasureContext';
 import { MapSunlightPanel } from './map/MapSunlightPanel';
 import { useMapSunlight } from './map/MapSunlightContext';
+import { TerrainAnalysisPanel } from './map/TerrainAnalysisPanel';
+import { ElevationMeasurePanel } from './map/ElevationMeasurePanel';
+import { GeometryMeasurePanel } from './map/GeometryMeasurePanel';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
 import { configureCesiumIonToken, loadCesium, type CesiumNamespace, type CesiumViewer } from './map/cesiumRuntime';
 import { useMapIdentify } from './map/MapIdentifyContext';
@@ -669,7 +673,7 @@ export function MapPanel() {
       const style = uploadedLayerStyles[item.id] ?? defaultUploadedLayerStyle;
 
       ensureUploadedLayer(map, item.id, style);
-      setUploadedLayerData(map, item);
+      setUploadedLayerData(map, item, style);
       setUploadedLayerPaint(map, item.id, style);
       setLayersVisibility(map, uploadedLayerIds(item.id), uploadedLayerVisibility[item.id] ?? true);
     });
@@ -1051,6 +1055,15 @@ export function MapPanel() {
       <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
       <MapSunlightPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <MapMeasurePanel cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
+      <RibbonDistanceMeasureOverlay cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
+      <TerrainAnalysisPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <ElevationMeasurePanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <GeometryMeasurePanel
+        cesiumScene={cesiumScene}
+        map={mapRef.current}
+        mapMode={mapCommandState.mapMode}
+        mapReady={mapReady}
+      />
     </MapViewportFrame>
   );
 }
@@ -1136,9 +1149,15 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string, style: Upload
       id: labelId,
       type: 'symbol',
       source: sourceId,
-      filter: ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
+      // 字段标注开启后，线/面要素也参与标注；关闭时保持原先仅点要素显示数值
+      filter: [
+        'any',
+        ['==', ['geometry-type'], 'Point'],
+        ['==', ['geometry-type'], 'MultiPoint'],
+        hasLabelExpression(),
+      ],
       layout: {
-        'text-field': ['to-string', ['get', '_value']],
+        'text-field': ['case', hasLabelExpression(), ['to-string', ['get', '_label']], ['to-string', ['get', '_value']]],
         'text-size': 11,
         'text-offset': [0, 1.2],
         'text-anchor': 'top',
@@ -1153,7 +1172,7 @@ function ensureUploadedLayer(map: maplibregl.Map, layerId: string, style: Upload
 }
 
 function setUploadedLayerPaint(map: maplibregl.Map, layerId: string, style: UploadedLayerStyle) {
-  const [fillId, lineId, circleId] = uploadedLayerIds(layerId);
+  const [fillId, lineId, circleId, labelId] = uploadedLayerIds(layerId);
 
   if (map.getLayer(fillId)) {
     map.setPaintProperty(fillId, 'fill-color', selectedColorExpression('#f97316', style.fillColor));
@@ -1173,6 +1192,21 @@ function setUploadedLayerPaint(map: maplibregl.Map, layerId: string, style: Uplo
     map.setPaintProperty(circleId, 'circle-stroke-color', selectedColorExpression('#ffffff', style.pointStrokeColor));
     map.setPaintProperty(circleId, 'circle-stroke-width', selectedNumberExpression(Math.max(style.pointStrokeWidth + 1, 2.5), style.pointStrokeWidth));
   }
+
+  if (map.getLayer(labelId)) {
+    map.setLayoutProperty(labelId, 'text-field', ['case', hasLabelExpression(), ['to-string', ['get', '_label']], ['to-string', ['get', '_value']]]);
+    map.setFilter(labelId, [
+      'any',
+      ['==', ['geometry-type'], 'Point'],
+      ['==', ['geometry-type'], 'MultiPoint'],
+      hasLabelExpression(),
+    ]);
+  }
+}
+
+/** 要素携带非空 _label（字段标注开启后注入）的表达式 */
+function hasLabelExpression(): ExpressionSpecification {
+  return ['all', ['has', '_label'], ['!=', ['get', '_label'], '']];
 }
 
 function selectedColorExpression(selectedColor: string, normalColor: string): ExpressionSpecification {
@@ -1198,13 +1232,14 @@ function setVectorOverlayPaint(
   }
 }
 
-function setUploadedLayerData(map: maplibregl.Map, layer: { id: string; geojson: { features: unknown[] }; selectedField: string; selectedFeatureIndexes: number[] }) {
+function setUploadedLayerData(map: maplibregl.Map, layer: { id: string; geojson: { features: unknown[] }; selectedField: string; selectedFeatureIndexes: number[] }, style: UploadedLayerStyle) {
   const source = map.getSource(uploadedSourceId(layer.id)) as maplibregl.GeoJSONSource | undefined;
   const selectedFeatureIndexes = new Set(layer.selectedFeatureIndexes);
+  const label = { enabled: style.labelEnabled ?? false, field: style.labelField ?? '' };
 
   source?.setData({
     type: 'FeatureCollection',
-    features: layer.geojson.features.map((feature, index) => enrichFeature(feature, layer, index, selectedFeatureIndexes)),
+    features: layer.geojson.features.map((feature, index) => enrichFeature(feature, layer, index, selectedFeatureIndexes, label)),
   } as GeoJSON.FeatureCollection);
 }
 
@@ -1384,7 +1419,7 @@ function formatNumber(value: number) {
   return Math.abs(value) >= 100 ? value.toFixed(1) : value.toFixed(3);
 }
 
-function enrichFeature(feature: unknown, layer: { id: string; selectedField: string }, index: number, selectedFeatureIndexes: Set<number>) {
+function enrichFeature(feature: unknown, layer: { id: string; selectedField: string }, index: number, selectedFeatureIndexes: Set<number>, label: { enabled: boolean; field: string }) {
   if (!isRecord(feature)) {
     return feature;
   }
@@ -1401,8 +1436,21 @@ function enrichFeature(feature: unknown, layer: { id: string; selectedField: str
       _value: layer.selectedField && isPointLikeFeature(feature)
         ? formatNumber(Number(properties[layer.selectedField]))
         : '',
+      _label: label.enabled && label.field ? formatLabelValue(properties[label.field]) : '',
     },
   };
+}
+
+function formatLabelValue(value: unknown) {
+  if (value === null || value === undefined || typeof value === 'object') {
+    return '';
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : '';
+  }
+
+  return String(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

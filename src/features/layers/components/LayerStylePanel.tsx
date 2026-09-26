@@ -54,6 +54,7 @@ export function LayerStylePanel({
       {item.kind === 'uploaded' ? (
         <UploadedStyleEditor
           style={uploadedLayerStyles[item.layer.id] ?? defaultUploadedLayerStyle}
+          fields={item.layer.fields}
           onChange={(patch) => onUpdateUploaded(item.layer.id, patch)}
         />
       ) : null}
@@ -89,11 +90,16 @@ export function LayerStylePanel({
 
 function UploadedStyleEditor({
   style,
+  fields,
   onChange,
 }: {
   style: UploadedLayerStyle;
+  fields: string[];
   onChange: (patch: Partial<UploadedLayerStyle>) => void;
 }) {
+  const labelEnabled = style.labelEnabled ?? false;
+  const labelField = style.labelField ?? '';
+
   return (
     <div className="layer-style-form">
       <ColorControl label="点颜色" value={style.pointColor} onChange={(value) => onChange({ pointColor: value })} />
@@ -106,6 +112,37 @@ function UploadedStyleEditor({
       <RangeControl label="线透明度" value={style.lineOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ lineOpacity: value })} />
       <ColorControl label="面颜色" value={style.fillColor} onChange={(value) => onChange({ fillColor: value })} />
       <RangeControl label="面透明度" value={style.fillOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ fillOpacity: value })} />
+      <label className="layer-style-field layer-style-toggle" title="开启后在地图上按字段给要素加文字标注">
+        <span>开启标注</span>
+        <input
+          type="checkbox"
+          checked={labelEnabled}
+          onChange={(event) => {
+            const next = event.target.checked;
+            // 勾选时若未选过字段，默认取第一个可用字段
+            const fallbackField = labelField || (next ? fields[0] ?? '' : labelField);
+            onChange({ labelEnabled: next, labelField: fallbackField });
+          }}
+        />
+      </label>
+      {labelEnabled ? (
+        <label className="layer-style-field">
+          <span>标注字段</span>
+          <select
+            className="layer-label-field-select"
+            value={labelField}
+            onChange={(event) => onChange({ labelField: event.target.value })}
+          >
+            {fields.length === 0 ? (
+              <option value="">无可用字段</option>
+            ) : (
+              fields.map((field) => (
+                <option key={field} value={field}>{field}</option>
+              ))
+            )}
+          </select>
+        </label>
+      ) : null}
     </div>
   );
 }

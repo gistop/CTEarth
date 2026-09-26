@@ -2,6 +2,7 @@ import type { FeatureLike } from 'ol/Feature.js';
 import { transformExtent } from 'ol/proj.js';
 import { Circle as CircleStyle, Fill, Stroke, Style, Text } from 'ol/style.js';
 import type { UploadedLayerStyle, VectorOverlayStyle } from '../../../gisStore';
+import { createLabelTextStyle, resolveStyleLabelText } from '../../digitize/adapters/digitizeMapStyles';
 
 export function createLayoutUploadedLayerStyle(style: UploadedLayerStyle, scale = 1) {
   return (feature: FeatureLike) => {
@@ -11,6 +12,7 @@ export function createLayoutUploadedLayerStyle(style: UploadedLayerStyle, scale 
     const isPolygon = geometryType === 'Polygon' || geometryType === 'MultiPolygon';
     const selected = Boolean(feature.get('_selected'));
     const value = String(feature.get('_value') ?? '');
+    const labelText = resolveStyleLabelText(style, feature);
     const selectedColor = '#f97316';
     const fillColor = selected ? selectedColor : style.fillColor;
     const lineColor = selected ? selectedColor : style.lineColor;
@@ -40,18 +42,12 @@ export function createLayoutUploadedLayerStyle(style: UploadedLayerStyle, scale 
           stroke: new Stroke({ color: pointStrokeColor, width: selected ? Math.max(style.pointStrokeWidth + 1, 2.5) : style.pointStrokeWidth }),
         }),
       }));
+    }
 
-      if (value) {
-        styles.push(new Style({
-          text: new Text({
-            text: value,
-            font: '12px sans-serif',
-            offsetY: 15,
-            fill: new Fill({ color: '#17202a' }),
-            stroke: new Stroke({ color: '#ffffff', width: 2 }),
-          }),
-        }));
-      }
+    // 与主地图一致：开启字段标注后线/面要素也显示文字；点要素在无标注时回退到数值
+    const text = labelText || (isPoint ? value : '');
+    if (text) {
+      styles.push(new Style({ text: createLabelTextStyle(text, isPoint ? 15 : 0) }));
     }
 
     return scaleStyles(styles, scale);

@@ -46,7 +46,8 @@ export function syncOpenLayersRasters(
     if (!source || source.getUrl() !== raster.imageUrl
       || source.getProjection()?.getCode() !== projection
       || source.getImageExtent().some((value, index) => value !== extent[index])) {
-      layer.setSource(new ImageStatic({ imageExtent: extent, projection, url: raster.imageUrl }));
+      // interpolate: false → 最近邻重采样，像元边界保持硬边（OL 的默认值是 true，会线性插值变糊）
+      layer.setSource(new ImageStatic({ imageExtent: extent, projection, url: raster.imageUrl, interpolate: false }));
     }
     layer.setVisible(visibility[raster.id] ?? fallbackVisible);
     layer.setOpacity(resolveRasterOpacity(styles, raster.id));

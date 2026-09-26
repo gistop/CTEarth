@@ -14,6 +14,7 @@ export type CesiumViewer = {
     flyTo: (options: { destination: unknown; duration?: number }) => void;
     setView: (options: { destination: unknown; orientation?: Record<string, unknown> }) => void;
     pickEllipsoid?: (windowPosition: unknown, ellipsoid?: unknown) => unknown;
+    getPickRay?: (windowPosition: unknown) => unknown;
   };
   canvas: HTMLCanvasElement;
   clock: {
@@ -48,6 +49,7 @@ export type CesiumViewer = {
       ellipsoid?: unknown;
       enableLighting: boolean;
       getHeight?: (cartographic: unknown) => number | undefined;
+      pick?: (ray: unknown, scene: unknown) => unknown | undefined;
       shadows?: unknown;
       show: boolean;
       tileLoadProgressEvent?: {
@@ -99,9 +101,11 @@ export type CesiumNamespace = CesiumLayerNamespace & {
     clone: (cartesian: unknown) => unknown;
     cross: (left: unknown, right: unknown, result: unknown) => unknown;
     distance: (left: unknown, right: unknown) => number;
+    divideByScalar: (cartesian: unknown, scalar: number, result: unknown) => unknown;
     dot: (left: unknown, right: unknown) => number;
     fromDegrees: (longitude: number, latitude: number, height: number) => unknown;
     fromRadians: (longitude: number, latitude: number, height: number) => unknown;
+    lerp: (start: unknown, end: unknown, t: number, result: unknown) => unknown;
     magnitude: (cartesian: unknown) => number;
     midpoint: (left: unknown, right: unknown, result: unknown) => unknown;
     multiplyByScalar: (cartesian: unknown, scalar: number, result: unknown) => unknown;
@@ -117,7 +121,20 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   PolygonHierarchy: new (positions: unknown[]) => unknown;
   PolylineDashMaterialProperty: new (options: Record<string, unknown>) => unknown;
   PolylineGlowMaterialProperty: new (options: Record<string, unknown>) => unknown;
+  ArcType: {
+    GEODESIC: unknown;
+    NONE: unknown;
+  };
   CallbackProperty: new (callback: () => unknown, isConstant: boolean) => unknown;
+  ColorMaterialProperty: new (colorOrProperty: unknown) => unknown;
+  LabelStyle: {
+    FILL_AND_OUTLINE: unknown;
+  };
+  sampleTerrainMostDetailed: (
+    terrainProvider: unknown,
+    positions: unknown[],
+    options?: Record<string, unknown>,
+  ) => Promise<unknown[]>;
   Transforms: {
     eastNorthUpToFixedFrame: (origin: unknown) => unknown;
   };
@@ -129,8 +146,20 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   Color: {
     LIGHTGREY: unknown;
     SKYBLUE: unknown;
+    WHITE: unknown;
     fromAlpha: (color: unknown, alpha: number) => unknown;
     fromCssColorString: (color: string) => unknown;
+  };
+  LabelGraphics: new (options: Record<string, unknown>) => unknown;
+  VerticalOrigin: {
+    BOTTOM: unknown;
+    CENTER?: unknown;
+    TOP?: unknown;
+  };
+  HeightReference: {
+    CLAMP_TO_GROUND: unknown;
+    NONE?: unknown;
+    RELATIVE_TO_GROUND?: unknown;
   };
   Ion?: {
     defaultAccessToken: string;

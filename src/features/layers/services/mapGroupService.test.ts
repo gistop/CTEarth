@@ -6,6 +6,7 @@ import {
   moveLayerItemInMapGroups,
   moveMapGroupByOffset,
   moveMapGroupsInOrder,
+  nextMapGroupName,
   normalizeMapGroups,
 } from './mapGroupService';
 import type { MapGroup } from '../types';
@@ -14,7 +15,7 @@ function createGroups(): MapGroup[] {
   return [
     {
       id: 'map-1',
-      name: '地图',
+      name: '项目',
       displayVisible: true,
       layerItems: [
         { instanceId: 'point-instance', layerId: 'uploaded:point', visible: true },
@@ -24,7 +25,7 @@ function createGroups(): MapGroup[] {
     },
     {
       id: 'map-2',
-      name: '地图 2',
+      name: '项目 2',
       displayVisible: true,
       layerItems: [
         { instanceId: 'roads-instance', layerId: 'uploaded:roads', visible: true },
@@ -75,6 +76,24 @@ describe('mapGroupService', () => {
       { groupId: 'map-2', position: 'after' },
     );
     expect(next.map((group) => group.id)).toEqual(['map-2', 'map-1']);
+  });
+
+  it('migrates legacy default group names (地图/地图 N) to the project wording', () => {
+    const migrated = normalizeMapGroups([
+      { id: 'map-1', name: '地图', layerItems: [] },
+      { id: 'map-2', name: '地图 2', layerItems: [] },
+      { id: 'map-3', name: '地图3', layerItems: [] },
+      { id: 'map-4', name: '行政区', layerItems: [] },
+    ]);
+
+    expect(migrated.map((group) => group.name)).toEqual(['项目', '项目 2', '项目 3', '行政区']);
+  });
+
+  it('generates the next project name from existing groups', () => {
+    expect(nextMapGroupName([
+      { id: 'map-1', name: '项目', layerItems: [] },
+      { id: 'map-2', name: '项目 2', layerItems: [] },
+    ])).toBe('项目 3');
   });
 
   it('normalizes legacy basemap records and derives draw order', () => {

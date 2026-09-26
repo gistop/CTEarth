@@ -31,6 +31,7 @@ export function createDigitizeStore() {
     startRasterAoi: () => execute({ type: 'start-aoi' }),
     setRasterAoi: (polygon: RasterAoiPolygon | null) => execute({ type: 'set-aoi', polygon }),
     clearRasterAoi: () => execute({ type: 'clear-aoi' }),
+    setRasterPixelValuesVisible: (visible: boolean) => execute({ type: 'set-raster-values', visible }),
   };
   return { getSnapshot: () => state, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }, execute, actions };
 }

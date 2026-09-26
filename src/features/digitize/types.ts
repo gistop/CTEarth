@@ -11,6 +11,7 @@ export type DigitizeState = {
   rasterAoi: RasterAoiPolygon | null;
   rasterAoiActive: boolean;
   rasterAoiRevision: number;
+  rasterPixelValuesVisible: boolean;
   snapEnabled: boolean;
   status: string;
   traceEnabled: boolean;
@@ -26,7 +27,8 @@ export type DigitizeCommand =
   | { type: 'set-feature-count'; count: number }
   | { type: 'start-aoi' }
   | { type: 'set-aoi'; polygon: RasterAoiPolygon | null }
-  | { type: 'clear-aoi' };
+  | { type: 'clear-aoi' }
+  | { type: 'set-raster-values'; visible: boolean };
 
 export type DigitizeEditableLayer = {
   id: string;

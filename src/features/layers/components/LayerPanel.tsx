@@ -1,13 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Plus,
-  Save,
   Search,
-  TableProperties,
   Trash2,
 } from 'lucide-react';
 import { useAttributeTableActions } from '../../attributes';
 import { AddDataSplitButton } from './AddDataSplitButton';
+import { AttributeTableIcon, SaveLayerIcon } from './GisToolbarIcons';
 import { CreateBlankLayerDialog, type CreateBlankLayerTarget } from './CreateBlankLayerDialog';
 import { CreateMapGroupDialog, type CreateMapGroupTarget } from './CreateMapGroupDialog';
 import { DeleteLayerConfirmDialog, type DeleteLayerConfirmTarget } from './DeleteLayerConfirmDialog';
@@ -398,14 +396,14 @@ export function LayerPanel() {
       }
 
       if (!nextName) {
-        window.alert('地图名称不能为空。');
+        window.alert('项目名称不能为空。');
         return false;
       }
 
       if (
         mapGroups.some((group) => group.id !== targetGroup.id && normalizeMapGroupName(group.name) === normalizeMapGroupName(nextName))
       ) {
-        window.alert('地图名称不能重复。');
+        window.alert('项目名称不能重复。');
         return false;
       }
 
@@ -807,14 +805,6 @@ export function LayerPanel() {
         <AddDataSplitButton />
         <button
           type="button"
-          title="新建空白 GeoJSON 图层"
-          aria-label="新建空白 GeoJSON 图层"
-          onClick={handleCreateBlankLayer}
-        >
-          <Plus size={18} />
-        </button>
-        <button
-          type="button"
           title="保存当前 GeoJSON 图层"
           aria-label="保存当前 GeoJSON 图层"
           disabled={!selectedUploadedLayer && !selectedVectorOverlay}
@@ -829,7 +819,7 @@ export function LayerPanel() {
             }
           }}
         >
-          <Save size={18} />
+          <SaveLayerIcon size={20} />
         </button>
         <button
           type="button"
@@ -847,7 +837,7 @@ export function LayerPanel() {
             }
           }}
         >
-          <TableProperties size={18} />
+          <AttributeTableIcon size={20} />
         </button>
         <button
           className="toolbar-delete"
@@ -857,7 +847,7 @@ export function LayerPanel() {
           disabled={!selectedUploadedLayer && !selectedRaster && !selectedBasemapItem && mapGroups.length <= 1}
           onClick={handleDeleteSelectedLayer}
         >
-          <Trash2 size={18} />
+          <Trash2 size={20} />
         </button>
         <MoreActionsMenu
           exportDisabled={!selectedUploadedLayer && !selectedVectorOverlay}
@@ -881,6 +871,7 @@ export function LayerPanel() {
             return undefined;
           }}
           onCreateMapGroup={handleCreateMapGroup}
+          onCreateBlankLayer={handleCreateBlankLayer}
           onAddBasemapToCurrentMapGroup={handleAddBasemapToCurrentMapGroup}
           onUploadGeoParquetUrl={uploadGeoParquetUrl}
           onUploadGeoTiffUrl={uploadGeoTiffUrl}

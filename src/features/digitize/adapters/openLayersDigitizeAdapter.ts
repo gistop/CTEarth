@@ -13,6 +13,7 @@ import { unByKey } from 'ol/Observable.js';
 import type { EventsKey } from 'ol/events.js';
 import type { DigitizeEditSession } from '../types';
 import { createDefaultDigitizeState, getDrawingStatus, labelForTool } from '../services/digitizeStateService';
+import { MAX_AOI_OUTLINE_CELLS, MAX_AOI_VALUE_LABELS } from '../services/rasterAoiPixels';
 import { completeSharedBoundary, createBoundaryCache, type BoundaryCache } from '../services/sharedBoundaryService';
 import { createDigitizeLayerRenderer, isDigitizeLayerVisible } from './openLayersDigitizeLayers';
 import { getBoundaryRings } from './openLayersDigitizeCodec';
@@ -251,10 +252,20 @@ export function createOpenLayersDigitizeMap(container: HTMLElement, callbacks: D
     setState(next) {
       if (disposed) return;
       const aoiChanged = state.rasterAoi !== next.rasterAoi || state.rasterAoiRevision !== next.rasterAoiRevision;
+      const valuesChanged = state.rasterPixelValuesVisible !== next.rasterPixelValuesVisible;
       state = next;
       if (aoiChanged) {
         renderer.aoiSource.clear();
         if (next.rasterAoi) renderer.aoiSource.addFeature(renderer.codec.readAoi(next.rasterAoi));
+      }
+      if (aoiChanged || valuesChanged) {
+        const summary = renderer.setAoiHighlight(next.rasterAoi, next.rasterPixelValuesVisible);
+
+        if (aoiChanged && next.rasterAoi) {
+          callbacks.setStatus(!input?.raster
+            ? '请先选择栅格图层，再绘制 AOI。'
+            : describeAoiHighlight(summary, next.rasterPixelValuesVisible));
+        }
       }
       configure();
     },
@@ -282,6 +293,23 @@ export function createOpenLayersDigitizeMap(container: HTMLElement, callbacks: D
       map.dispose();
     },
   };
+}
+
+function describeAoiHighlight(
+  summary: { count: number; labelled: number; outlined: boolean; skipped: boolean; truncated: boolean },
+  showValues: boolean,
+) {
+  if (summary.skipped) return 'AOI 覆盖的像元过多，已跳过像元高亮，可缩小框选范围。';
+  if (!summary.count) return 'AOI 内没有有效像元，可重新框选。';
+
+  const base = `AOI 命中 ${summary.count.toLocaleString()} 个像元`;
+
+  if (summary.truncated) return `${base}（已达统计上限），可缩小框选范围。`;
+  if (!summary.outlined) return `${base}；像元过多未逐格描边（上限 ${MAX_AOI_OUTLINE_CELLS.toLocaleString()}），可缩小框选范围。`;
+  if (!showValues) return `${base}，可输入像元值并执行栅格修改。`;
+  if (summary.labelled) return `${base}，已标注像元值。`;
+
+  return `${base}；像元值最多标注 ${MAX_AOI_VALUE_LABELS} 个，请缩小框选范围。`;
 }
 
 function sameReferenceGeometry(first: DigitizeMapInput, second: DigitizeMapInput) {

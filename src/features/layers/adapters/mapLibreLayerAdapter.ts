@@ -34,10 +34,12 @@ export function syncMapLibreRasters(
       }
     }
     if (!map.getLayer(id)) {
-      map.addLayer({ id, type: 'raster', source: id, paint: { 'raster-fade-duration': 0 } });
+      map.addLayer({ id, type: 'raster', source: id, paint: { 'raster-fade-duration': 0, 'raster-resampling': 'nearest' } });
     }
     map.setLayoutProperty(id, 'visibility', (visibility[raster.id] ?? fallbackVisible) ? 'visible' : 'none');
     map.setPaintProperty(id, 'raster-opacity', resolveRasterOpacity(styles, raster.id));
+    // MapLibre 的 raster-resampling 默认是 linear，会把像元边界插值成渐变（ArcGIS Pro / QGIS 默认是最近邻）
+    map.setPaintProperty(id, 'raster-resampling', 'nearest');
   });
 }
 const VECTOR_OVERLAY_LAYER_IDS = ['buffer-fill', 'buffer-outline'];

@@ -1,13 +1,30 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { ChevronRight, Cloud, Database, EllipsisVertical, Layers, MapPlus, Save, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ChevronRight, Cloud, Database, EllipsisVertical, Layers, MapPlus, Plus, Save, X } from 'lucide-react';
 
 export type VectorExportFormat = 'geojson' | 'geopackage';
+
+// 工具栏位于 dockview 面板内，祖先节点均为 overflow: hidden，绝对定位的菜单会被裁在面板里。
+// 因此菜单 portal 到 body 并用 fixed 定位，挂在触发按钮下方、向右展开（右侧是地图区）。
+const MENU_MIN_WIDTH = 208;
+const SUBMENU_MIN_WIDTH = 176;
+const SUBMENU_OFFSET = 6;
+const VIEWPORT_PADDING = 8;
+const ANCHOR_GAP = 5;
+
+type MenuPlacement = {
+  top: number;
+  left: number;
+  /** 右侧空间不足时子菜单向左展开，避免超出视口 */
+  flipSubmenu: boolean;
+};
 
 export function MoreActionsMenu({
   exportDisabled,
   onExport,
   onCreateMapGroup,
+  onCreateBlankLayer,
   onAddBasemapToCurrentMapGroup,
   onUploadGeoParquetUrl,
   onUploadGeoTiffUrl,
@@ -15,17 +32,43 @@ export function MoreActionsMenu({
   exportDisabled?: boolean;
   onExport: (format: VectorExportFormat) => void | Promise<void>;
   onCreateMapGroup: () => void | Promise<void>;
+  onCreateBlankLayer: () => void | Promise<void>;
   onAddBasemapToCurrentMapGroup: () => void | Promise<void>;
   onUploadGeoParquetUrl: (url: string) => Promise<void>;
   onUploadGeoTiffUrl: (url: string) => Promise<void>;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = useState(false);
+  const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   const [isRemoteDialogOpen, setIsRemoteDialogOpen] = useState(false);
+
+  const placeMenu = useCallback(() => {
+    const trigger = triggerRef.current;
+
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menuRef.current?.offsetWidth || MENU_MIN_WIDTH;
+    const maxLeft = window.innerWidth - menuWidth - VIEWPORT_PADDING;
+    const left = Math.max(VIEWPORT_PADDING, Math.min(rect.left, maxLeft));
+
+    setPlacement({
+      top: rect.bottom + ANCHOR_GAP,
+      left,
+      flipSubmenu: left + menuWidth + SUBMENU_OFFSET + SUBMENU_MIN_WIDTH > window.innerWidth - VIEWPORT_PADDING,
+    });
+  }, []);
 
   useEffect(() => {
     const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+
+      // 菜单已 portal 到 body，不在 rootRef 内，需单独判断
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setIsOpen(false);
       }
     };
@@ -43,6 +86,20 @@ export function MoreActionsMenu({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    // 首帧按最小宽度估算，渲染后再按实际宽度校正一次
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+
+    return () => {
+      window.removeEventListener('resize', placeMenu);
+    };
+  }, [isOpen, placeMenu]);
 
   const execute = async (action: () => void | Promise<void>) => {
     setIsOpen(false);
@@ -71,89 +128,138 @@ export function MoreActionsMenu({
   return (
     <div ref={rootRef} className={isOpen ? 'more-actions is-open' : 'more-actions'}>
       <button
+        ref={triggerRef}
         className={isOpen ? 'more-actions-trigger is-open' : 'more-actions-trigger'}
         type="button"
         title="更多操作"
         aria-label="更多操作"
         aria-haspopup="menu"
         aria-expanded={isOpen}
-        onClick={() => setIsOpen((open) => !open)}
+        onClick={() => {
+          if (isOpen) {
+            setIsOpen(false);
+            return;
+          }
+
+          placeMenu();
+          setIsOpen(true);
+        }}
       >
-        <EllipsisVertical size={16} />
+        <EllipsisVertical size={20} />
       </button>
-      {isOpen ? (
-        <div className="more-actions-menu" role="menu" aria-label="更多操作">
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setIsOpen(false);
-              setIsRemoteDialogOpen(true);
-            }}
-          >
-            <Cloud size={14} />
-            <span>添加远程数据…</span>
-          </button>
-          <div className="more-actions-separator" role="separator" />
-          <div className="has-submenu">
-            <button
-              type="button"
-              role="menuitem"
-              aria-haspopup="menu"
-              disabled={exportDisabled}
+      {isOpen && placement
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="more-actions-menu"
+              role="menu"
+              aria-label="更多操作"
+              style={{ top: placement.top, left: placement.left }}
             >
-              <Save size={14} />
-              <span>另存为</span>
-              <ChevronRight size={14} />
-            </button>
-            <div className="submenu" role="menu" aria-label="另存为">
               <button
                 type="button"
                 role="menuitem"
-                disabled={exportDisabled}
                 onClick={() => {
-                  void execute(() => onExport('geojson'));
+                  setIsOpen(false);
+                  setIsRemoteDialogOpen(true);
                 }}
               >
-                <Save size={14} />
-                <span>另存为 GeoJSON…</span>
+                <Cloud size={14} />
+                <span>添加远程数据…</span>
               </button>
+              <div className="more-actions-separator" role="separator" />
+              <div className="has-submenu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  disabled={exportDisabled}
+                >
+                  <Save size={14} />
+                  <span>另存为</span>
+                  <ChevronRight size={14} />
+                </button>
+                <div
+                  className={placement.flipSubmenu ? 'submenu is-flipped' : 'submenu'}
+                  role="menu"
+                  aria-label="另存为"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={exportDisabled}
+                    onClick={() => {
+                      void execute(() => onExport('geojson'));
+                    }}
+                  >
+                    <Save size={14} />
+                    <span>另存为 GeoJSON…</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={exportDisabled}
+                    onClick={() => {
+                      void execute(() => onExport('geopackage'));
+                    }}
+                  >
+                    <Database size={14} />
+                    <span>另存为 GeoPackage…</span>
+                  </button>
+                </div>
+              </div>
+              <div className="more-actions-separator" role="separator" />
+              <div className="has-submenu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="menu"
+                >
+                  <MapPlus size={14} />
+                  <span>新建</span>
+                  <ChevronRight size={14} />
+                </button>
+                <div
+                  className={placement.flipSubmenu ? 'submenu is-flipped' : 'submenu'}
+                  role="menu"
+                  aria-label="新建"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      void execute(onCreateMapGroup);
+                    }}
+                  >
+                    <MapPlus size={14} />
+                    <span>新建项目…</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      void execute(onCreateBlankLayer);
+                    }}
+                  >
+                    <Plus size={14} />
+                    <span>新建空白 GeoJSON 图层…</span>
+                  </button>
+                </div>
+              </div>
               <button
                 type="button"
                 role="menuitem"
-                disabled={exportDisabled}
                 onClick={() => {
-                  void execute(() => onExport('geopackage'));
+                  void execute(onAddBasemapToCurrentMapGroup);
                 }}
               >
-                <Database size={14} />
-                <span>另存为 GeoPackage…</span>
+                <Layers size={14} />
+                <span>给当前地图添加底图…</span>
               </button>
-            </div>
-          </div>
-          <div className="more-actions-separator" role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              void execute(onCreateMapGroup);
-            }}
-          >
-            <MapPlus size={14} />
-            <span>新建地图…</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              void execute(onAddBasemapToCurrentMapGroup);
-            }}
-          >
-            <Layers size={14} />
-            <span>给当前地图添加底图…</span>
-          </button>
-        </div>
-      ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
       {isRemoteDialogOpen ? (
         <AddRemoteDataDialog onCancel={() => setIsRemoteDialogOpen(false)} onConfirm={handleRemoteConfirm} />
       ) : null}
@@ -162,7 +268,7 @@ export function MoreActionsMenu({
 }
 
 /**
- * 添加远程数据对话框：复用删除确认/新建地图对话框的外壳与交互约定
+ * 添加远程数据对话框：复用删除确认/新建项目对话框的外壳与交互约定
  * （Esc 取消、Enter 提交、点击遮罩取消、关闭后焦点恢复）。
  */
 function AddRemoteDataDialog({

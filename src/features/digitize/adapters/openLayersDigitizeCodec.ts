@@ -20,6 +20,12 @@ export function createDigitizeFeatureCodec() {
         if (value.geometry !== null && !isRecord(value.geometry)) throw new Error('要素缺少有效几何结构。');
         const feature = new Feature<Geometry>();
         if (value.geometry !== null) feature.setGeometry(format.readGeometry(value.geometry, projections));
+        // 保留属性到要素上，供参考图层/编辑图层的字段标注读取
+        if (isRecord(value.properties)) {
+          Object.entries(value.properties as Record<string, unknown>)
+            .filter(([key]) => key !== 'geometry')
+            .forEach(([key, property]) => feature.set(key, property));
+        }
         const projected = projectedGeometry(feature);
         const anchors = new Map<string, number[]>();
         visitGeometryPositions(projected, value.geometry, (position, original) => anchors.set(positionKey(position), original.slice(0, 2)));

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Eye, EyeOff, RotateCcw, Settings2, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Eraser, Eye, EyeOff, RotateCcw, Settings2, Trash2, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import {
   createDefaultDistanceMeasurementStyle,
@@ -8,6 +8,7 @@ import {
 
 type DistanceMeasurementResultsProps = {
   measurements: CompletedDistanceMeasurement[];
+  onClearAll: () => void;
   onRemove: (id: string) => void;
   onStyleChange: (id: string, patch: Partial<DistanceMeasurementStyle>) => void;
   onVisibilityChange: (id: string, isVisible: boolean) => void;
@@ -15,6 +16,7 @@ type DistanceMeasurementResultsProps = {
 
 export function DistanceMeasurementResults({
   measurements,
+  onClearAll,
   onRemove,
   onStyleChange,
   onVisibilityChange,
@@ -22,14 +24,21 @@ export function DistanceMeasurementResults({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  if (measurements.length === 0) {
-    return null;
-  }
-
   return (
-    <section className="measure-result-list" aria-label="测量结果">
-      <div className="map-measure-result-title">测量结果</div>
-      {measurements.map((measurement) => {
+    <section className="elevation-result-list" aria-label="距离测量结果">
+      <div className="elevation-result-toolbar">
+        <span>距离测量结果（{measurements.length}）</span>
+        <button type="button" disabled={measurements.length === 0} onClick={onClearAll}>
+          <Eraser size={13} />
+          清除全部
+        </button>
+      </div>
+      {measurements.length === 0 ? (
+        <div className="elevation-result-empty">
+          暂无距离结果。在「地图 → 测量 → 距离」连续单击加点，双击或右键结束。
+        </div>
+      ) : (
+        measurements.map((measurement) => {
         const isExpanded = expandedId === measurement.id;
         const isEditing = editingId === measurement.id;
 
@@ -95,7 +104,8 @@ export function DistanceMeasurementResults({
             ) : null}
           </article>
         );
-      })}
+        })
+      )}
     </section>
   );
 }

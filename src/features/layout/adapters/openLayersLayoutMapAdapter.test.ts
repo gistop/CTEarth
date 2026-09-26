@@ -11,7 +11,7 @@ import type { Style } from 'ol/style.js';
 import { get as getProjection } from 'ol/proj.js';
 import { createOpenLayersLayoutMap } from './openLayersLayoutMapAdapter';
 import { compositeMapCanvases } from './mapCanvasCapture';
-import { createLayoutMapInput, createLayoutPointLayer } from '../testing/layoutMapFixtures';
+import { createLayoutMapInput, createLayoutPointLayer, createLayoutPolygonLayer } from '../testing/layoutMapFixtures';
 import type { LayoutMapOptions, LayoutMapRuntime } from './layoutMapTypes';
 
 const mapCreated = vi.hoisted(() => vi.fn());
@@ -95,6 +95,32 @@ describe('OpenLayers layout runtime', () => {
     runtime.sync({ ...input, layers: [] });
     expect(map.layers).not.toContain(layer);
     expect(layer.getSource()!.getFeatures()).toHaveLength(0);
+  });
+
+  it('renders field labels for point and polygon features when labels are enabled', () => {
+    const { runtime, map } = setup();
+    const input = createLayoutMapInput();
+    input.layers = [createLayoutPointLayer(), createLayoutPolygonLayer()];
+    const labelStyle = { ...input.defaultUploadedStyle, labelEnabled: true, labelField: 'name' };
+    input.uploadedLayerStyles = { points: labelStyle, areas: labelStyle };
+    runtime.sync(input);
+    const pointLayer = map.layers.at(-2) as VectorLayer;
+    const areaLayer = map.layers.at(-1) as VectorLayer;
+    const point = pointLayer.getSource()!.getFeatures()[0];
+    const area = areaLayer.getSource()!.getFeatures()[0];
+
+    const pointStyles = pointLayer.getStyleFunction()!(point, 1) as Style[];
+    const areaStyles = areaLayer.getStyleFunction()!(area, 1) as Style[];
+    expect(pointStyles.some((item) => item.getText()?.getText() === '测点')).toBe(true);
+    expect(areaStyles.some((item) => item.getText()?.getText() === '园区')).toBe(true);
+
+    // 关闭标注后：点回退到数值标注，面要素不再显示文字
+    const disabledStyle = { ...input.defaultUploadedStyle, labelEnabled: false, labelField: 'name' };
+    runtime.sync({ ...input, uploadedLayerStyles: { points: disabledStyle, areas: disabledStyle } });
+    const pointStylesOff = pointLayer.getStyleFunction()!(point, 1) as Style[];
+    const areaStylesOff = areaLayer.getStyleFunction()!(area, 1) as Style[];
+    expect(pointStylesOff.some((item) => item.getText()?.getText() === '42.000')).toBe(true);
+    expect(areaStylesOff.every((item) => !item.getText()?.getText())).toBe(true);
   });
 
   it('shares the geographic view while paper display zoom changes', () => {

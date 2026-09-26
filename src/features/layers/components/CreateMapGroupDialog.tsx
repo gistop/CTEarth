@@ -9,7 +9,7 @@ export type CreateMapGroupTarget = {
 };
 
 /**
- * 新建地图（地图组）对话框：设置地图名称并做非空/重名校验。
+ * 新建项目（地图组）对话框：设置项目名称并做非空/重名校验。
  * 复用删除确认对话框的外壳与交互约定（Esc 取消、Enter 提交、点击遮罩取消、焦点恢复），
  * 校验结果就地以错误提示展示，替代原先的 window.prompt + window.alert 循环。
  */
@@ -77,9 +77,9 @@ function CreateMapGroupForm({
 
   const trimmedName = name.trim();
   const error = !trimmedName
-    ? '地图名称不能为空。'
+    ? '项目名称不能为空。'
     : isDuplicateMapGroupName(groups, trimmedName)
-      ? '地图名称不能重复。'
+      ? '项目名称不能重复。'
       : '';
 
   return (
@@ -104,7 +104,7 @@ function CreateMapGroupForm({
             <MapPlus size={20} strokeWidth={2.2} />
           </div>
           <div className="delete-dialog-heading">
-            <h2 id="create-map-group-dialog-title">新建地图</h2>
+            <h2 id="create-map-group-dialog-title">新建项目</h2>
             <button type="button" className="delete-dialog-close" aria-label="关闭" title="关闭" onClick={onCancel}>
               <X size={18} />
             </button>
@@ -112,7 +112,7 @@ function CreateMapGroupForm({
         </div>
         <div className="dialog-form">
           <label className="dialog-field">
-            <span>地图名称</span>
+            <span>项目名称</span>
             <input
               ref={inputRef}
               value={name}
@@ -121,7 +121,7 @@ function CreateMapGroupForm({
             />
           </label>
           {error ? <p className="dialog-error" role="alert">{error}</p> : null}
-          <p className="dialog-note">新地图会自带一个底图图层；创建后可在地图之间拖动图层，并把当前地图设为活动地图。</p>
+          <p className="dialog-note">新项目会自带一个底图图层；创建后可在项目之间拖动图层，也可把其中某个项目设为当前项目。</p>
         </div>
         <div className="delete-dialog-actions">
           <button type="button" className="delete-dialog-cancel" onClick={onCancel}>

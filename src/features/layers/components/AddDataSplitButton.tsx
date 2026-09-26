@@ -1,5 +1,6 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { ChevronDown, Cloud, FolderPlus, Link2 } from 'lucide-react';
+import { ChevronDown, Cloud, Link2 } from 'lucide-react';
+import { AddLocalDataIcon } from './GisToolbarIcons';
 import { useLayerStore } from '../stores/layerStore';
 
 export function AddDataSplitButton() {
@@ -80,11 +81,11 @@ export function AddDataSplitButton() {
       <button
         className="add-data-local"
         type="button"
-        title="本地添加数据"
+        title="添加本地数据"
         aria-label="本地添加 CSV、Shapefile ZIP、GeoJSON、GeoParquet、GeoPackage 或 GeoTIFF 数据"
         onClick={() => fileInputRef.current?.click()}
       >
-        <FolderPlus size={16} />
+        <AddLocalDataIcon size={20} />
       </button>
       <button
         className={isMenuOpen ? 'add-data-toggle is-open' : 'add-data-toggle'}

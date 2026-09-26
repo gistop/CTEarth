@@ -5,10 +5,27 @@ export { CoordinateSystemControls } from './components/map/CoordinateSystemContr
 export { GlobeLocateSearchButton } from './components/map/GlobeLocateSearchButton';
 export { MapLayerMenu } from './components/map/MapLayerMenu';
 export { MapTerrainDiagnosticsButton } from './components/map/MapTerrainDiagnosticsButton';
-export { MapMeasureButton } from './components/map/MapMeasureButton';
-export { MapMeasureProvider } from './components/map/MapMeasureContext';
+export { MapMeasureProvider, useMapMeasure } from './components/map/MapMeasureContext';
+export { MapMeasurePanel } from './components/map/MapMeasurePanel';
+export { MapMeasureResults } from './components/map/MapMeasureResults';
+export { MeasureSplitButton } from './components/map/MeasureSplitButton';
+export { useMeasureToolkit, type MeasureToolId } from './components/map/measureToolkit';
+export {
+  RibbonDistanceMeasureOverlay,
+  RibbonDistanceMeasureProvider,
+  useRibbonDistanceMeasure,
+} from './components/map/RibbonDistanceMeasure';
 export { MapSunlightButton } from './components/map/MapSunlightButton';
 export { MapSunlightProvider } from './components/map/MapSunlightContext';
+export { TerrainAnalysisProvider, useTerrainAnalysis } from './components/map/TerrainAnalysisContext';
+export { TerrainProfileChart } from './components/map/TerrainAnalysisPanel';
+export { ElevationMeasureProvider, useElevationMeasure } from './components/map/ElevationMeasureContext';
+export { ElevationMeasureResults } from './components/map/ElevationMeasureResults';
+export { formatMeasureLength } from './components/map/elevationMeasurement';
+export type { ElevationMeasureResult } from './components/map/elevationMeasurement';
+export { GeometryMeasureProvider, useGeometryMeasure } from './components/map/GeometryMeasureContext';
+export type { GeometryMeasureMode, GeometryMeasureResult } from './components/map/GeometryMeasureContext';
+export { GeometryMeasureResults } from './components/map/GeometryMeasureResults';
 export { MapBasemapSelectionProvider } from './components/map/MapBasemapSelectionContext';
 export { MapCommandProvider, useMapCommands } from './components/map/MapCommandContext';
 export type {

@@ -44,7 +44,7 @@ export type SelectedBasemapItem = {
 export function createDefaultMapGroups(): MapGroup[] {
   return [{
     id: DEFAULT_MAP_GROUP_ID,
-    name: '地图',
+    name: '项目',
     displayVisible: true,
     layerItems: [{ ...createMapGroupLayerItem('basemap', defaultBasemapId), visible: false }],
   }];
@@ -98,11 +98,11 @@ export function nextMapGroupName(groups: MapGroup[]) {
   const names = new Set(groups.map((group) => normalizeMapGroupName(group.name)));
   let index = groups.length + 1;
 
-  while (names.has(normalizeMapGroupName(`地图 ${index}`))) {
+  while (names.has(normalizeMapGroupName(`项目 ${index}`))) {
     index += 1;
   }
 
-  return `地图 ${index}`;
+  return `项目 ${index}`;
 }
 
 export function isDuplicateMapGroupName(groups: MapGroup[], name: string) {
@@ -331,9 +331,27 @@ export function getVisibleMapGroupLayerIds(groups: MapGroup[]) {
   return visibleIds;
 }
 
+/**
+ * 术语调整：地图组改称「项目」。旧草稿里存的是默认名「地图 / 地图 2 / 地图 3…」，
+ * 这里做一次性迁移——只匹配默认命名形态，用户自定义的名字（如「行政区」）不动；
+ * 迁移后名字不再匹配，因此重复执行也是幂等的。
+ */
+const LEGACY_DEFAULT_GROUP_NAME = /^地图\s*(\d*)$/;
+
+export function migrateLegacyMapGroupName(name: string) {
+  const match = LEGACY_DEFAULT_GROUP_NAME.exec(name.trim());
+
+  if (!match) {
+    return name;
+  }
+
+  return match[1] ? `项目 ${match[1]}` : '项目';
+}
+
 export function normalizeMapGroups(groups: MapGroup[]) {
   return groups.map((group) => ({
     ...group,
+    name: migrateLegacyMapGroupName(group.name),
     displayVisible: group.displayVisible ?? true,
     layerItems: group.layerItems.map((item) => (
       item.layerId === 'basemap'

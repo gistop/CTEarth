@@ -21,7 +21,7 @@ export function getToolStatus(state: Pick<DigitizeState, 'activeTool' | 'modifyE
 export function createDefaultDigitizeState(): DigitizeState {
   const state: DigitizeState = {
     activeTool: 'Point', editingActive: false, featureCount: 0, modifyEnabled: false,
-    rasterAoi: null, rasterAoiActive: false, rasterAoiRevision: 0, snapEnabled: true, traceEnabled: true, status: '',
+    rasterAoi: null, rasterAoiActive: false, rasterAoiRevision: 0, rasterPixelValuesVisible: false, snapEnabled: true, traceEnabled: true, status: '',
   };
   return { ...state, status: getToolStatus(state) };
 }
@@ -51,6 +51,10 @@ export function digitizeReducer(state: DigitizeState, command: DigitizeCommand):
       return { ...state, rasterAoi: command.polygon ? copyAoiPolygon(command.polygon) : null, rasterAoiActive: command.polygon ? false : state.rasterAoiActive, status: command.polygon ? 'AOI 已绘制，可输入像元值并执行栅格修改。' : 'AOI 已清空。' };
     case 'clear-aoi':
       return { ...state, rasterAoi: null, rasterAoiActive: false, rasterAoiRevision: state.rasterAoiRevision + 1, status: 'AOI 已清空。' };
+    case 'set-raster-values':
+      requireBoolean(command.visible);
+      next = { ...state, rasterPixelValuesVisible: command.visible };
+      break;
     default: throw new Error('不支持的编辑状态命令。');
   }
   return { ...next, status: getToolStatus(next) };

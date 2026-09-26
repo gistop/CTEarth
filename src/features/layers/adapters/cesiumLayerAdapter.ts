@@ -24,6 +24,22 @@ type UploadedStyle = {
   lineOpacity: number;
   fillColor: string;
   fillOpacity: number;
+  labelEnabled?: boolean;
+  labelField?: string;
+};
+
+/** Cesium 实体的结构化访问：位置/几何/属性按需读取，字段标注时写入 position 与 label */
+type CesiumEntityLike = {
+  position: unknown;
+  label: unknown;
+  properties?: unknown;
+  polygon?: { hierarchy?: { getValue(time: unknown): { positions?: unknown[] } | undefined } | undefined } | undefined;
+  polyline?: { positions?: { getValue(time: unknown): unknown[] | undefined } | undefined } | undefined;
+};
+
+type CesiumDataSourceLike = {
+  show: boolean;
+  entities: { values: CesiumEntityLike[] };
 };
 
 export type CesiumLayerSyncRequest = {
@@ -137,18 +153,106 @@ async function syncCesiumLayers({
       continue;
     }
 
+    const style = uploadedLayerStyles[layer.id] ?? DEFAULT_UPLOADED_STYLE;
     const dataSource = await Cesium.GeoJsonDataSource.load(
       layer.geojson,
-      createCesiumGeoJsonStyle(Cesium, uploadedLayerStyles[layer.id] ?? DEFAULT_UPLOADED_STYLE),
-    ) as { show: boolean };
+      createCesiumGeoJsonStyle(Cesium, style),
+    ) as CesiumDataSourceLike;
 
     if (!isActive()) {
       return;
     }
 
+    applyCesiumEntityLabels(Cesium, dataSource, style);
     dataSource.show = true;
     await viewer.dataSources.add(dataSource);
   }
+}
+
+/** 按样式开启字段标注：为每个带有效属性值的实体挂 LabelGraphics，线/面取几何中心作为标注锚点 */
+function applyCesiumEntityLabels(Cesium: CesiumNamespace, dataSource: CesiumDataSourceLike, style: UploadedStyle) {
+  const field = style.labelField ?? '';
+  if (!style.labelEnabled || !field) {
+    return;
+  }
+
+  const now = Cesium.JulianDate.now();
+  dataSource.entities.values.forEach(entity => {
+    const text = formatCesiumLabelText(readCesiumPropertyValues(entity.properties, now)[field]);
+    if (!text) {
+      return;
+    }
+
+    const anchor = resolveCesiumEntityPosition(Cesium, entity, now);
+    if (!anchor) {
+      return;
+    }
+
+    entity.position = anchor;
+    entity.label = new Cesium.LabelGraphics({
+      text,
+      font: '13px "Segoe UI", "Microsoft YaHei", sans-serif',
+      fillColor: Cesium.Color.fromCssColorString('#1f2933'),
+      outlineColor: Cesium.Color.fromCssColorString('#ffffff'),
+      outlineWidth: 3,
+      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+      showBackground: true,
+      backgroundColor: Cesium.Color.fromAlpha(Cesium.Color.WHITE, 0.55),
+      backgroundPadding: new Cesium.Cartesian2(5, 3),
+      verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+      heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+      disableDepthTestDistance: Number.POSITIVE_INFINITY,
+    });
+  });
+}
+
+function readCesiumPropertyValues(properties: unknown, time: unknown): Record<string, unknown> {
+  const bag = properties as { getValue?: (time: unknown) => unknown } | null | undefined;
+
+  if (!bag || typeof bag.getValue !== 'function') {
+    return {};
+  }
+
+  const values = bag.getValue(time);
+  return values && typeof values === 'object' ? values as Record<string, unknown> : {};
+}
+
+function formatCesiumLabelText(value: unknown) {
+  if (value === null || value === undefined || typeof value === 'object') {
+    return '';
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : '';
+  }
+
+  return String(value);
+}
+
+function resolveCesiumEntityPosition(Cesium: CesiumNamespace, entity: CesiumEntityLike, time: unknown) {
+  const position = entity.position as { getValue?: (time: unknown) => unknown } | null | undefined;
+
+  if (position && typeof position.getValue === 'function') {
+    return position.getValue(time) ?? null;
+  }
+
+  const polygonPositions = entity.polygon?.hierarchy?.getValue(time)?.positions;
+  if (Array.isArray(polygonPositions) && polygonPositions.length > 0) {
+    return averageCesiumCartesians(Cesium, polygonPositions as Parameters<typeof Cesium.Cartesian3.add>[1][]);
+  }
+
+  const polylinePositions = entity.polyline?.positions?.getValue(time);
+  if (Array.isArray(polylinePositions) && polylinePositions.length > 0) {
+    return averageCesiumCartesians(Cesium, polylinePositions as Parameters<typeof Cesium.Cartesian3.add>[1][]);
+  }
+
+  return null;
+}
+
+function averageCesiumCartesians(Cesium: CesiumNamespace, positions: Parameters<typeof Cesium.Cartesian3.add>[1][]) {
+  const sum = new Cesium.Cartesian3(0, 0, 0);
+  positions.forEach(position => Cesium.Cartesian3.add(sum, position, sum));
+  return Cesium.Cartesian3.divideByScalar(sum, positions.length, new Cesium.Cartesian3());
 }
 
 function createCesiumImageryProvider(

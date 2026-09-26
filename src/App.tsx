@@ -1,4 +1,4 @@
-import { Fragment, lazy, Suspense, useCallback, useMemo, useRef, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockviewReact,
   type DockviewApi,
@@ -8,6 +8,8 @@ import {
   type IDockviewPanel,
 } from 'dockview-react';
 import {
+  ArrowUpDown,
+  Activity,
   Bell,
   ChevronsDown,
   ChevronsUp,
@@ -19,10 +21,10 @@ import {
   FolderOpen,
   Grid2X2,
   HelpCircle,
-  History,
   Layers,
   LocateFixed,
   Map,
+  MapPin,
   Minus,
   MousePointer2,
   Mountain,
@@ -41,8 +43,11 @@ import {
   Share2,
   SlidersHorizontal,
   Sparkles,
+  Square,
   SquareDashedMousePointer,
   Tags,
+  Triangle,
+  Waves,
   Wrench,
   Undo2,
   Upload,
@@ -54,14 +59,25 @@ import {
   CoordinateSystemControls as MapCoordinateSystemControls,
   GlobeLocateSearchButton,
   MapLayerMenu,
-  MapMeasureButton,
-  MapTerrainDiagnosticsButton,
   MapMeasureProvider,
+  MapMeasureResults,
+  RibbonDistanceMeasureProvider,
   MapPanel,
+  MeasureSplitButton,
+  MapTerrainDiagnosticsButton,
   MapViewportFrame,
   MapSunlightButton,
   MapSunlightProvider,
+  ElevationMeasureProvider,
+  ElevationMeasureResults,
+  useElevationMeasure,
+  GeometryMeasureProvider,
+  GeometryMeasureResults,
+  useGeometryMeasure,
   MapBasemapSelectionProvider,
+  TerrainAnalysisProvider,
+  TerrainProfileChart,
+  useTerrainAnalysis,
 } from './features/maps';
 import { AttributeFieldsHeader, AttributeFieldsPanel, AttributeTableHeader, AttributeTablePanel, useAttributeFieldRibbonGroups } from './features/attributes';
 import type { AttributeFieldRibbonGroup } from './features/attributes';
@@ -79,7 +95,10 @@ import {
   type MapCommand,
   type MapCommandState,
   type MapViewMode,
+  type MeasureToolId,
   useMapCommands,
+  useMapMeasure,
+  useMeasureToolkit,
 } from './features/maps';
 import { MapIdentifyProvider, useMapIdentify } from './features/maps';
 import { MapSelectionProvider, useMapSelection } from './features/maps';
@@ -147,6 +166,8 @@ const dockColumnRatio = {
 const aiAssistantPanelId = 'ai-assistant-panel';
 const attributeChartPanelIdPrefix = 'attribute-chart:';
 const attributeTablePanelIdPrefix = 'attribute-table:';
+const terrainProfilePanelId = 'terrain-profile';
+const measureResultsPanelId = 'measure-results';
 function getAttributeTablePanelId(layerId: string) {
   return `${attributeTablePanelIdPrefix}${encodeURIComponent(layerId)}`;
 }
@@ -234,13 +255,6 @@ const baseRibbonGroups: RibbonGroup[] = [
       { label: '转换', icon: PenTool },
     ],
   },
-  {
-    title: '离线',
-    tools: [
-      { label: '下载地图', icon: Download, muted: true },
-      { label: '同步', icon: History, muted: true },
-    ],
-  },
 ];
 
 function createMapRibbonGroups({
@@ -249,26 +263,40 @@ function createMapRibbonGroups({
   hasLayers,
   hasRasters,
   identifyActive,
+  mapMode,
+  measureActiveTool,
   selectionActive,
   setIdentifyActive,
   setSelectionActive,
   swipeActive,
+  terrainFloodActive,
+  terrainProfileActive,
+  toggleMeasureTool,
   toggleRasterSwipe,
   toggleIdentifyActive,
   toggleSelectionActive,
+  toggleTerrainFlood,
+  toggleTerrainProfile,
 }: {
   clearSelection: ReturnType<typeof useGis>['clearSelection'];
   activeTab: RibbonTab;
   hasLayers: boolean;
   hasRasters: boolean;
   identifyActive: boolean;
+  mapMode: ReturnType<typeof useMapCommands>['mapCommandState']['mapMode'];
+  measureActiveTool: MeasureToolId | null;
   selectionActive: boolean;
   setIdentifyActive: (active: boolean) => void;
   setSelectionActive: (active: boolean) => void;
   swipeActive: boolean;
+  terrainFloodActive: boolean;
+  terrainProfileActive: boolean;
+  toggleMeasureTool: (tool: MeasureToolId) => void;
   toggleRasterSwipe: (rasterId?: string) => void;
   toggleIdentifyActive: () => void;
   toggleSelectionActive: () => void;
+  toggleTerrainFlood: () => void;
+  toggleTerrainProfile: () => void;
 }): RibbonGroup[] {
   const groups = baseRibbonGroups.map((group, groupIndex) => {
     if (groupIndex === 4 && activeTab === '分析') {
@@ -284,6 +312,95 @@ function createMapRibbonGroups({
             onClick: () => toggleRasterSwipe(),
           },
           ...group.tools,
+        ],
+      };
+    }
+
+    if (group.title === '输出' && activeTab === '地图') {
+      const isGlobeMode = mapMode === 'globe';
+
+      return {
+        title: '测量',
+        tools: [
+          {
+            label: '坐标',
+            icon: MapPin,
+            active: measureActiveTool === 'coordinate',
+            onClick: () => toggleMeasureTool('coordinate'),
+          },
+          {
+            label: '距离',
+            icon: Ruler,
+            render: () => (
+              <MeasureSplitButton
+                active={measureActiveTool === 'distance-space' || measureActiveTool === 'distance-surface'}
+                activeOptionId={measureActiveTool === 'distance-space' || measureActiveTool === 'distance-surface'
+                  ? measureActiveTool
+                  : null}
+                defaultOptionId="distance-space"
+                icon={Ruler}
+                label="距离"
+                options={[
+                  { id: 'distance-space', label: '空间距离' },
+                  { id: 'distance-surface', label: '贴地距离' },
+                ]}
+                onActivate={(id) => toggleMeasureTool(id as MeasureToolId)}
+              />
+            ),
+          },
+          {
+            label: '面积',
+            icon: Square,
+            render: () => (
+              <MeasureSplitButton
+                active={measureActiveTool === 'area-horizontal' || measureActiveTool === 'area-surface'}
+                activeOptionId={measureActiveTool === 'area-horizontal' || measureActiveTool === 'area-surface'
+                  ? measureActiveTool
+                  : null}
+                defaultOptionId="area-horizontal"
+                icon={Square}
+                label="面积"
+                options={[
+                  { id: 'area-horizontal', label: '水平' },
+                  {
+                    id: 'area-surface',
+                    label: '贴地',
+                    disabled: !isGlobeMode,
+                    disabledReason: '需三维地形',
+                  },
+                ]}
+                onActivate={(id) => toggleMeasureTool(id as MeasureToolId)}
+              />
+            ),
+          },
+          {
+            label: '高程',
+            icon: ArrowUpDown,
+            active: measureActiveTool === 'elevation',
+            disabled: !isGlobeMode,
+            muted: !isGlobeMode,
+            onClick: () => toggleMeasureTool('elevation'),
+          },
+          {
+            label: '角度',
+            icon: Triangle,
+            render: () => (
+              <MeasureSplitButton
+                active={measureActiveTool === 'angle' || measureActiveTool === 'bearing'}
+                activeOptionId={measureActiveTool === 'angle' || measureActiveTool === 'bearing'
+                  ? measureActiveTool
+                  : null}
+                defaultOptionId="angle"
+                icon={Triangle}
+                label="角度"
+                options={[
+                  { id: 'angle', label: '夹角（水平 / 空间）' },
+                  { id: 'bearing', label: '方位角' },
+                ]}
+                onActivate={(id) => toggleMeasureTool(id as MeasureToolId)}
+              />
+            ),
+          },
         ],
       };
     }
@@ -377,7 +494,7 @@ function createMapRibbonGroups({
     ],
   };
 
-  return [
+  const groupsWithCoordinateSystem = [
     ...groups.slice(0, 2),
     {
       title: '坐标系',
@@ -388,6 +505,37 @@ function createMapRibbonGroups({
       ),
     },
     ...groups.slice(2),
+  ];
+
+  if (activeTab !== '分析') {
+    return groupsWithCoordinateSystem;
+  }
+
+  const isGlobeMode = mapMode === 'globe';
+
+  return [
+    ...groupsWithCoordinateSystem.filter((group) => group.title !== '剪贴板'),
+    {
+      title: '地形分析',
+      tools: [
+        {
+          label: '地形剖面',
+          icon: Activity,
+          active: terrainProfileActive,
+          disabled: !isGlobeMode,
+          muted: !isGlobeMode,
+          onClick: toggleTerrainProfile,
+        },
+        {
+          label: '淹没分析',
+          icon: Waves,
+          active: terrainFloodActive,
+          disabled: !isGlobeMode,
+          muted: !isGlobeMode,
+          onClick: toggleTerrainFlood,
+        },
+      ],
+    },
   ];
 }
 
@@ -531,6 +679,22 @@ function Ribbon({
   const fieldGroups = useAttributeFieldRibbonGroups(fieldContextVisible ? fieldDatasetId : null);
   const editGroups = useDigitizeRibbonGroups(activeTab === editRibbonTab);
   const { clearSelection, layers, rasters, swipeRasterId, toggleRasterSwipe } = useGis();
+  const { mapCommandState } = useMapCommands();
+  const { activeTool: terrainTool, toggleTerrainTool } = useTerrainAnalysis();
+  const {
+    activeTool: measureActiveTool,
+    activate: activateMeasureTool,
+    deactivateAll: deactivateMeasureTools,
+  } = useMeasureToolkit();
+  const toggleMeasureTool = useCallback((tool: MeasureToolId) => {
+    if (measureActiveTool === tool) {
+      deactivateMeasureTools();
+
+      return;
+    }
+
+    activateMeasureTool(tool);
+  }, [activateMeasureTool, deactivateMeasureTools, measureActiveTool]);
   const { identifyActive, setIdentifyActive, toggleIdentifyActive } = useMapIdentify();
   const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
   const activeGroups: RibbonGroup[] = fieldContextSelected
@@ -564,13 +728,20 @@ function Ribbon({
         hasLayers: layers.length > 0,
         hasRasters: rasters.length > 0,
         identifyActive,
+        mapMode: mapCommandState.mapMode,
+        measureActiveTool,
         selectionActive,
         setIdentifyActive,
         setSelectionActive,
         swipeActive: Boolean(swipeRasterId),
+        terrainFloodActive: terrainTool === 'flood',
+        terrainProfileActive: terrainTool === 'profile',
+        toggleMeasureTool,
         toggleRasterSwipe,
         toggleIdentifyActive,
         toggleSelectionActive,
+        toggleTerrainFlood: () => toggleTerrainTool('flood'),
+        toggleTerrainProfile: () => toggleTerrainTool('profile'),
       });
 
   return (
@@ -851,6 +1022,55 @@ function AttributeTableDockPanel(props: IDockviewPanelProps<{ layerId?: string }
   );
 }
 
+function TerrainProfileDockPanel() {
+  return <TerrainProfileChart />;
+}
+
+function TerrainProfileDockSync({ onOpen, onClose }: { onOpen: () => void; onClose: () => void }) {
+  const { profileResult } = useTerrainAnalysis();
+
+  useEffect(() => {
+    if (profileResult) {
+      onOpen();
+    } else {
+      onClose();
+    }
+  }, [onClose, onOpen, profileResult]);
+
+  return null;
+}
+
+function MeasureResultsDockPanel() {
+  return (
+    <div className="measure-results-stack">
+      <ElevationMeasureResults />
+      <GeometryMeasureResults />
+      <MapMeasureResults />
+    </div>
+  );
+}
+
+function MeasureResultsDockSync({ onOpen }: { onOpen: () => void }) {
+  const { results: elevationResults } = useElevationMeasure();
+  const { results: geometryResults } = useGeometryMeasure();
+  const { completedMeasurements, coordinateResults } = useMapMeasure();
+  const previousTotalRef = useRef(0);
+  const total = elevationResults.length
+    + geometryResults.length
+    + completedMeasurements.length
+    + coordinateResults.length;
+
+  useEffect(() => {
+    if (total > previousTotalRef.current) {
+      onOpen();
+    }
+
+    previousTotalRef.current = total;
+  }, [onOpen, total]);
+
+  return null;
+}
+
 function AttributeFieldsDockPanel(props: IDockviewPanelProps<{ layerId?: string }>) {
   return (
     <Suspense fallback={<div className="placeholder-panel">字段</div>}>
@@ -993,7 +1213,6 @@ function MapHeaderActions({ activePanel }: IDockviewHeaderActionsProps) {
             {tool.command === 'resetNorth' ? (
               <>
                 <MapTerrainDiagnosticsButton />
-                <MapMeasureButton />
                 <MapSunlightButton />
               </>
             ) : null}
@@ -1103,6 +1322,8 @@ export default function App() {
       inspector: InspectorPanel,
       python: PythonPanel,
       placeholder: PlaceholderPanel,
+      terrainProfile: TerrainProfileDockPanel,
+      measureResults: MeasureResultsDockPanel,
     }),
     [],
   );
@@ -1235,6 +1456,69 @@ export default function App() {
     }).api.setActive();
   }, []);
 
+  const openTerrainProfilePanel = useCallback(() => {
+    const api = dockviewApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    const existingPanel = api.getPanel(terrainProfilePanelId);
+
+    if (existingPanel) {
+      existingPanel.api.setActive();
+      return;
+    }
+
+    const pythonPanel = api.getPanel('python');
+
+    api.addPanel({
+      id: terrainProfilePanelId,
+      component: 'terrainProfile',
+      title: '地形剖面',
+      position: pythonPanel ? {
+        direction: 'within',
+        referencePanel: pythonPanel,
+        index: pythonPanel.group.panels.length,
+      } : undefined,
+      minimumHeight: 120,
+    }).api.setActive();
+  }, []);
+
+  const closeTerrainProfilePanel = useCallback(() => {
+    dockviewApiRef.current?.getPanel(terrainProfilePanelId)?.api.close();
+  }, []);
+
+  const openMeasureResultsPanel = useCallback(() => {
+    const api = dockviewApiRef.current;
+
+    if (!api) {
+      return;
+    }
+
+    const existingPanel = api.getPanel(measureResultsPanelId);
+
+    if (existingPanel) {
+      existingPanel.api.setActive();
+
+      return;
+    }
+
+    const pythonPanel = api.getPanel('python');
+
+    api.addPanel({
+      id: measureResultsPanelId,
+      component: 'measureResults',
+      title: '测量结果',
+      position: pythonPanel ? {
+        direction: 'within',
+        referencePanel: pythonPanel,
+        index: pythonPanel.group.panels.length,
+      } : undefined,
+      minimumHeight: 120,
+    }).api.setActive();
+  }, []);
+
   const onReady = useCallback((event: DockviewReadyEvent) => {
     dockviewApiRef.current = event.api;
     setActiveDockPanelId(event.api.activePanel?.id ?? null);
@@ -1330,7 +1614,13 @@ export default function App() {
         <MapCommandProvider>
           <MapBasemapSelectionProvider>
             <MapSunlightProvider>
+            <TerrainAnalysisProvider>
+            <TerrainProfileDockSync onOpen={openTerrainProfilePanel} onClose={closeTerrainProfilePanel} />
             <MapMeasureProvider>
+            <RibbonDistanceMeasureProvider>
+            <ElevationMeasureProvider>
+            <GeometryMeasureProvider>
+            <MeasureResultsDockSync onOpen={openMeasureResultsPanel} />
             <MapSelectionProvider>
             <MapIdentifyProvider>
             <DigitizeProvider>
@@ -1370,7 +1660,11 @@ export default function App() {
             </DigitizeProvider>
             </MapIdentifyProvider>
             </MapSelectionProvider>
+            </GeometryMeasureProvider>
+            </ElevationMeasureProvider>
+            </RibbonDistanceMeasureProvider>
             </MapMeasureProvider>
+            </TerrainAnalysisProvider>
             </MapSunlightProvider>
           </MapBasemapSelectionProvider>
         </MapCommandProvider>

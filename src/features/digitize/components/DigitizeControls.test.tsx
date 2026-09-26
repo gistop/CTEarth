@@ -106,6 +106,8 @@ describe('digitize manual controls and provider', () => {
     expect(execute.disabled).toBe(true);
     fireEvent.click(screen.getByTitle('绘制 AOI')); expect(store.getSnapshot().rasterAoiActive).toBe(true);
     act(() => { store.actions.setRasterAoi(polygon); }); expect(execute.disabled).toBe(false);
+    expect((screen.getByLabelText('显示像元值') as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(screen.getByLabelText('显示像元值')); expect(store.getSnapshot().rasterPixelValuesVisible).toBe(true);
     fireEvent.change(screen.getByLabelText('新像元值'), { target: { value: '' } }); expect(execute.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText('新像元值'), { target: { value: '-12.5' } }); fireEvent.click(execute);
     expect(gis.editRasterByAoi).toHaveBeenCalledWith({ polygon, value: '-12.5' });

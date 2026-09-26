@@ -3,6 +3,9 @@
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runTool } from 'geolibre-wasm/tools';
+import { CogBuilder } from 'geolibre-wasm';
+import { fromLonLat, toLonLat } from 'ol/proj.js';
+import { collectRasterAoiPixels } from './features/digitize/services/rasterAoiPixels';
 import type { RunToolOptions } from 'geolibre-wasm/tools';
 import { GisProvider, useGis, type BufferParameters, type GeoJsonFeatureCollection, type TerrainToolId } from './gisStore';
 import { readWorkspaceDraft, writeWorkspaceDraft, type WorkspaceDraft } from './workspaceDraftStore';
@@ -121,6 +124,41 @@ async function createHarness(showLayers = false) {
 }
 
 describe('generated layer lifecycle', () => {
+  it('exports and displays the same AOI cells as the preview on repeated raster edits', async () => {
+    const { result } = await createHarness();
+    const original = result.current.gis.raster!;
+    const north = fromLonLat([120, 31])[1];
+    const south = fromLonLat([120, 30])[1];
+    const latitude = toLonLat([0, north - 0.75 * (north - south)])[1];
+    const aoi = {
+      type: 'Polygon' as const,
+      coordinates: [[[120, latitude - 0.0001], [121, latitude - 0.0001], [121, latitude + 0.0001], [120, latitude + 0.0001], [120, latitude - 0.0001]]] as [number, number][][],
+    };
+    expect(Array.from(collectRasterAoiPixels(aoi, original).sourceIndexes)).toEqual([2, 3]);
+    const write = vi.spyOn(CogBuilder.prototype, 'write_f64');
+
+    await act(async () => {
+      await result.current.gis.editRasterByAoi({ polygon: aoi, value: '500', outputName: 'aligned.tif' });
+    });
+    const edited = result.current.gis.raster!;
+    expect(edited.id).not.toBe(original.id);
+    expect(edited.pixels).toEqual(new Float64Array([1, 2, 500, 500]));
+    expect(write).toHaveBeenLastCalledWith(edited.pixels);
+    expect(edited.coordinates).toEqual(original.coordinates);
+    expect(edited.geoTransform).toEqual(original.geoTransform);
+    expect(edited.displayReprojected).toBe(original.displayReprojected);
+    expect(edited.max).toBe(500);
+    expect(Array.from(collectRasterAoiPixels(aoi, edited).values)).toEqual([500, 500]);
+    expect(original.pixels).toEqual(new Float64Array([1, 2, 3, 4]));
+    expect(edited.toolInput.files['aligned.tif']).toEqual(new Uint8Array([1, 2]));
+
+    await act(async () => {
+      await result.current.gis.editRasterByAoi({ polygon: aoi, value: '600' });
+    });
+    expect(result.current.gis.raster!.pixels).toEqual(new Float64Array([1, 2, 600, 600]));
+    expect(write).toHaveBeenLastCalledWith(new Float64Array([1, 2, 600, 600]));
+  });
+
   it('appends repeated buffer outputs with independent identity, metadata and display state', async () => {
     const { result } = await createHarness();
     const originalLayers = result.current.gis.layers;
@@ -704,7 +742,9 @@ describe('create blank layer', () => {
     const { result } = await createHarness(true);
     const before = result.current.gis.layers.length;
 
-    fireEvent.click(screen.getByRole('button', { name: '新建空白 GeoJSON 图层' }));
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建空白 GeoJSON 图层…' }));
     expect(screen.getByRole('dialog', { name: '新建空白图层' })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('图层名称'), { target: { value: 'roads.geojson' } });
@@ -723,7 +763,9 @@ describe('create blank layer', () => {
     const { result } = await createHarness(true);
     const before = result.current.gis.layers;
 
-    fireEvent.click(screen.getByRole('button', { name: '新建空白 GeoJSON 图层' }));
+    fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建空白 GeoJSON 图层…' }));
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
 
     expect(result.current.gis.layers).toBe(before);
@@ -749,15 +791,16 @@ describe('create map group', () => {
     const alertSpy = vi.spyOn(window, 'alert');
 
     fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '新建地图…' }));
-    expect(screen.getByRole('dialog', { name: '新建地图' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建项目…' }));
+    expect(screen.getByRole('dialog', { name: '新建项目' })).toBeTruthy();
     expect(promptSpy).not.toHaveBeenCalled();
 
-    const nameInput = screen.getByLabelText('地图名称') as HTMLInputElement;
-    expect(nameInput.value).toBe('地图 2');
+    const nameInput = screen.getByLabelText('项目名称') as HTMLInputElement;
+    expect(nameInput.value).toBe('项目 2');
 
-    fireEvent.change(nameInput, { target: { value: '地图' } });
-    expect(screen.getByRole('alert').textContent).toContain('地图名称不能重复');
+    fireEvent.change(nameInput, { target: { value: '项目' } });
+    expect(screen.getByRole('alert').textContent).toContain('项目名称不能重复');
     expect((screen.getByRole('button', { name: '新建' }) as HTMLButtonElement).disabled).toBe(true);
 
     fireEvent.change(nameInput, { target: { value: '   ' } });
@@ -768,8 +811,8 @@ describe('create map group', () => {
     fireEvent.click(screen.getByRole('button', { name: '新建' }));
 
     expect(await screen.findByRole('treeitem', { name: '规划图' })).toBeTruthy();
-    expect(screen.getByRole('treeitem', { name: '地图' })).toBeTruthy();
-    expect(screen.queryByRole('dialog', { name: '新建地图' })).toBeNull();
+    expect(screen.getByRole('treeitem', { name: '项目' })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: '新建项目' })).toBeNull();
     expect(alertSpy).not.toHaveBeenCalled();
   });
 
@@ -778,11 +821,12 @@ describe('create map group', () => {
     const before = result.current.gis.rasters;
 
     fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '新建地图…' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建项目…' }));
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
 
-    expect(screen.queryByRole('dialog', { name: '新建地图' })).toBeNull();
-    expect(screen.queryByRole('treeitem', { name: '地图 2' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: '新建项目' })).toBeNull();
+    expect(screen.queryByRole('treeitem', { name: '项目 2' })).toBeNull();
     expect(result.current.gis.rasters).toBe(before);
   });
 });
@@ -794,8 +838,9 @@ describe('delete selected map', () => {
     await screen.findByRole('treeitem', { name: 'points' });
 
     fireEvent.click(screen.getByRole('button', { name: '更多操作' }));
-    fireEvent.click(screen.getByRole('menuitem', { name: '新建地图…' }));
-    fireEvent.change(screen.getByLabelText('地图名称'), { target: { value: '规划图' } });
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建项目…' }));
+    fireEvent.change(screen.getByLabelText('项目名称'), { target: { value: '规划图' } });
     fireEvent.click(screen.getByRole('button', { name: '新建' }));
     expect(await screen.findByRole('treeitem', { name: '规划图' })).toBeTruthy();
 
@@ -806,12 +851,12 @@ describe('delete selected map', () => {
     const dialog = screen.getByRole('dialog', { name: '删除地图' });
     expect(dialog.textContent).toContain('地图');
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
-    expect(screen.getByRole('treeitem', { name: '地图' })).toBeTruthy();
+    expect(screen.getByRole('treeitem', { name: '项目' })).toBeTruthy();
 
     fireEvent.click(deleteButton);
     fireEvent.click(within(screen.getByRole('dialog', { name: '删除地图' })).getByRole('button', { name: '删除' }));
 
-    await waitFor(() => expect(screen.queryByRole('treeitem', { name: '地图' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('treeitem', { name: '项目' })).toBeNull());
     expect(screen.getByRole('treeitem', { name: '规划图' })).toBeTruthy();
     expect(await screen.findByRole('treeitem', { name: 'points' })).toBeTruthy();
     expect(result.current.gis.layers).toHaveLength(layerCountBefore);

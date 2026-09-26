@@ -26,6 +26,7 @@ import { planRasterResample, rasterResampleMethodLabels, type RasterResampleMeth
 import type { SourceCrs } from './coordinateReferenceSystem';
 import { sourceCrsFromEpsg } from './coordinateReferenceSystem';
 import type { UploadDataKind, UploadRasterData, UploadWorkerResponse } from './uploadDataWorkerTypes';
+import { editRasterAoiPixels, resolveRasterDisplayPixels } from './features/digitize/services/rasterAoiPixels';
 
 export { displayLayerName } from './features/layers/services/layerService';
 export type { RasterReclassifyMethod } from './features/toolbox/toolsets/general/pixel/reclassifyEngine';
@@ -46,6 +47,7 @@ export type PointCollection = {
 };
 
 export type RasterOverlay = {
+  displayReprojected?: boolean;
   id: string;
   name: string;
   toolInput: RasterToolInput;
@@ -275,6 +277,10 @@ export type UploadedLayerStyle = {
   lineOpacity: number;
   fillColor: string;
   fillOpacity: number;
+  /** 字段标注开关：开启后按 labelField 在要素上渲染文字 */
+  labelEnabled?: boolean;
+  /** 标注使用的属性字段名；旧工作区草稿可能缺失，读取时按空串处理 */
+  labelField?: string;
 };
 
 export type RasterLayerStyle = {
@@ -383,6 +389,8 @@ export const defaultUploadedLayerStyle: UploadedLayerStyle = {
   lineOpacity: 1,
   fillColor: '#6b9bd2',
   fillOpacity: 0.22,
+  labelEnabled: false,
+  labelField: '',
 };
 export const defaultRasterStyle: RasterLayerStyle = {
   opacity: 0.82,
@@ -2086,17 +2094,7 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
       setIsRunning(true);
       setMessage('正在按 AOI 修改栅格像元值');
 
-      const rasterPolygon = polygonToRasterCrs(params.polygon, raster.epsg);
-      const pixels = new Float64Array(raster.pixels);
-      const editedCount = applyRasterEdit({
-        geoTransform: raster.geoTransform,
-        height: raster.height,
-        nodata: raster.nodata,
-        pixels,
-        polygon: rasterPolygon,
-        value,
-        width: raster.width,
-      });
+      const { pixels, editedCount } = editRasterAoiPixels(params.polygon, raster, value);
 
       if (editedCount === 0) {
         setMessage('AOI 范围内没有命中有效像元。');
@@ -2112,7 +2110,26 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
         pixels,
         width: raster.width,
       });
-      const nextRaster = readRasterOverlay(outputBytes, outputName, outputName);
+      let min = Infinity;
+      let max = -Infinity;
+
+      for (const pixel of pixels) {
+        if (!Number.isFinite(pixel) || pixel === raster.nodata) continue;
+        min = Math.min(min, pixel);
+        max = Math.max(max, pixel);
+      }
+
+      const nextRaster: RasterOverlay = {
+        ...raster,
+        id: createLayerId(outputName),
+        name: outputName,
+        toolInput: { inputName: outputName, files: { [outputName]: outputBytes } },
+        min: Number.isFinite(min) ? min : raster.min,
+        max: Number.isFinite(max) ? max : raster.max,
+        pixels,
+      };
+      const displayPixels = resolveRasterDisplayPixels(nextRaster);
+      nextRaster.imageUrl = rasterToCanvas({ ...nextRaster, pixels: displayPixels }).toDataURL('image/png');
 
       addRasterLayer(nextRaster);
       setLayerVisibilityState((current) => ({ ...current, raster: true }));
@@ -2852,6 +2869,7 @@ function createRasterOverlay(
   const displayRaster = raster.display ?? raster;
 
   return {
+    displayReprojected: Boolean(raster.display),
     id: createLayerId(name),
     name,
     toolInput: {
@@ -3024,140 +3042,6 @@ function writeRasterGeoTiff(raster: {
   }
 }
 
-function polygonToRasterCrs(polygon: RasterAoiPolygon, rasterEpsg?: number) {
-  if (!rasterEpsg) {
-    throw new Error('GeoTIFF 缺少 EPSG 坐标系，无法把 AOI 转换到栅格坐标系。');
-  }
-
-  if (rasterEpsg === 4326) {
-    return polygon.coordinates;
-  }
-
-  const points = polygon.coordinates.flatMap((ring) => ring);
-  const transformed = transform_points_epsg(4326, rasterEpsg, new Float64Array(points.flat()));
-  let offset = 0;
-
-  return polygon.coordinates.map((ring) => (
-    ring.map(() => {
-      const point: [number, number] = [transformed[offset], transformed[offset + 1]];
-      offset += 2;
-      return point;
-    })
-  ));
-}
-
-function applyRasterEdit({
-  geoTransform,
-  height,
-  nodata,
-  pixels,
-  polygon,
-  value,
-  width,
-}: {
-  geoTransform: number[];
-  height: number;
-  nodata?: number;
-  pixels: Float64Array;
-  polygon: [number, number][][];
-  value: number;
-  width: number;
-}) {
-  if (geoTransform.length < 6) {
-    throw new Error('GeoTIFF 缺少有效的 GeoTransform，无法定位 AOI 像元。');
-  }
-
-  const inverse = invertGeoTransform(geoTransform);
-  const bounds = polygonBounds(polygon);
-  const pixelBounds = [
-    mapToPixel(inverse, bounds[0], bounds[1]),
-    mapToPixel(inverse, bounds[2], bounds[1]),
-    mapToPixel(inverse, bounds[2], bounds[3]),
-    mapToPixel(inverse, bounds[0], bounds[3]),
-  ];
-  const minCol = clampInteger(Math.floor(Math.min(...pixelBounds.map((point) => point[0])) - 1), 0, width - 1);
-  const maxCol = clampInteger(Math.ceil(Math.max(...pixelBounds.map((point) => point[0])) + 1), 0, width - 1);
-  const minRow = clampInteger(Math.floor(Math.min(...pixelBounds.map((point) => point[1])) - 1), 0, height - 1);
-  const maxRow = clampInteger(Math.ceil(Math.max(...pixelBounds.map((point) => point[1])) + 1), 0, height - 1);
-  let editedCount = 0;
-
-  for (let row = minRow; row <= maxRow; row += 1) {
-    for (let col = minCol; col <= maxCol; col += 1) {
-      const index = row * width + col;
-      const currentValue = pixels[index];
-
-      if (!Number.isFinite(currentValue) || (nodata !== undefined && currentValue === nodata)) {
-        continue;
-      }
-
-      const center = pixelToMap(geoTransform, col + 0.5, row + 0.5);
-
-      if (!pointInPolygonRings(center, polygon)) {
-        continue;
-      }
-
-      pixels[index] = value;
-      editedCount += 1;
-    }
-  }
-
-  return editedCount;
-}
-
-function invertGeoTransform(gt: number[]) {
-  const determinant = gt[1] * gt[5] - gt[2] * gt[4];
-
-  if (Math.abs(determinant) < 1e-18) {
-    throw new Error('GeoTIFF GeoTransform 不可逆，无法定位 AOI 像元。');
-  }
-
-  return [
-    gt[5] / determinant,
-    -gt[2] / determinant,
-    -gt[4] / determinant,
-    gt[1] / determinant,
-    gt[0],
-    gt[3],
-  ];
-}
-
-function mapToPixel(inverse: number[], x: number, y: number): [number, number] {
-  const dx = x - inverse[4];
-  const dy = y - inverse[5];
-
-  return [
-    inverse[0] * dx + inverse[1] * dy,
-    inverse[2] * dx + inverse[3] * dy,
-  ];
-}
-
-function clampInteger(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function polygonBounds(polygon: [number, number][][]): [number, number, number, number] {
-  const points = polygon.flatMap((ring) => ring);
-
-  return points.reduce(
-    (bounds, [x, y]) => [
-      Math.min(bounds[0], x),
-      Math.min(bounds[1], y),
-      Math.max(bounds[2], x),
-      Math.max(bounds[3], y),
-    ] as [number, number, number, number],
-    [Infinity, Infinity, -Infinity, -Infinity] as [number, number, number, number],
-  );
-}
-
-function pointInPolygonRings(point: [number, number], rings: [number, number][][]) {
-  const outerRing = rings[0];
-
-  if (!outerRing || !pointInRing(point, outerRing)) {
-    return false;
-  }
-
-  return !rings.slice(1).some((ring) => pointInRing(point, ring));
-}
 
 function editedRasterName(name: string) {
   return ensureTifName(name.replace(/\.tiff?$/i, '') + '-edited.tif');

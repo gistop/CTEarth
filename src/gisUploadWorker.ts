@@ -3,6 +3,7 @@ import shp from 'shpjs';
 import initGeoLibre, { GeoTiffReader, transform_bbox_epsg, transform_points_epsg, vector_info, vector_to_geojson_reproject } from 'geolibre-wasm';
 import { readGeoParquetFileWithMetadata } from './geoParquet';
 import { sourceCrsFromDefinition, sourceCrsFromEpsg, sourceCrsFromGeoJson, type SourceCrs } from './coordinateReferenceSystem';
+import { decodeTextBytes, isUtf8Compatible } from './uploadTextDecoding';
 import type { GeoJsonFeatureCollection } from './gisStore';
 import type { UploadDataKind, UploadRasterData, UploadWorkerRequest, UploadWorkerResponse } from './uploadDataWorkerTypes';
 
@@ -25,20 +26,20 @@ async function processUpload(request: UploadWorkerRequest) {
 
 async function readUpload(kind: UploadDataKind, fileName: string, bytes: Uint8Array) {
   if (kind === 'shapefile') {
-    const geojson = normalizeGeoJson(await shp(bytes));
+    const geojson = normalizeGeoJson(await shp(await ensureShapefileTextEncoding(bytes)));
     const sourceCrs = await readShapefileCrs(bytes);
     return { geojson, sourceCrs };
   }
 
   if (kind === 'geojson') {
-    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    const parsed = JSON.parse(decodeTextBytes(bytes)) as unknown;
     const sourceCrs = sourceCrsFromGeoJson(parsed);
     const geojson = normalizeGeoJson(parsed);
     return { geojson: await toWgs84(geojson, sourceCrs), sourceCrs };
   }
 
   if (kind === 'csv') {
-    return readCsv(new TextDecoder('utf-8').decode(bytes));
+    return readCsv(decodeTextBytes(bytes));
   }
 
   if (kind === 'geopackage') {
@@ -71,6 +72,35 @@ async function readShapefileCrs(bytes: Uint8Array): Promise<SourceCrs> {
     ...sourceCrsFromDefinition(definition),
     name: 'Shapefile .prj',
   };
+}
+
+/**
+ * shpjs 的 DBF 解析在没有 .cpg 时默认按 UTF-8 解码，国内 GBK 属性表会乱码。
+ * 这里检测各 .dbf：若无法按严格 UTF-8 解码且缺少同名 .cpg，就往压缩包里补一个
+ * 内容为 GBK 的 .cpg，让 shpjs 按正确编码解析。
+ */
+async function ensureShapefileTextEncoding(bytes: Uint8Array): Promise<Uint8Array> {
+  const archive = await JSZip.loadAsync(bytes);
+  const names = Object.keys(archive.files).filter((name) => !archive.files[name].dir);
+  const cpgNames = new Set(names.map((name) => name.toLowerCase()).filter((name) => name.endsWith('.cpg')));
+  let changed = false;
+
+  for (const name of names) {
+    if (!/\.dbf$/i.test(name) || cpgNames.has(`${name.slice(0, -4).toLowerCase()}.cpg`)) {
+      continue;
+    }
+
+    const dbf = new Uint8Array(await archive.files[name].async('arraybuffer'));
+    // 跳过 32 字节文件头（含二进制标志位），校验字段描述与记录区的文本字节
+    if (isUtf8Compatible(dbf.subarray(32))) {
+      continue;
+    }
+
+    archive.file(`${name.slice(0, -4)}.cpg`, 'GBK');
+    changed = true;
+  }
+
+  return changed ? new Uint8Array(await archive.generateAsync({ type: 'uint8array' })) : bytes;
 }
 
 function sourceCrsFromVectorInfo(bytes: Uint8Array, format: string): SourceCrs {
@@ -171,6 +201,10 @@ function reprojectRasterForDisplay(
   const displayBounds = Array.from(transform_bbox_epsg(sourceEpsg, 4326, new Float64Array(sourceBounds))) as [number, number, number, number];
   const [west, south, east, north] = displayBounds;
   const displayPixels = new Float64Array(sourceWidth * sourceHeight);
+  const westX = webMercatorX(west);
+  const eastX = webMercatorX(east);
+  const southY = webMercatorY(south);
+  const northY = webMercatorY(north);
   const determinant = sourceGeoTransform[1] * sourceGeoTransform[5] - sourceGeoTransform[2] * sourceGeoTransform[4];
   const invalidValue = nodata ?? NaN;
 
@@ -185,11 +219,12 @@ function reprojectRasterForDisplay(
     const outputCoordinates = new Float64Array((rowEnd - rowStart) * sourceWidth * 2);
 
     for (let row = rowStart; row < rowEnd; row += 1) {
-      const latitude = north - ((row + 0.5) / sourceHeight) * (north - south);
+      const projectedY = northY - ((row + 0.5) / sourceHeight) * (northY - southY);
       for (let column = 0; column < sourceWidth; column += 1) {
         const index = ((row - rowStart) * sourceWidth + column) * 2;
-        outputCoordinates[index] = west + ((column + 0.5) / sourceWidth) * (east - west);
-        outputCoordinates[index + 1] = latitude;
+        const projectedX = westX + ((column + 0.5) / sourceWidth) * (eastX - westX);
+        outputCoordinates[index] = webMercatorLongitude(projectedX);
+        outputCoordinates[index + 1] = webMercatorLatitude(projectedY);
       }
     }
 
@@ -214,6 +249,26 @@ function reprojectRasterForDisplay(
   };
 }
 
+const WEB_MERCATOR_RADIUS = 6378137;
+const DEGREES_TO_RADIANS = Math.PI / 180;
+const RADIANS_TO_DEGREES = 180 / Math.PI;
+
+function webMercatorX(longitude: number) {
+  return WEB_MERCATOR_RADIUS * longitude * DEGREES_TO_RADIANS;
+}
+
+function webMercatorY(latitude: number) {
+  const latitudeRadians = latitude * DEGREES_TO_RADIANS;
+  return WEB_MERCATOR_RADIUS * Math.log(Math.tan(Math.PI / 4 + latitudeRadians / 2));
+}
+
+function webMercatorLongitude(x: number) {
+  return x / WEB_MERCATOR_RADIUS * RADIANS_TO_DEGREES;
+}
+
+function webMercatorLatitude(y: number) {
+  return (2 * Math.atan(Math.exp(y / WEB_MERCATOR_RADIUS)) - Math.PI / 2) * RADIANS_TO_DEGREES;
+}
 function transformCorners(corners: UploadRasterData['coordinates'], epsg: number): UploadRasterData['coordinates'] {
   const transformed = transform_points_epsg(epsg, 4326, new Float64Array(corners.flat()));
   return [[transformed[0], transformed[1]], [transformed[2], transformed[3]], [transformed[4], transformed[5]], [transformed[6], transformed[7]]];

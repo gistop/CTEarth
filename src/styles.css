@@ -328,11 +328,46 @@ button {
   height: 64px;
 }
 
-.ribbon-raster-edit .ribbon-layer-select {
+.ribbon-raster-edit .ribbon-raster-edit-head {
+  display: flex;
   grid-column: 1 / -1;
-  grid-template-columns: 18px minmax(0, 1fr);
-  width: 100%;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   height: 28px;
+}
+
+.ribbon-raster-edit .ribbon-layer-select {
+  flex: 1;
+  grid-template-columns: 18px minmax(0, 1fr);
+  width: auto;
+  min-width: 0;
+  height: 28px;
+}
+
+/* 「显示像元值」复选框：与栅格图层选择同一行，尺寸对齐 26px 的控件高度 */
+.ribbon-raster-edit .ribbon-aoi-values {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  color: #536273;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ribbon-raster-edit .ribbon-aoi-values input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #1677b8;
+}
+
+.ribbon-raster-edit .ribbon-aoi-values:has(input:disabled) {
+  color: #98a5b1;
+  cursor: default;
 }
 
 .ribbon-raster-edit > button {
@@ -898,6 +933,124 @@ button {
   white-space: nowrap;
 }
 
+.ribbon-measure-split {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 19px;
+  width: 54px;
+  height: 64px;
+}
+
+.ribbon-measure-split button {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  grid-template-rows: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ribbon-measure-split button:first-of-type {
+  grid-template-rows: 28px minmax(0, 1fr);
+  gap: 2px;
+  min-height: 45px;
+  padding-top: 3px;
+  border-radius: 4px 4px 0 0;
+}
+
+.ribbon-measure-split button:first-of-type span {
+  width: 52px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: center;
+  line-height: 1.1;
+  font-size: 12px;
+}
+
+.ribbon-measure-split button:nth-of-type(2) {
+  min-height: 19px;
+  border-top: 1px solid #d8e0e7;
+  border-radius: 0 0 4px 4px;
+  color: #607080;
+}
+
+.ribbon-measure-split:hover button,
+.ribbon-measure-split button.is-open {
+  border-color: #b6d8ec;
+  background: #eff8fd;
+  color: #0d638f;
+}
+
+.ribbon-measure-split button.is-active {
+  border-color: #9fc8e3;
+  background: #dff0fb;
+  color: #0f5d8e;
+}
+
+.ribbon-measure-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  min-width: 176px;
+  padding: 4px;
+  border: 1px solid #b9c4ce;
+  border-radius: 6px;
+  background: rgba(255 255 255 / 98%);
+  box-shadow: 0 10px 28px rgb(10 20 30 / 18%);
+}
+
+.ribbon-measure-menu button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  justify-items: start;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #33475b;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ribbon-measure-menu button span {
+  width: auto;
+  justify-content: flex-start;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.ribbon-measure-menu button:hover:not(:disabled) {
+  background: #e4f2fb;
+  color: #0d638f;
+}
+
+.ribbon-measure-menu button:disabled,
+.ribbon-measure-menu button.is-muted {
+  color: #a7b0ba;
+  cursor: not-allowed;
+}
+
+.ribbon-measure-menu .ribbon-measure-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: #0d638f;
+}
+
 .ribbon-group-title {
   display: grid;
   place-items: center;
@@ -1433,7 +1586,8 @@ button {
   gap: 6px;
   min-height: 40px;
   padding: 6px 0;
-  color: #687887;
+  /* 与顶部快速访问栏（打开工程/保存/撤销…）的图标同色：那里继承 :root 的 #17202a */
+  color: #17202a;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1442,6 +1596,8 @@ button {
   place-items: center;
   width: 26px;
   height: 26px;
+  /* 显式归零：按钮的 UA 默认 padding 会让 20px 图标溢出内容盒，去掉后居中完全由按键尺寸决定 */
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
@@ -1532,10 +1688,10 @@ button {
   color: #0f5d8e;
 }
 
+/* 由 MoreActionsMenu 通过 portal + fixed 渲染到 body：面板祖先都是 overflow: hidden，
+   留在面板内会被裁掉，定位坐标由组件按触发按钮计算。 */
 .more-actions-menu {
-  position: absolute;
-  top: calc(100% + 5px);
-  right: 0;
+  position: fixed;
   z-index: 30;
   display: grid;
   gap: 2px;
@@ -1582,7 +1738,7 @@ button {
   background: #d8e0e7;
 }
 
-/* 「另存为」级联子菜单：悬停/键盘聚焦父项时向左侧展开 */
+/* 「另存为」级联子菜单：悬停/键盘聚焦父项时向右侧展开 */
 .more-actions-menu .has-submenu {
   position: relative;
 }
@@ -1598,7 +1754,7 @@ button {
 .more-actions-menu .submenu {
   position: absolute;
   top: -4px;
-  right: calc(100% + 6px);
+  left: calc(100% + 6px);
   z-index: 31;
   display: none;
   gap: 2px;
@@ -1615,9 +1771,20 @@ button {
   content: '';
   position: absolute;
   top: 0;
-  right: -8px;
+  left: -8px;
   bottom: 0;
   width: 8px;
+}
+
+/* 右侧空间不足时（组件算出的 placement.flipSubmenu）翻到左侧展开 */
+.more-actions-menu .submenu.is-flipped {
+  right: calc(100% + 6px);
+  left: auto;
+}
+
+.more-actions-menu .submenu.is-flipped::after {
+  right: -8px;
+  left: auto;
 }
 
 .more-actions-menu .has-submenu:hover > .submenu,
@@ -2073,6 +2240,42 @@ button {
   font-size: 12px;
 }
 
+.layer-style-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid #e3e9ef;
+  padding-top: 8px;
+}
+
+.layer-style-toggle > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-style-toggle > input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  accent-color: #2f6da5;
+  cursor: pointer;
+}
+
+.layer-label-field-select {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid #b9c4ce;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #263849;
+  padding: 0 7px;
+  font-size: 12px;
+}
+
 .layer-range-control {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 42px;
@@ -2425,6 +2628,191 @@ button {
   .map-sunlight-date {
     display: none;
   }
+}
+
+.map-terrain-panel {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 8;
+  width: 292px;
+  border: 1px solid #d5dde6;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(23, 32, 42, 0.18);
+  font-size: 12px;
+  color: #17202a;
+}
+
+.map-terrain-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 8px 8px 12px;
+  border-bottom: 1px solid #e6ecf2;
+  font-weight: 600;
+}
+
+.map-terrain-panel-header > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1f6feb;
+}
+
+.map-terrain-panel-header > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #687887;
+  cursor: pointer;
+}
+
+.map-terrain-panel-header > button:hover {
+  background: #eef4fb;
+  color: #17202a;
+}
+
+.map-terrain-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.map-terrain-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.map-terrain-label {
+  flex: none;
+  width: 38px;
+  color: #687887;
+}
+
+.map-terrain-region {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #34495e;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-terrain-row > input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  accent-color: #1f6feb;
+}
+
+.map-terrain-value {
+  flex: none;
+  min-width: 52px;
+  text-align: right;
+  color: #34495e;
+  font-variant-numeric: tabular-nums;
+}
+
+.map-terrain-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  color: #34495e;
+  cursor: pointer;
+}
+
+.map-terrain-check > input {
+  accent-color: #1f6feb;
+}
+
+.map-terrain-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid #cfd9e2;
+  border-radius: 4px;
+  background: #f5f8fc;
+  color: #34495e;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.map-terrain-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.map-terrain-action:not(:disabled):hover {
+  background: #e8f1fd;
+  border-color: #9ec3f5;
+}
+
+.map-terrain-status {
+  color: #687887;
+  font-variant-numeric: tabular-nums;
+}
+
+.terrain-profile-dock {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: #ffffff;
+  font-size: 12px;
+  color: #17202a;
+}
+
+.terrain-profile-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+  padding: 7px 12px;
+  border-bottom: 1px solid #e6ecf2;
+}
+
+.terrain-profile-dock-title {
+  flex: none;
+  font-weight: 600;
+  color: #1f6feb;
+}
+
+.terrain-profile-dock-stats {
+  overflow: hidden;
+  color: #34495e;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.terrain-profile-dock-canvas {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.terrain-profile-dock-canvas > canvas {
+  display: block;
+  margin: 8px;
+}
+
+.terrain-profile-dock-placeholder {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #8a97a5;
 }
 
 .map-measure-panel {
@@ -5271,4 +5659,223 @@ button {
     right: 10px;
     bottom: 10px;
   }
+}
+
+.map-elevation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 11px;
+  color: #263544;
+}
+
+.map-elevation-summary span {
+  white-space: nowrap;
+}
+
+.map-elevation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.map-elevation-occlusion {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #37485a;
+  cursor: pointer;
+  font-size: 11px;
+  user-select: none;
+}
+
+.map-elevation-occlusion input {
+  accent-color: #14639f;
+  cursor: pointer;
+  margin: 0;
+}
+
+.map-elevation-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid #b8cedd;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #28546f;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.map-elevation-actions button:hover:not(:disabled) {
+  border-color: #8fbfe0;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.map-elevation-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.elevation-result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-y: auto;
+  padding: 7px;
+  background: #f8fafb;
+}
+
+.measure-results-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: #f8fafb;
+}
+
+.measure-results-stack .elevation-result-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+}
+
+.elevation-result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 6px;
+  color: #37485a;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.elevation-result-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid #b8cedd;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #28546f;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.elevation-result-toolbar button:hover:not(:disabled) {
+  border-color: #8fbfe0;
+  background: #e4f2fb;
+  color: #0f5d8e;
+}
+
+.elevation-result-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.elevation-result-empty {
+  padding: 14px 8px;
+  color: #758393;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.elevation-result-item {
+  overflow: hidden;
+  border: 1px solid #d8e1e8;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.elevation-result-item-header {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 30px;
+  padding: 2px 4px;
+}
+
+.elevation-result-item-header > button {
+  border: 0;
+  background: transparent;
+  color: #506273;
+  cursor: pointer;
+}
+
+.elevation-result-expand {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  text-align: left;
+  font-size: 12px;
+}
+
+.elevation-result-expand span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.elevation-result-expand em {
+  border: 1px solid #cfe0ea;
+  border-radius: 3px;
+  background: #f2f8fc;
+  padding: 0 5px;
+  color: #14639f;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.elevation-result-body {
+  display: grid;
+  gap: 7px;
+  padding: 6px 9px 9px;
+  border-top: 1px solid #edf1f4;
+}
+
+.elevation-result-grid {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 56px minmax(0, 1fr);
+  gap: 4px 8px;
+  font-size: 11px;
+}
+
+.elevation-result-grid span {
+  color: #758393;
+}
+
+.elevation-result-grid b {
+  color: #263544;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.elevation-result-points {
+  display: grid;
+  gap: 2px;
+  color: #5c6b7a;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
