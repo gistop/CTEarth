@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { GripVertical, Settings } from 'lucide-react';
+import { Eye, EyeOff, GripVertical, Settings } from 'lucide-react';
 import type { LayerOrderId } from '../../../gisStore';
 
 export type LayerRowProps = {
@@ -21,6 +21,8 @@ export type LayerRowProps = {
   onMoveDown?: () => void;
   onMoveUp?: () => void;
   onSelect?: () => void;
+  onVisibilityChange?: (visible: boolean) => void;
+  visible?: boolean;
 };
 
 export function LayerRow({
@@ -42,6 +44,8 @@ export function LayerRow({
   onMoveDown,
   onMoveUp,
   onSelect,
+  onVisibilityChange,
+  visible,
 }: LayerRowProps) {
   const className = [
     'tree-row',
@@ -122,7 +126,23 @@ export function LayerRow({
       {badge}
       {nameNode}
       <div className="tree-row-actions">
-        <div className="tree-row-action-spacer" aria-hidden="true" />
+        {onVisibilityChange ? (
+          <button
+            className={visible ? 'map-group-visibility-button is-visible' : 'map-group-visibility-button'}
+            type="button"
+            title={visible ? `隐藏 ${label}` : `显示 ${label}`}
+            aria-label={visible ? `隐藏 ${label}` : `显示 ${label}`}
+            aria-pressed={Boolean(visible)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onVisibilityChange(!visible);
+            }}
+          >
+            {visible ? <Eye size={15} strokeWidth={1.9} /> : <EyeOff size={15} strokeWidth={1.9} />}
+          </button>
+        ) : (
+          <div className="tree-row-action-spacer" aria-hidden="true" />
+        )}
         <button
           className={isEditOpen ? 'layer-style-toggle is-open' : 'layer-style-toggle'}
           type="button"

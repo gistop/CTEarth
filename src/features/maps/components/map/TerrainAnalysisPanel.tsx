@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, Eraser, RefreshCw, Waves, X } from 'lucide-react';
 import type { MapViewMode } from './MapCommandContext';
 import type { CesiumNamespace, CesiumViewer } from './cesiumRuntime';
+import { suppressDoubleClickZoomWhileHandlerAlive } from './doubleClickZoom';
 import { useTerrainAnalysis } from './TerrainAnalysisContext';
 import {
   buildFloodSampleGrid,
@@ -193,6 +194,7 @@ export function TerrainAnalysisPanel({ cesiumScene, mapMode }: TerrainAnalysisPa
 
     const { Cesium, viewer } = cesiumScene;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    suppressDoubleClickZoomWhileHandlerAlive(handler);
     const previousCursor = viewer.canvas.style.cursor;
 
     viewer.canvas.style.cursor = 'crosshair';

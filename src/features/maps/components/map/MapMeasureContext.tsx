@@ -8,6 +8,7 @@ import {
 export type MeasureMode = 'coordinate' | 'distance';
 
 export type CoordinateMeasureResult = {
+  createdAt?: number;
   height: number;
   id: string;
   lat: number;
@@ -64,6 +65,7 @@ export function MapMeasureProvider({ children }: { children: ReactNode }) {
   const addCompletedMeasurement = useCallback((measurement: Omit<CompletedDistanceMeasurement, 'id' | 'name'>) => {
     setCompletedMeasurements((current) => [...current, {
       ...measurement,
+      createdAt: Date.now(),
       id: `measurement-${Date.now()}-${current.length}`,
       name: `测量 ${current.length + 1}`,
     }]);
@@ -92,6 +94,7 @@ export function MapMeasureProvider({ children }: { children: ReactNode }) {
   const addCoordinateResult = useCallback((point: Omit<CoordinateMeasureResult, 'id'>) => {
     setCoordinateResults((current) => [{
       ...point,
+      createdAt: Date.now(),
       id: `coordinate-${Date.now()}-${current.length}`,
     }, ...current]);
   }, []);

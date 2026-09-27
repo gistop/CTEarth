@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { ArrowUpDown, Eraser, X } from 'lucide-react';
 import type { MapViewMode } from './MapCommandContext';
 import type { CesiumNamespace, CesiumViewer } from './cesiumRuntime';
+import { suppressDoubleClickZoomWhileHandlerAlive } from './doubleClickZoom';
 import { useElevationMeasure } from './ElevationMeasureContext';
 import {
   buildElevationContourSegments,
@@ -14,8 +14,6 @@ import {
   ELEVATION_HORIZONTAL_COLOR,
   ELEVATION_SLOPE_COLOR,
   ELEVATION_VERTICAL_COLOR,
-  formatMeasureLength,
-  formatSignedMeasureLength,
   pickTerrainCartesian,
   type ElevationMeasureResult,
   type ElevationTriangle,
@@ -35,13 +33,11 @@ function preventContextMenu(event: Event) {
 export function ElevationMeasurePanel({ cesiumScene, mapMode }: ElevationMeasurePanelProps) {
   const {
     addResult,
-    clearResults,
     closeMeasure,
     isActive,
     isOcclusionEnabled,
     results,
     setStatus,
-    status,
     toggleOcclusion,
   } = useElevationMeasure();
   const anchorPositionRef = useRef<unknown | null>(null);
@@ -147,6 +143,7 @@ export function ElevationMeasurePanel({ cesiumScene, mapMode }: ElevationMeasure
     viewer.canvas.addEventListener('contextmenu', preventContextMenu);
 
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    suppressDoubleClickZoomWhileHandlerAlive(handler);
 
     const startPreview = (anchor: unknown) => {
       anchorPositionRef.current = anchor;
@@ -411,42 +408,6 @@ export function ElevationMeasurePanel({ cesiumScene, mapMode }: ElevationMeasure
     return null;
   }
 
-  const latestResult = results[0];
-
-  return (
-    <aside className="map-terrain-panel" aria-label="两点高程测量">
-      <header className="map-terrain-panel-header">
-        <div>
-          <ArrowUpDown size={15} strokeWidth={1.8} />
-          <span>两点高程测量</span>
-        </div>
-        <button type="button" title="关闭" aria-label="关闭" onClick={closeMeasure}>
-          <X size={14} strokeWidth={1.8} />
-        </button>
-      </header>
-      <div className="map-terrain-panel-body">
-        <div className="map-terrain-status" aria-live="polite">{status}</div>
-        {latestResult ? (
-          <div className="map-elevation-summary">
-            <span>斜距 {formatMeasureLength(latestResult.slopeDistance)}</span>
-            <span>高程差 {formatSignedMeasureLength(latestResult.second.height - latestResult.first.height)}</span>
-          </div>
-        ) : null}
-        <div className="map-elevation-actions">
-          <label className="map-elevation-occlusion" title="开启后测量线和标注会被地形遮挡">
-            <input
-              type="checkbox"
-              checked={isOcclusionEnabled}
-              onChange={toggleOcclusion}
-            />
-            允许地形遮挡
-          </label>
-          <button type="button" disabled={results.length === 0} onClick={clearResults}>
-            <Eraser size={13} />
-            清除全部结果
-          </button>
-        </div>
-      </div>
-    </aside>
-  );
+  // 浮动面板已移除：设置与状态显示在功能区分组右侧（MeasureSettingsInline）
+  return null;
 }

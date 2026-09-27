@@ -16,12 +16,14 @@ import { MapMeasurePanel } from './map/MapMeasurePanel';
 import { RibbonDistanceMeasureOverlay } from './map/RibbonDistanceMeasure';
 import { useMapMeasure } from './map/MapMeasureContext';
 import { MapSunlightPanel } from './map/MapSunlightPanel';
+import { SceneModelSyncPanel } from './map/SceneModelSyncPanel';
 import { useMapSunlight } from './map/MapSunlightContext';
 import { TerrainAnalysisPanel } from './map/TerrainAnalysisPanel';
 import { ElevationMeasurePanel } from './map/ElevationMeasurePanel';
 import { GeometryMeasurePanel } from './map/GeometryMeasurePanel';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
 import { configureCesiumIonToken, loadCesium, type CesiumNamespace, type CesiumViewer } from './map/cesiumRuntime';
+import { isDoubleClickZoomSuppressed } from './map/doubleClickZoom';
 import { useMapIdentify } from './map/MapIdentifyContext';
 import { useMapSelection } from './map/MapSelectionContext';
 import { useMapViewport } from './map/MapViewportContext';
@@ -73,6 +75,10 @@ function createCesiumViewer(container: HTMLElement, Cesium: CesiumNamespace) {
   viewer.scene.backgroundColor = Cesium.Color.SKYBLUE;
   viewer.scene.globe.baseColor = Cesium.Color.LIGHTGREY;
   viewer.screenSpaceEventHandler.setInputAction(() => {
+    if (isDoubleClickZoomSuppressed()) {
+      return;
+    }
+
     viewer.camera.zoomIn(getCesiumZoomStep(viewer));
   }, Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
   viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
@@ -1054,6 +1060,7 @@ export function MapPanel() {
       ) : null}
       <div className={`cesium-canvas${mapCommandState.mapMode === 'globe' ? ' is-visible' : ''}`} ref={cesiumContainerRef} />
       <MapSunlightPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <SceneModelSyncPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <MapMeasurePanel cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       <RibbonDistanceMeasureOverlay cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       <TerrainAnalysisPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />

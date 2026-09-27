@@ -29,57 +29,82 @@ export function ElevationMeasureResults() {
           暂无测量结果。请切换到三维视图，在「地图 → 测量 → 两点高程」进行测量。
         </div>
       ) : (
-        results.map((result, index) => {
-          const isExpanded = expandedId === result.id;
-          const heightDifference = result.second.height - result.first.height;
-
-          return (
-            <article className="elevation-result-item" key={result.id}>
-              <div className="elevation-result-item-header">
-                <button
-                  className="elevation-result-expand"
-                  type="button"
-                  aria-expanded={isExpanded}
-                  title={isExpanded ? '收起结果' : '展开结果'}
-                  onClick={() => setExpandedId(isExpanded ? null : result.id)}
-                >
-                  {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  <span>
-                    测量 {index + 1}
-                    <em>{formatSignedMeasureLength(heightDifference)}</em>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  title="删除该测量"
-                  aria-label="删除该测量"
-                  onClick={() => removeResult(result.id)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-              {isExpanded ? (
-                <div className="elevation-result-body">
-                  <div className="elevation-result-grid">
-                    <span>斜距</span>
-                    <b>{formatMeasureLength(result.slopeDistance)}</b>
-                    <span>水平投影</span>
-                    <b>{formatMeasureLength(result.horizontalDistance)}</b>
-                    <span>垂直高差</span>
-                    <b>{formatSignedMeasureLength(result.verticalDistance)}</b>
-                    <span>高程差</span>
-                    <b>{formatSignedMeasureLength(heightDifference)}</b>
-                  </div>
-                  <div className="elevation-result-points">
-                    <div>{formatPoint('A', result.first)}</div>
-                    <div>{formatPoint('B', result.second)}</div>
-                  </div>
-                </div>
-              ) : null}
-            </article>
-          );
-        })
+        results.map((result, index) => (
+          <ElevationMeasureResultItem
+            key={result.id}
+            result={result}
+            title={`测量 ${index + 1}`}
+            isExpanded={expandedId === result.id}
+            onToggleExpanded={() => setExpandedId(expandedId === result.id ? null : result.id)}
+            onRemove={() => {
+              removeResult(result.id);
+              if (expandedId === result.id) setExpandedId(null);
+            }}
+          />
+        ))
       )}
     </section>
+  );
+}
+
+export function ElevationMeasureResultItem({
+  result,
+  title,
+  isExpanded,
+  onToggleExpanded,
+  onRemove,
+}: {
+  result: ElevationMeasureResult;
+  title: string;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+  onRemove: () => void;
+}) {
+  const heightDifference = result.second.height - result.first.height;
+
+  return (
+    <article className="elevation-result-item">
+      <div className="elevation-result-item-header">
+        <button
+          className="elevation-result-expand"
+          type="button"
+          aria-expanded={isExpanded}
+          title={isExpanded ? '收起结果' : '展开结果'}
+          onClick={onToggleExpanded}
+        >
+          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <span>
+            {title}
+            <em>{formatSignedMeasureLength(heightDifference)}</em>
+          </span>
+        </button>
+        <button
+          type="button"
+          title="删除该测量"
+          aria-label="删除该测量"
+          onClick={onRemove}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      {isExpanded ? (
+        <div className="elevation-result-body">
+          <div className="elevation-result-grid">
+            <span>斜距</span>
+            <b>{formatMeasureLength(result.slopeDistance)}</b>
+            <span>水平投影</span>
+            <b>{formatMeasureLength(result.horizontalDistance)}</b>
+            <span>垂直高差</span>
+            <b>{formatSignedMeasureLength(result.verticalDistance)}</b>
+            <span>高程差</span>
+            <b>{formatSignedMeasureLength(heightDifference)}</b>
+          </div>
+          <div className="elevation-result-points">
+            <div>{formatPoint('A', result.first)}</div>
+            <div>{formatPoint('B', result.second)}</div>
+          </div>
+        </div>
+      ) : null}
+    </article>
   );
 }

@@ -1,4 +1,5 @@
 import type { CesiumNamespace, CesiumViewer } from './cesiumRuntime';
+import { isSceneModelSnapEnabled, pickSnappedModelVertex } from './sceneModelVertexSnap';
 
 export type ElevationMeasurePoint = {
   height: number;
@@ -7,6 +8,7 @@ export type ElevationMeasurePoint = {
 };
 
 export type ElevationMeasureResult = {
+  createdAt?: number;
   first: ElevationMeasurePoint;
   horizontalDistance: number;
   id: string;
@@ -67,6 +69,15 @@ export function pickTerrainCartesian(
   viewer: CesiumViewer,
   windowPosition: unknown,
 ): unknown | null {
+  // 优先吸附三维模型顶点（两点高程/几何测量共用）
+  if (isSceneModelSnapEnabled()) {
+    const snapped = pickSnappedModelVertex(viewer, windowPosition);
+
+    if (snapped) {
+      return new Cesium.Cartesian3(snapped.x, snapped.y, snapped.z);
+    }
+  }
+
   const ray = viewer.camera.getPickRay?.(windowPosition);
   const picked = ray ? viewer.scene.globe.pick?.(ray, viewer.scene) : undefined;
 

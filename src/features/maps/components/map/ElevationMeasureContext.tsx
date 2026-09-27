@@ -24,7 +24,7 @@ export function ElevationMeasureProvider({ children }: { children: ReactNode }) 
   const [status, setStatus] = useState('');
 
   const addResult = useCallback((result: ElevationMeasureResult) => {
-    setResults((current) => [result, ...current]);
+    setResults((current) => [{ ...result, createdAt: result.createdAt ?? Date.now() }, ...current]);
   }, []);
 
   const toggleOcclusion = useCallback(() => {

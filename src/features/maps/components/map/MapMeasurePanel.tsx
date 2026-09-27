@@ -4,6 +4,9 @@ import { Check, LocateFixed, Ruler, Undo2, X } from 'lucide-react';
 import { useMapCommands, type MapViewMode } from './MapCommandContext';
 import { useMapMeasure, type MeasureMode } from './MapMeasureContext';
 import { loadCesium, type CesiumNamespace, type CesiumViewer } from './cesiumRuntime';
+import { isSceneModelSnapEnabled, pickSnappedModelVertex } from './sceneModelVertexSnap';
+import { SceneModelVertexSnapToggle } from './SceneModelVertexSnapToggle';
+import { suppressDoubleClickZoomWhileHandlerAlive } from './doubleClickZoom';
 import { getRasterBasemapDefinitions, type RasterBasemapTileDefinition } from './rasterBasemapSources';
 import {
   createDefaultDistanceMeasurementStyle,
@@ -183,6 +186,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
     if (pointsToCommit.length >= 2 && !isDrawingFinished) {
       addCompletedMeasurement({
         isVisible: true,
+        kind: distanceKind ?? undefined,
         points: pointsToCommit.map((point) => ({ ...point })),
         style: createDefaultDistanceMeasurementStyle(),
         totalDistance: cesiumScene && mapMode === 'globe' && distanceKind === 'surface'
@@ -411,7 +415,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
         measurement.points,
         null,
         measurement.totalDistance,
-        'space',
+        measurement.kind ?? 'space',
         false,
         {},
         measurement.style,
@@ -462,6 +466,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
 
     const { Cesium, viewer } = cesiumScene;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    suppressDoubleClickZoomWhileHandlerAlive(handler);
     const previousCursor = viewer.canvas.style.cursor;
 
     viewer.canvas.style.cursor = 'crosshair';
@@ -599,6 +604,7 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
 
     const { Cesium, viewer } = cesiumScene;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    suppressDoubleClickZoomWhileHandlerAlive(handler);
     const previousCursor = viewer.canvas.style.cursor;
     const controller = viewer.scene.screenSpaceCameraController;
     const previousInputsEnabled = controller?.enableInputs;
@@ -795,6 +801,11 @@ export function MapMeasurePanel({ cesiumScene, map, mapMode, mapReady }: MapMeas
       </div>
 
       <footer className="map-measure-footer">
+        {mapMode === 'globe' && cesiumScene && (
+          <span className="map-measure-footer-toggle">
+            <SceneModelVertexSnapToggle />
+          </span>
+        )}
         <button type="button" title="撤销点" disabled={mode !== 'distance' || points.length === 0} onClick={undo}>
           <Undo2 size={14} strokeWidth={1.8} />
           <span>撤销</span>
@@ -1218,6 +1229,23 @@ export function pickGlobeSurfacePoint(
   viewer: CesiumViewer,
   windowPosition: unknown,
 ): MeasurePoint | null {
+  // 优先吸附三维模型顶点（距离测量/坐标取点共用）
+  if (isSceneModelSnapEnabled()) {
+    const snapped = pickSnappedModelVertex(viewer, windowPosition);
+
+    if (snapped) {
+      const snappedCartographic = Cesium.Cartographic.fromCartesian(
+        new Cesium.Cartesian3(snapped.x, snapped.y, snapped.z),
+      );
+
+      return {
+        height: snappedCartographic.height,
+        lat: Cesium.Math.toDegrees(snappedCartographic.latitude),
+        lon: Cesium.Math.toDegrees(snappedCartographic.longitude),
+      };
+    }
+  }
+
   const ray = viewer.camera.getPickRay?.(windowPosition);
   const cartesian = ray ? viewer.scene.globe.pick?.(ray, viewer.scene) : undefined;
 

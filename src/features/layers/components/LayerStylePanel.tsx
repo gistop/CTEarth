@@ -112,7 +112,7 @@ function UploadedStyleEditor({
       <RangeControl label="线透明度" value={style.lineOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ lineOpacity: value })} />
       <ColorControl label="面颜色" value={style.fillColor} onChange={(value) => onChange({ fillColor: value })} />
       <RangeControl label="面透明度" value={style.fillOpacity} min={0} max={1} step={0.05} onChange={(value) => onChange({ fillOpacity: value })} />
-      <label className="layer-style-field layer-style-toggle" title="开启后在地图上按字段给要素加文字标注">
+      <label className="layer-style-field layer-style-toggle-row" title="开启后在地图上按字段给要素加文字标注">
         <span>开启标注</span>
         <input
           type="checkbox"

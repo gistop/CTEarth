@@ -16,6 +16,7 @@ import { MoreActionsMenu } from './MoreActionsMenu';
 import { LayerBadge } from './LayerBadge';
 import { LayerRow } from './LayerRow';
 import { LayerStylePanel } from './LayerStylePanel';
+import { SceneModelsSection } from './SceneModelsSection';
 import type { LayerGeometryKind, LayerListItem, MapGroupLayerRow } from './layerViewTypes';
 import { useMapCommands } from '../../maps/components/map/MapCommandContext';
 import { useMapBasemapSelection } from '../../maps/components/map/MapBasemapSelectionContext';
@@ -65,6 +66,7 @@ type EditTarget =
 type PendingDeleteTarget =
   | { kind: 'uploaded'; id: string; name: string }
   | { kind: 'raster'; id: string; name: string }
+  | { kind: 'sceneModel'; id: string; name: string }
   | { kind: 'basemap'; groupId: string; instanceId: string; name: string }
   | { kind: 'group'; groupId: string; name: string };
 
@@ -94,6 +96,9 @@ export function LayerPanel() {
     deleteRasterLayer,
     saveGeoJsonLayer,
     saveGeoPackageLayer,
+    sceneModels,
+    deleteSceneModel,
+    updateSceneModel,
     uploadGeoParquetUrl,
     uploadGeoTiffUrl,
     setLayerVisibility,
@@ -228,6 +233,9 @@ export function LayerPanel() {
     ? rasters.find((item) => `raster:${item.id}` === selectedItemId) ?? null
     : null;
   const selectedVectorOverlay = selectedItemId === 'vectorOverlay' ? vectorOverlay : null;
+  const selectedSceneModel = selectedItemId?.startsWith('sceneModel:')
+    ? sceneModels.find((item) => `sceneModel:${item.id}` === selectedItemId) ?? null
+    : null;
 
   useEffect(() => {
     if (activeLayerId) {
@@ -648,6 +656,15 @@ export function LayerPanel() {
       return;
     }
 
+    if (selectedSceneModel) {
+      setPendingDelete({
+        kind: 'sceneModel',
+        id: selectedSceneModel.id,
+        name: selectedSceneModel.name,
+      });
+      return;
+    }
+
     if (selectedBasemapItem) {
       setPendingDelete({
         kind: 'basemap',
@@ -680,6 +697,8 @@ export function LayerPanel() {
       deleteUploadedLayer(pendingDelete.id);
     } else if (pendingDelete.kind === 'raster') {
       deleteRasterLayer(pendingDelete.id);
+    } else if (pendingDelete.kind === 'sceneModel') {
+      deleteSceneModel(pendingDelete.id);
     } else if (pendingDelete.kind === 'group') {
       const removal = removeMapGroup(mapGroups, pendingDelete.groupId, currentMapGroupId);
 
@@ -687,6 +706,15 @@ export function LayerPanel() {
 
       if (removal.nextCurrentGroupId) {
         setCurrentMapGroupId(removal.nextCurrentGroupId);
+      }
+
+      // 被删项目的三维模型随图层一起迁移到接管项目
+      if (removal.groups.length !== mapGroups.length) {
+        const modelTargetGroupId = removal.nextCurrentGroupId ?? currentMapGroupId;
+
+        sceneModels
+          .filter((model) => model.groupId === pendingDelete.groupId)
+          .forEach((model) => updateSceneModel(model.id, { groupId: modelTargetGroupId }));
       }
 
       setCollapsedMapGroupIds((current) => {
@@ -720,7 +748,13 @@ export function LayerPanel() {
 
   const deleteDialogTarget: DeleteLayerConfirmTarget | null = pendingDelete
     ? {
-      kind: pendingDelete.kind === 'basemap' ? 'basemap' : pendingDelete.kind === 'group' ? 'map' : 'layer',
+      kind: pendingDelete.kind === 'basemap'
+        ? 'basemap'
+        : pendingDelete.kind === 'group'
+          ? 'map'
+          : pendingDelete.kind === 'sceneModel'
+            ? 'model'
+            : 'layer',
       name: pendingDelete.name,
     }
     : null;
@@ -802,7 +836,7 @@ export function LayerPanel() {
         />
       </div>
       <div className="contents-tabs">
-        <AddDataSplitButton />
+        <AddDataSplitButton mapGroupId={currentMapGroupId} />
         <button
           type="button"
           title="保存当前 GeoJSON 图层"
@@ -844,7 +878,7 @@ export function LayerPanel() {
           type="button"
           title="删除选中图层或地图"
           aria-label="删除选中图层或地图"
-          disabled={!selectedUploadedLayer && !selectedRaster && !selectedBasemapItem && mapGroups.length <= 1}
+          disabled={!selectedUploadedLayer && !selectedRaster && !selectedSceneModel && !selectedBasemapItem && mapGroups.length <= 1}
           onClick={handleDeleteSelectedLayer}
         >
           <Trash2 size={20} />
@@ -989,6 +1023,8 @@ export function LayerPanel() {
                   <span className="tree-row-label">{item.label}</span>
                 )}
                 orderId={item.kind === 'basemap' ? 'basemap' : item.id}
+                visible={item.checked}
+                onVisibilityChange={(visible) => handleLayerItemVisibilityChange(group.id, groupItem, visible)}
                 onChange={(checked) => handleLayerItemVisibilityChange(group.id, groupItem, checked)}
                 onDragEnd={() => {
                   if (isLayerDragActive) {
@@ -1087,6 +1123,14 @@ export function LayerPanel() {
             </div>
               );
             })}
+            <SceneModelsSection
+              groupId={group.id}
+              isCurrentGroup={group.id === currentMapGroupId}
+              onMakeCurrent={() => setCurrentMapGroupId(group.id)}
+              onSelect={(modelId) => setSelectedItemId(`sceneModel:${modelId}`)}
+              searchQuery={normalizedSearchQuery}
+              selectedId={selectedItemId?.startsWith('sceneModel:') ? selectedItemId.slice('sceneModel:'.length) : null}
+            />
           </MapGroupSection>
         ))}
 

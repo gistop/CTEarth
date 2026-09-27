@@ -298,6 +298,19 @@ export type BasemapLayerStyle = {
   opacity: number;
 };
 
+export type SceneModelLayer = {
+  id: string;
+  groupId: string;
+  name: string;
+  url: string;
+  visible: boolean;
+  scale: number;
+  lift: number;
+  longitude?: number;
+  latitude?: number;
+  groundHeight?: number;
+};
+
 type GisContextValue = {
   layer: UploadedLayer | null;
   layers: UploadedLayer[];
@@ -321,6 +334,12 @@ type GisContextValue = {
   workspaceDraftLoaded: boolean;
   message: string;
   swipeRasterId: string | null;
+  sceneModels: SceneModelLayer[];
+  sceneModelZoomRequest: { modelId: string; requestId: number } | null;
+  uploadSceneModel: (file: File, groupId: string) => void;
+  updateSceneModel: (id: string, patch: Partial<Omit<SceneModelLayer, 'id' | 'url'>>) => void;
+  deleteSceneModel: (id: string) => void;
+  zoomToSceneModel: (id: string) => void;
   toggleRasterSwipe: (rasterId?: string) => void;
   disableRasterSwipe: () => void;
   uploadShapefileZip: (file: File) => Promise<void>;
@@ -460,6 +479,8 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
   const [workspaceDraftLoaded, setWorkspaceDraftLoaded] = useState(false);
   const [message, setMessage] = useState('');
   const [swipeRasterId, setSwipeRasterId] = useState<string | null>(null);
+  const [sceneModels, setSceneModels] = useState<SceneModelLayer[]>([]);
+  const [sceneModelZoomRequest, setSceneModelZoomRequest] = useState<{ modelId: string; requestId: number } | null>(null);
 
   const layer = useMemo(
     () => layers.find((item) => item.id === activeLayerId) ?? layers.at(-1) ?? null,
@@ -476,6 +497,51 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     setRasterLayerVisibilityState((current) => ({ ...current, [nextRaster.id]: true }));
     setRasterStyles((current) => (current[nextRaster.id] ? current : { ...current, [nextRaster.id]: defaultRasterStyle }));
     setLayerOrder((current) => [`raster:${nextRaster.id}`, ...current.filter((id) => id !== 'raster' && id !== `raster:${nextRaster.id}`)]);
+  }, []);
+
+  const uploadSceneModel = useCallback((file: File, groupId: string) => {
+    const lowerName = file.name.toLowerCase();
+
+    if (!lowerName.endsWith('.glb') && !lowerName.endsWith('.gltf')) {
+      setMessage('仅支持 .glb / .gltf 三维模型文件');
+      return;
+    }
+
+    const dot = file.name.lastIndexOf('.');
+    const baseName = dot > 0 ? file.name.slice(0, dot) : file.name;
+    const model: SceneModelLayer = {
+      id: createLayerId(baseName || 'scene-model'),
+      groupId,
+      name: file.name,
+      url: URL.createObjectURL(file),
+      visible: true,
+      scale: 1,
+      lift: 0,
+    };
+
+    setSceneModels((current) => [...current, model]);
+    setMessage(`已添加三维模型 ${file.name}，请在三维模式下查看`);
+  }, []);
+
+  const updateSceneModel = useCallback((id: string, patch: Partial<Omit<SceneModelLayer, 'id' | 'url'>>) => {
+    setSceneModels((current) => current.map((model) => (model.id === id ? { ...model, ...patch } : model)));
+  }, []);
+
+  const deleteSceneModel = useCallback((id: string) => {
+    setSceneModels((current) => {
+      const target = current.find((model) => model.id === id);
+
+      if (target) {
+        window.setTimeout(() => URL.revokeObjectURL(target.url), 15000);
+      }
+
+      return current.filter((model) => model.id !== id);
+    });
+    setSceneModelZoomRequest((current) => (current?.modelId === id ? null : current));
+  }, []);
+
+  const zoomToSceneModel = useCallback((id: string) => {
+    setSceneModelZoomRequest({ modelId: id, requestId: Date.now() });
   }, []);
 
   const toggleRasterSwipe = useCallback((rasterId?: string) => {
@@ -2231,7 +2297,13 @@ export function GisProvider({ children }: { children: React.ReactNode }) {
     runExtractByMask,
     editRasterByAoi,
     saveRasterLayer,
-  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, disableRasterSwipe, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyles, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runRasterCalculator, runRasterReclassify, runRasterResample, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, swipeRasterId, toggleRasterSwipe, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster]);
+    sceneModels,
+    sceneModelZoomRequest,
+    uploadSceneModel,
+    updateSceneModel,
+    deleteSceneModel,
+    zoomToSceneModel,
+  }), [activeLayerId, activeRasterId, basemapStyle, clearSelection, createBlankGeoJsonLayer, deleteRasterLayer, deleteUploadedLayer, disableRasterSwipe, editRasterByAoi, isRunning, layer, layerOrder, layerVisibility, layerZoomRequest, layers, message, moveLayerOrder, raster, rasterLayerVisibility, rasterStyles, rasterZoomRequest, rasters, renameUploadedLayer, renameRasterLayer, renameVectorOverlay, runBufferAnalysis, runExtractByMask, runIdwInterpolation, runOverlayAnalysis, runRasterCalculator, runRasterReclassify, runRasterResample, runTerrainAnalysis, saveGeoJsonLayer, saveGeoPackageLayer, saveRasterLayer, selectByLocation, selectByValue, setActiveLayer, setActiveRaster, setAllLayerVisibility, setBasemapStyle, setLayerDrawOrder, setLayerSelection, setLayerVisibility, setRasterLayerVisibility, setRasterStyle, setSelectedField, setUploadedLayerStyle, setUploadedLayerVisibility, setVectorOverlayStyle, swipeRasterId, toggleRasterSwipe, toolsReady, updateUploadedLayerGeoJson, uploadCsv, uploadGeoJson, uploadGeoPackage, uploadGeoParquetFile, uploadGeoParquetUrl, uploadGeoTiff, uploadGeoTiffUrl, uploadedLayerStyles, uploadedLayerVisibility, uploadShapefileZip, vectorOverlay, vectorOverlayStyle, workspaceDraftLoaded, zoomToLayer, zoomToRaster, sceneModelZoomRequest, sceneModels, uploadSceneModel, updateSceneModel, deleteSceneModel, zoomToSceneModel]);
 
   return <GisContext.Provider value={value}>{children}</GisContext.Provider>;
 }

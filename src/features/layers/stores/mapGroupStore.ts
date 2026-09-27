@@ -92,8 +92,8 @@ export function useMapGroupStore({
   }, [workspaceDraftLoaded]);
 
   useEffect(() => {
-    setMapGroupRenderState(createMapGroupRenderState(mapGroups));
-  }, [mapGroups]);
+    setMapGroupRenderState(createMapGroupRenderState(mapGroups, currentMapGroupId));
+  }, [currentMapGroupId, mapGroups]);
 
   useEffect(() => {
     if (workspaceDraftLoaded && mapGroupDraftLoaded) {

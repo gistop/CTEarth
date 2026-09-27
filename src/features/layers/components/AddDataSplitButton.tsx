@@ -3,7 +3,7 @@ import { ChevronDown, Cloud, Link2 } from 'lucide-react';
 import { AddLocalDataIcon } from './GisToolbarIcons';
 import { useLayerStore } from '../stores/layerStore';
 
-export function AddDataSplitButton() {
+export function AddDataSplitButton({ mapGroupId }: { mapGroupId: string }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [remoteUrl, setRemoteUrl] = useState('');
@@ -16,6 +16,7 @@ export function AddDataSplitButton() {
     uploadGeoParquetUrl,
     uploadGeoTiff,
     uploadGeoTiffUrl,
+    uploadSceneModel,
     uploadShapefileZip,
   } = useLayerStore();
 
@@ -26,7 +27,9 @@ export function AddDataSplitButton() {
       return;
     }
 
-    if (isCsvFile(file.name)) {
+    if (isSceneModelFile(file.name)) {
+      await uploadSceneModel(file, mapGroupId);
+    } else if (isCsvFile(file.name)) {
       await uploadCsv(file);
     } else if (isGeoTiffFile(file.name)) {
       await uploadGeoTiff(file);
@@ -82,7 +85,7 @@ export function AddDataSplitButton() {
         className="add-data-local"
         type="button"
         title="添加本地数据"
-        aria-label="本地添加 CSV、Shapefile ZIP、GeoJSON、GeoParquet、GeoPackage 或 GeoTIFF 数据"
+        aria-label="本地添加 CSV、Shapefile ZIP、GeoJSON、GeoParquet、GeoPackage、GeoTIFF 或三维模型（glb/gltf）数据"
         onClick={() => fileInputRef.current?.click()}
       >
         <AddLocalDataIcon size={20} />
@@ -122,7 +125,7 @@ export function AddDataSplitButton() {
         ref={fileInputRef}
         className="hidden-file-input"
         type="file"
-        accept=".csv,.zip,.geojson,.json,.parquet,.geoparquet,.gpkg,.geopackage,.tif,.tiff,.geotiff"
+        accept=".csv,.zip,.geojson,.json,.parquet,.geoparquet,.gpkg,.geopackage,.tif,.tiff,.geotiff,.glb,.gltf"
         onChange={handleFileChange}
       />
     </div>
@@ -131,6 +134,10 @@ export function AddDataSplitButton() {
 
 function isCsvFile(fileName: string) {
   return /\.csv$/i.test(pathNameForExtension(fileName));
+}
+
+function isSceneModelFile(fileName: string) {
+  return /\.(glb|gltf)$/i.test(pathNameForExtension(fileName));
 }
 
 function isGeoTiffFile(fileName: string) {

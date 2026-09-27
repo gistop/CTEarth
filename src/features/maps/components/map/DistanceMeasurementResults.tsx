@@ -22,7 +22,6 @@ export function DistanceMeasurementResults({
   onVisibilityChange,
 }: DistanceMeasurementResultsProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
 
   return (
     <section className="elevation-result-list" aria-label="距离测量结果">
@@ -38,75 +37,111 @@ export function DistanceMeasurementResults({
           暂无距离结果。在「地图 → 测量 → 距离」连续单击加点，双击或右键结束。
         </div>
       ) : (
-        measurements.map((measurement) => {
-        const isExpanded = expandedId === measurement.id;
-        const isEditing = editingId === measurement.id;
-
-        return (
-          <article className="measure-result-item" key={measurement.id}>
-            <div className="measure-result-item-header">
-              <button
-                className="measure-result-expand"
-                type="button"
-                aria-expanded={isExpanded}
-                title={isExpanded ? '收起结果' : '展开结果'}
-                onClick={() => setExpandedId(isExpanded ? null : measurement.id)}
-              >
-                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                <span>{measurement.name}</span>
-              </button>
-              <button
-                type="button"
-                title={measurement.isVisible ? '隐藏测量结果' : '显示测量结果'}
-                aria-label={measurement.isVisible ? '隐藏测量结果' : '显示测量结果'}
-                onClick={() => onVisibilityChange(measurement.id, !measurement.isVisible)}
-              >
-                {measurement.isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
-              </button>
-              <button
-                className={isEditing ? 'is-active' : undefined}
-                type="button"
-                title="编辑样式"
-                aria-label="编辑测量样式"
-                onClick={() => setEditingId(isEditing ? null : measurement.id)}
-              >
-                <Settings2 size={14} />
-              </button>
-              <button
-                type="button"
-                title="删除测量结果"
-                aria-label="删除测量结果"
-                onClick={() => {
-                  onRemove(measurement.id);
-                  if (expandedId === measurement.id) setExpandedId(null);
-                  if (editingId === measurement.id) setEditingId(null);
-                }}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-
-            {isExpanded ? (
-              <dl className="measure-result-summary">
-                <div><dt>总长</dt><dd>{formatDistance(measurement.totalDistance)}</dd></div>
-                <div><dt>点数</dt><dd>{measurement.points.length}</dd></div>
-                <div><dt>状态</dt><dd>已完成</dd></div>
-              </dl>
-            ) : null}
-
-            {isEditing ? (
-              <DistanceMeasurementStyleEditor
-                style={measurement.style}
-                onChange={(patch) => onStyleChange(measurement.id, patch)}
-                onClose={() => setEditingId(null)}
-                onReset={() => onStyleChange(measurement.id, createDefaultDistanceMeasurementStyle())}
-              />
-            ) : null}
-          </article>
-        );
-        })
+        measurements.map((measurement) => (
+          <DistanceMeasurementResultItem
+            key={measurement.id}
+            measurement={measurement}
+            title={measurement.name}
+            isExpanded={expandedId === measurement.id}
+            onToggleExpanded={() => setExpandedId(expandedId === measurement.id ? null : measurement.id)}
+            onRemove={() => {
+              onRemove(measurement.id);
+              if (expandedId === measurement.id) setExpandedId(null);
+            }}
+            onStyleChange={onStyleChange}
+            onVisibilityChange={onVisibilityChange}
+          />
+        ))
       )}
     </section>
+  );
+}
+
+export function DistanceMeasurementResultItem({
+  measurement,
+  title,
+  isExpanded,
+  onToggleExpanded,
+  onRemove,
+  onStyleChange,
+  onVisibilityChange,
+}: {
+  measurement: CompletedDistanceMeasurement;
+  title: string;
+  isExpanded: boolean;
+  onToggleExpanded: () => void;
+  onRemove: () => void;
+  onStyleChange: (id: string, patch: Partial<DistanceMeasurementStyle>) => void;
+  onVisibilityChange: (id: string, isVisible: boolean) => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+
+  return (
+    <article className="measure-result-item">
+      <div className="measure-result-item-header">
+        <button
+          className="measure-result-expand"
+          type="button"
+          aria-expanded={isExpanded}
+          title={isExpanded ? '收起结果' : '展开结果'}
+          onClick={onToggleExpanded}
+        >
+          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <span>
+            {title}
+            <em>
+              {formatDistance(measurement.totalDistance)}
+              {measurement.kind ? ` ${measurement.kind === 'space' ? '空间' : '贴地'}` : ''}
+            </em>
+          </span>
+        </button>
+        <button
+          type="button"
+          title={measurement.isVisible ? '隐藏测量结果' : '显示测量结果'}
+          aria-label={measurement.isVisible ? '隐藏测量结果' : '显示测量结果'}
+          onClick={() => onVisibilityChange(measurement.id, !measurement.isVisible)}
+        >
+          {measurement.isVisible ? <Eye size={14} /> : <EyeOff size={14} />}
+        </button>
+        <button
+          className={isEditing ? 'is-active' : undefined}
+          type="button"
+          title="编辑样式"
+          aria-label="编辑测量样式"
+          onClick={() => setIsEditing(!isEditing)}
+        >
+          <Settings2 size={14} />
+        </button>
+        <button
+          type="button"
+          title="删除测量结果"
+          aria-label="删除测量结果"
+          onClick={() => {
+            onRemove();
+            setIsEditing(false);
+          }}
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+
+      {isExpanded ? (
+        <dl className="measure-result-summary">
+          <div><dt>总长</dt><dd>{formatDistance(measurement.totalDistance)}</dd></div>
+          <div><dt>点数</dt><dd>{measurement.points.length}</dd></div>
+          <div><dt>状态</dt><dd>已完成</dd></div>
+        </dl>
+      ) : null}
+
+      {isEditing ? (
+        <DistanceMeasurementStyleEditor
+          style={measurement.style}
+          onChange={(patch) => onStyleChange(measurement.id, patch)}
+          onClose={() => setIsEditing(false)}
+          onReset={() => onStyleChange(measurement.id, createDefaultDistanceMeasurementStyle())}
+        />
+      ) : null}
+    </article>
   );
 }
 

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { Compass, Eraser, Square, Triangle, X } from 'lucide-react';
 import type { MapViewMode } from './MapCommandContext';
 import type { CesiumNamespace, CesiumViewer } from './cesiumRuntime';
+import { suppressDoubleClickZoomWhileHandlerAlive } from './doubleClickZoom';
 import { useGeometryMeasure } from './GeometryMeasureContext';
 import { pickTerrainCartesian, formatMeasureLength } from './elevationMeasurement';
 import {
@@ -197,12 +197,10 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
   const {
     activeMode,
     addResult,
-    clearResults,
     closeMeasure,
     isActive,
     results,
     setStatus,
-    status,
   } = useGeometryMeasure();
   const draftPointsRef = useRef<GeometryMeasurePoint[]>([]);
   const floatingPointRef = useRef<GeometryMeasurePoint | null>(null);
@@ -480,6 +478,7 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
       });
 
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+      suppressDoubleClickZoomWhileHandlerAlive(handler);
 
       handler.setInputAction((event: { position?: unknown }) => {
         if (!isCurrent() || !event.position) {
@@ -527,13 +526,90 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
               return [];
             }
 
-            return [points[points.length - 1], floating];
-          }, false),
-          width: 3,
-          material: dashedMaterial(bearingColor),
-          arcType: Cesium.ArcType.NONE,
-        },
-      });
+            return [
+              points[points.length - 1],
+              floating,
+            ].map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.height));
+            }, false),
+            width: 3,
+            material: dashedMaterial(bearingColor),
+            arcType: Cesium.ArcType.NONE,
+            },
+            });
+            addPreviewEntity({
+            polyline: {
+            positions: new Cesium.CallbackProperty(() => {
+              const points = draftPointsRef.current;
+              const floating = floatingPointRef.current;
+
+              if (points.length === 0 || !floating) {
+                return [];
+              }
+
+              if (haversineMeters(points[0], floating) < 1) {
+                return [];
+              }
+
+              const radius = Math.max(haversineMeters(points[0], floating) * 0.35, 2);
+              const north = destinationPoint(points[0], 0, radius);
+
+              return [
+                Cesium.Cartesian3.fromDegrees(points[0].lon, points[0].lat, points[0].height),
+                Cesium.Cartesian3.fromDegrees(north.lon, north.lat, points[0].height),
+              ];
+            }, false),
+            width: 2,
+            material: dashedMaterial(bearingColor),
+            arcType: Cesium.ArcType.NONE,
+            },
+            });
+            addPreviewEntity({
+            polyline: {
+            positions: new Cesium.CallbackProperty(() => {
+              const points = draftPointsRef.current;
+              const floating = floatingPointRef.current;
+
+              if (points.length === 0 || !floating) {
+                return [];
+              }
+
+              if (haversineMeters(points[0], floating) < 1) {
+                return [];
+              }
+
+              return buildArcLngLat(points[0], 0, bearingDegrees(points[0], floating), Math.max(haversineMeters(points[0], floating) * 0.35, 2))
+                .map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, points[0].height));
+            }, false),
+            width: 2,
+            material: bearingColor,
+            arcType: Cesium.ArcType.NONE,
+            },
+            });
+            addPreviewEntity({
+            polyline: {
+            positions: new Cesium.CallbackProperty(() => {
+              const points = draftPointsRef.current;
+              const floating = floatingPointRef.current;
+
+              if (points.length === 0 || !floating) {
+                return [];
+              }
+
+              if (haversineMeters(points[0], floating) < 1) {
+                return [];
+              }
+
+              return [
+                Cesium.Cartesian3.fromDegrees(points[0].lon, points[0].lat, points[0].height),
+                Cesium.Cartesian3.fromDegrees(floating.lon, floating.lat, floating.height),
+              ];
+            }, false),
+            width: 3,
+            material: dashedMaterial(bearingColor),
+            clampToGround: true,
+            arcType: Cesium.ArcType.GEODESIC,
+            },
+            });
       addPreviewEntity({
         position: new Cesium.CallbackProperty(() => {
           const floating = floatingPointRef.current;
@@ -562,6 +638,7 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
       });
 
       const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+      suppressDoubleClickZoomWhileHandlerAlive(handler);
 
       handler.setInputAction((event: { position?: unknown }) => {
         if (!isCurrent() || !event.position) {
@@ -607,7 +684,10 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
             return [];
           }
 
-          return [points[Math.min(points.length, 2) - 1], floating];
+          return [
+            points[Math.min(points.length, 2) - 1],
+            floating,
+          ].map((point) => Cesium.Cartesian3.fromDegrees(point.lon, point.lat, point.height));
         }, false),
         width: 3,
         material: dashedMaterial(angleColor),
@@ -646,6 +726,7 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
     });
 
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    suppressDoubleClickZoomWhileHandlerAlive(handler);
 
     handler.setInputAction((event: { position?: unknown }) => {
       if (!isCurrent() || !event.position) {
@@ -847,9 +928,26 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
       });
 
       if (activeMode === 'bearing' && floating && points.length >= 1) {
+        const bearingRadius = Math.max(haversineMeters(points[0], floating) * 0.35, 2);
+        const north = destinationPoint(points[0], 0, bearingRadius);
+
         features.push({
           geometry: { coordinates: [[points[0].lon, points[0].lat], [floating.lon, floating.lat]], type: 'LineString' },
           properties: { color },
+          type: 'Feature',
+        });
+        features.push({
+          geometry: { coordinates: [[points[0].lon, points[0].lat], [north.lon, north.lat]], type: 'LineString' },
+          properties: { color, preview: true },
+          type: 'Feature',
+        });
+        features.push({
+          geometry: {
+            coordinates: buildArcLngLat(points[0], 0, bearingDegrees(points[0], floating), bearingRadius)
+              .map((point) => [point.lon, point.lat]),
+            type: 'LineString',
+          },
+          properties: { color, preview: true },
           type: 'Feature',
         });
         features.push({
@@ -1059,42 +1157,6 @@ export function GeometryMeasurePanel({ cesiumScene, map, mapMode, mapReady }: Ge
     return null;
   }
 
-  const ModeIcon = activeMode === 'angle'
-    ? Triangle
-    : activeMode === 'bearing'
-      ? Compass
-      : Square;
-  const modeLabel = activeMode === 'angle'
-    ? '角度测量'
-    : activeMode === 'bearing'
-      ? '方位角测量'
-      : activeMode === 'area-surface'
-        ? '贴地面积测量'
-        : '面积测量';
-
-  return (
-    <aside className="map-terrain-panel" aria-label={modeLabel}>
-      <header className="map-terrain-panel-header">
-        <div>
-          <ModeIcon size={15} strokeWidth={1.8} />
-          <span>{modeLabel}</span>
-        </div>
-        <button type="button" title="关闭" aria-label="关闭" onClick={closeMeasure}>
-          <X size={14} strokeWidth={1.8} />
-        </button>
-      </header>
-      <div className="map-terrain-panel-body">
-        <div className="map-terrain-status" aria-live="polite">{status}</div>
-        <div className="map-elevation-actions">
-          <span className="map-elevation-summary">
-            {mapMode === 'globe' ? '三维模式：贴地取点' : '平面模式：平面取点'}
-          </span>
-          <button type="button" disabled={results.length === 0} onClick={clearResults}>
-            <Eraser size={13} />
-            清除全部结果
-          </button>
-        </div>
-      </div>
-    </aside>
-  );
+  // 浮动面板已移除：设置与状态显示在功能区分组右侧（MeasureSettingsInline）
+  return null;
 }

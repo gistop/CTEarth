@@ -22,8 +22,10 @@ export type DistanceMeasurementStyle = {
 };
 
 export type CompletedDistanceMeasurement = {
+  createdAt?: number;
   id: string;
   isVisible: boolean;
+  kind?: DistanceKind;
   name: string;
   points: MeasurePoint[];
   style: DistanceMeasurementStyle;

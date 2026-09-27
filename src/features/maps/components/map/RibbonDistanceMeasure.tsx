@@ -4,13 +4,17 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import maplibregl from 'maplibre-gl';
 import type { MapViewMode } from './MapCommandContext';
-import type { DistanceKind } from './distanceMeasurement';
+import { suppressDoubleClickZoomWhileHandlerAlive } from './doubleClickZoom';
+import {
+  createDefaultDistanceMeasurementStyle,
+  type CompletedDistanceMeasurement,
+  type DistanceKind,
+} from './distanceMeasurement';
 import {
   appendMeasurePoint,
   createCesiumDistanceEntities,
@@ -21,6 +25,7 @@ import {
   pointFromMapEvent,
   type MeasurePoint,
 } from './MapMeasurePanel';
+import { useMapMeasure } from './MapMeasureContext';
 import type { CesiumNamespace, CesiumViewer } from './cesiumRuntime';
 
 const RIBBON_DISTANCE_SOURCE_ID = 'cte-ribbon-distance';
@@ -71,13 +76,6 @@ export function useRibbonDistanceMeasure() {
   return value;
 }
 
-type FinishedRibbonDistance = {
-  id: number;
-  kind: DistanceKind;
-  points: MeasurePoint[];
-  total: number;
-};
-
 type RibbonDistanceMeasureOverlayProps = {
   cesiumScene: { Cesium: CesiumNamespace; viewer: CesiumViewer } | null;
   map: maplibregl.Map | null;
@@ -92,11 +90,10 @@ export function RibbonDistanceMeasureOverlay({
   mapReady,
 }: RibbonDistanceMeasureOverlayProps) {
   const { deactivate, distanceKind } = useRibbonDistanceMeasure();
+  const { addCompletedMeasurement, completedMeasurements } = useMapMeasure();
   const [points, setPoints] = useState<MeasurePoint[]>([]);
   const [previewPoint, setPreviewPoint] = useState<MeasurePoint | null>(null);
-  const [finished, setFinished] = useState<FinishedRibbonDistance[]>([]);
   const [terrainRevision, setTerrainRevision] = useState(0);
-  const finishedIdRef = useRef(0);
 
   const isGlobe = mapMode === 'globe';
   const isTerrainKind = distanceKind === 'surface' && isGlobe && Boolean(cesiumScene);
@@ -126,7 +123,6 @@ export function RibbonDistanceMeasureOverlay({
   useEffect(() => {
     setPoints([]);
     setPreviewPoint(null);
-    setFinished([]);
   }, [distanceKind]);
 
   const clearDraft = useCallback(() => {
@@ -145,16 +141,16 @@ export function RibbonDistanceMeasureOverlay({
       ? measureTerrainDistance(cesiumScene.viewer, cesiumScene.Cesium, points)
       : measureDistance(points, distanceKind);
 
-    finishedIdRef.current += 1;
-    setFinished((current) => [...current, {
-      id: finishedIdRef.current,
+    addCompletedMeasurement({
+      isVisible: true,
       kind: distanceKind,
       points: points.map((point) => ({ ...point })),
-      total,
-    }]);
+      style: createDefaultDistanceMeasurementStyle(),
+      totalDistance: total,
+    });
     setPoints([]);
     setPreviewPoint(null);
-  }, [cesiumScene, distanceKind, isTerrainKind, points]);
+  }, [addCompletedMeasurement, cesiumScene, distanceKind, isTerrainKind, points]);
 
   useEffect(() => {
     if (!distanceKind || !isTerrainKind || !cesiumScene || cesiumScene.viewer.isDestroyed()) {
@@ -197,6 +193,7 @@ export function RibbonDistanceMeasureOverlay({
 
     const { Cesium, viewer } = cesiumScene;
     const handler = new Cesium.ScreenSpaceEventHandler(viewer.canvas);
+    suppressDoubleClickZoomWhileHandlerAlive(handler);
     const previousCursor = viewer.canvas.style.cursor;
 
     viewer.canvas.style.cursor = 'crosshair';
@@ -273,30 +270,6 @@ export function RibbonDistanceMeasureOverlay({
   }, [cesiumScene, distanceKind, isGlobe, points, previewDistance, previewPoint]);
 
   useEffect(() => {
-    if (!cesiumScene || !isGlobe || cesiumScene.viewer.isDestroyed() || finished.length === 0) {
-      return;
-    }
-
-    const entities = finished.flatMap((measurement) => createCesiumDistanceEntities(
-      cesiumScene.viewer,
-      cesiumScene.Cesium,
-      measurement.points,
-      null,
-      measurement.total,
-      measurement.kind,
-      false,
-      {},
-    ));
-
-    return () => {
-      entities.forEach((entity) => {
-        cesiumScene.viewer.entities.remove(entity);
-      });
-      cesiumScene.viewer.scene.requestRender?.();
-    };
-  }, [cesiumScene, finished, isGlobe]);
-
-  useEffect(() => {
     if (!distanceKind || !map || isGlobe || !mapReady) {
       return;
     }
@@ -358,25 +331,34 @@ export function RibbonDistanceMeasureOverlay({
     };
   }, [clearDraft, deactivate, distanceKind, finish, isGlobe, map, mapReady, points.length]);
 
+  const visibleCompletedMeasurements = useMemo(
+    () => completedMeasurements.filter((measurement) => measurement.isVisible),
+    [completedMeasurements],
+  );
+  const hasCompletedResults = visibleCompletedMeasurements.length > 0;
+
   useEffect(() => {
-    if (!distanceKind || !map || isGlobe || !mapReady) {
+    if (!map || isGlobe || !mapReady || (!distanceKind && !hasCompletedResults)) {
       return;
     }
 
     const handleStyleData = () => {
       ensureRibbonDistanceLayers(map);
-      updateRibbonDistanceSource(map, finished, points, previewPoint, previewDistance, totalDistance, distanceKind);
+      updateRibbonDistanceSource(map, visibleCompletedMeasurements, points, previewPoint, previewDistance, totalDistance, distanceKind);
     };
 
     map.on('styledata', handleStyleData);
     ensureRibbonDistanceLayers(map);
-    updateRibbonDistanceSource(map, finished, points, previewPoint, previewDistance, totalDistance, distanceKind);
+    updateRibbonDistanceSource(map, visibleCompletedMeasurements, points, previewPoint, previewDistance, totalDistance, distanceKind);
 
     return () => {
       map.off('styledata', handleStyleData);
-      removeRibbonDistanceLayers(map);
+
+      if (!distanceKind) {
+        removeRibbonDistanceLayers(map);
+      }
     };
-  }, [distanceKind, finished, isGlobe, map, mapReady, points, previewDistance, previewPoint, totalDistance]);
+  }, [distanceKind, hasCompletedResults, isGlobe, map, mapReady, points, previewDistance, previewPoint, totalDistance, visibleCompletedMeasurements]);
 
   return null;
 }
@@ -462,12 +444,12 @@ function ensureRibbonDistanceLayers(map: maplibregl.Map) {
 
 function updateRibbonDistanceSource(
   map: maplibregl.Map,
-  finished: FinishedRibbonDistance[],
+  completed: CompletedDistanceMeasurement[],
   points: MeasurePoint[],
   previewPoint: MeasurePoint | null,
   previewDistance: number,
   totalDistance: number,
-  distanceKind: DistanceKind,
+  distanceKind: DistanceKind | null,
 ) {
   if (!map.isStyleLoaded()) {
     return;
@@ -480,7 +462,7 @@ function updateRibbonDistanceSource(
   }
 
   source.setData(buildRibbonDistanceFeatures(
-    finished,
+    completed,
     points,
     previewPoint,
     previewDistance,
@@ -507,17 +489,16 @@ function removeRibbonDistanceLayers(map: maplibregl.Map) {
 }
 
 function buildRibbonDistanceFeatures(
-  finished: FinishedRibbonDistance[],
+  completed: CompletedDistanceMeasurement[],
   points: MeasurePoint[],
   previewPoint: MeasurePoint | null,
   previewDistance: number,
   totalDistance: number,
-  distanceKind: DistanceKind,
+  distanceKind: DistanceKind | null,
 ): GeoJSON.FeatureCollection {
   const features: GeoJSON.Feature[] = [];
-  const kindLabel = distanceKind === 'space' ? '空间' : '贴地';
 
-  finished.forEach((measurement) => {
+  completed.forEach((measurement) => {
     features.push({
       geometry: {
         coordinates: measurement.points.map((point) => [point.lon, point.lat]),
@@ -533,57 +514,61 @@ function buildRibbonDistanceFeatures(
       features.push({
         geometry: { coordinates: [endPoint.lon, endPoint.lat], type: 'Point' },
         properties: {
-          label: `${formatDistance(measurement.total)} ${measurement.kind === 'space' ? '空间' : '贴地'}`,
+          label: `${formatDistance(measurement.totalDistance)} ${measurement.kind === 'space' ? '空间' : '贴地'}`,
         },
         type: 'Feature',
       });
     }
   });
 
-  if (points.length > 0) {
-    features.push({
-      geometry: {
-        coordinates: points.map((point) => [point.lon, point.lat]),
-        type: 'LineString',
-      },
-      properties: {},
-      type: 'Feature',
-    });
+  if (distanceKind) {
+    const kindLabel = distanceKind === 'space' ? '空间' : '贴地';
 
-    points.forEach((point) => {
+    if (points.length > 0) {
       features.push({
-        geometry: { coordinates: [point.lon, point.lat], type: 'Point' },
+        geometry: {
+          coordinates: points.map((point) => [point.lon, point.lat]),
+          type: 'LineString',
+        },
         properties: {},
         type: 'Feature',
       });
-    });
-  }
 
-  if (previewPoint && points.length > 0) {
-    const anchor = points[points.length - 1];
+      points.forEach((point) => {
+        features.push({
+          geometry: { coordinates: [point.lon, point.lat], type: 'Point' },
+          properties: {},
+          type: 'Feature',
+        });
+      });
+    }
 
-    features.push({
-      geometry: {
-        coordinates: [[anchor.lon, anchor.lat], [previewPoint.lon, previewPoint.lat]],
-        type: 'LineString',
-      },
-      properties: { preview: true },
-      type: 'Feature',
-    });
+    if (previewPoint && points.length > 0) {
+      const anchor = points[points.length - 1];
 
-    features.push({
-      geometry: { coordinates: [previewPoint.lon, previewPoint.lat], type: 'Point' },
-      properties: { label: `${formatDistance(previewDistance)} ${kindLabel}` },
-      type: 'Feature',
-    });
-  } else if (points.length > 0 && totalDistance > 0) {
-    const endPoint = points[points.length - 1];
+      features.push({
+        geometry: {
+          coordinates: [[anchor.lon, anchor.lat], [previewPoint.lon, previewPoint.lat]],
+          type: 'LineString',
+        },
+        properties: { preview: true },
+        type: 'Feature',
+      });
 
-    features.push({
-      geometry: { coordinates: [endPoint.lon, endPoint.lat], type: 'Point' },
-      properties: { label: `${formatDistance(totalDistance)} ${kindLabel}` },
-      type: 'Feature',
-    });
+      features.push({
+        geometry: { coordinates: [previewPoint.lon, previewPoint.lat], type: 'Point' },
+        properties: { label: `${formatDistance(previewDistance)} ${kindLabel}` },
+        type: 'Feature',
+      });
+    } else if (points.length > 0 && totalDistance > 0) {
+      const endPoint = points[points.length - 1];
+
+      features.push({
+        geometry: { coordinates: [endPoint.lon, endPoint.lat], type: 'Point' },
+        properties: { label: `${formatDistance(totalDistance)} ${kindLabel}` },
+        type: 'Feature',
+      });
+    }
   }
 
   return { features, type: 'FeatureCollection' };

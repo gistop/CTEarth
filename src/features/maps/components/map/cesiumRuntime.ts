@@ -2,12 +2,20 @@ import type { CesiumLayerNamespace } from './cesiumLayerOptions';
 
 const CESIUM_BASE_URL = '/cesium/';
 
+export type CesiumSceneModel = {
+  show: boolean;
+  modelMatrix: unknown;
+  boundingSphere?: { center: { x: number; y: number; z: number }; radius: number } | undefined;
+  activeAnimations?: { addAll: (options: { loop?: unknown }) => unknown } | undefined;
+};
+
 export type CesiumViewer = {
   camera: {
     changed?: {
       addEventListener: (callback: () => void) => () => void;
     };
-    positionCartographic: { height: number };
+    positionCartographic: { longitude: number; latitude: number; height: number };
+    flyToBoundingSphere: (boundingSphere: unknown, options?: Record<string, unknown>) => void;
     computeViewRectangle?: (ellipsoid?: unknown) => { east: number; north: number; south: number; west: number } | undefined;
     zoomIn: (amount?: number) => void;
     zoomOut: (amount?: number) => void;
@@ -15,6 +23,10 @@ export type CesiumViewer = {
     setView: (options: { destination: unknown; orientation?: Record<string, unknown> }) => void;
     pickEllipsoid?: (windowPosition: unknown, ellipsoid?: unknown) => unknown;
     getPickRay?: (windowPosition: unknown) => unknown;
+    viewMatrix?: ArrayLike<number>;
+    positionWC?: { x: number; y: number; z: number };
+    directionWC?: { x: number; y: number; z: number };
+    frustum?: { projectionMatrix?: ArrayLike<number> };
   };
   canvas: HTMLCanvasElement;
   clock: {
@@ -58,6 +70,13 @@ export type CesiumViewer = {
     };
     pick?: (windowPosition: unknown) => { id?: unknown } | undefined;
     pickPosition?: (windowPosition: unknown) => unknown;
+    primitives: {
+      add: (primitive: unknown) => unknown;
+      remove: (primitive: unknown) => boolean;
+    };
+    postRender: {
+      addEventListener: (callback: () => void) => () => void;
+    };
     postProcessStages: {
       fxaa: {
         enabled: boolean;
@@ -88,6 +107,14 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   GeoJsonDataSource: {
     load: (data: unknown, options?: Record<string, unknown>) => Promise<unknown>;
   };
+  Model: {
+    fromGltfAsync: (options: { url: string; cesium?: CesiumNamespace }) => Promise<CesiumSceneModel>;
+  };
+  AnimationLoop: {
+    REPEAT: unknown;
+  };
+  BoundingSphere: new (center: unknown, radius: number) => unknown;
+  HeadingPitchRange: new (heading: number, pitch: number, range: number) => unknown;
   WebMapTileServiceImageryProvider: new (options: Record<string, unknown>) => unknown;
   Rectangle: {
     fromDegrees: (west: number, south: number, east: number, north: number) => unknown;
@@ -115,6 +142,11 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   Cartesian2: new (x: number, y: number) => unknown;
   Matrix4: {
     new (): unknown;
+    IDENTITY: unknown;
+    fromTranslation: (translation: unknown, result: unknown) => unknown;
+    fromUniformScale: (scale: number, result: unknown) => unknown;
+    getTranslation: (matrix: unknown, result: unknown) => unknown;
+    multiplyTransformation: (left: unknown, right: unknown, result: unknown) => unknown;
     inverse: (matrix: unknown, result: unknown) => unknown;
     multiplyByPoint: (matrix: unknown, cartesian: unknown, result: unknown) => unknown;
   };
@@ -139,7 +171,8 @@ export type CesiumNamespace = CesiumLayerNamespace & {
     eastNorthUpToFixedFrame: (origin: unknown) => unknown;
   };
   Cartographic: {
-    new (longitude?: number, latitude?: number, height?: number): unknown;
+    new (longitude?: number, latitude?: number, height?: number): { longitude: number; latitude: number; height: number };
+    clone: (cartographic: unknown) => unknown;
     fromCartesian: (cartesian: unknown) => { longitude: number; latitude: number; height: number };
     fromDegrees: (longitude: number, latitude: number, height?: number) => unknown;
   };

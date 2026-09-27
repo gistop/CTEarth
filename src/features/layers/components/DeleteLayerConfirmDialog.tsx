@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { AlertTriangle, Trash2, X } from 'lucide-react';
 
 export type DeleteLayerConfirmTarget = {
-  kind: 'layer' | 'basemap' | 'map';
+  kind: 'layer' | 'basemap' | 'map' | 'model';
   name: string;
 };
 
@@ -46,7 +46,13 @@ export function DeleteLayerConfirmDialog({ target, onCancel, onConfirm }: Delete
     return null;
   }
 
-  const title = target.kind === 'basemap' ? '删除底图' : target.kind === 'map' ? '删除地图' : '删除图层';
+  const title = target.kind === 'basemap'
+    ? '删除底图'
+    : target.kind === 'map'
+      ? '删除地图'
+      : target.kind === 'model'
+        ? '删除三维模型'
+        : '删除图层';
   const warning = target.kind === 'map'
     ? '地图中的图层将移动到相邻地图，删除后无法恢复，请确认当前选择。'
     : '删除后无法恢复，请确认当前选择。';

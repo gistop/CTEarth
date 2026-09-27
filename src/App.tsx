@@ -60,7 +60,7 @@ import {
   GlobeLocateSearchButton,
   MapLayerMenu,
   MapMeasureProvider,
-  MapMeasureResults,
+  UnifiedMeasureResults,
   RibbonDistanceMeasureProvider,
   MapPanel,
   MeasureSplitButton,
@@ -69,16 +69,15 @@ import {
   MapSunlightButton,
   MapSunlightProvider,
   ElevationMeasureProvider,
-  ElevationMeasureResults,
   useElevationMeasure,
   GeometryMeasureProvider,
-  GeometryMeasureResults,
   useGeometryMeasure,
   MapBasemapSelectionProvider,
   TerrainAnalysisProvider,
   TerrainProfileChart,
   useTerrainAnalysis,
 } from './features/maps';
+import { MeasureSettingsInline } from './features/maps/components/map/MeasureSettingsInline';
 import { AttributeFieldsHeader, AttributeFieldsPanel, AttributeTableHeader, AttributeTablePanel, useAttributeFieldRibbonGroups } from './features/attributes';
 import type { AttributeFieldRibbonGroup } from './features/attributes';
 import { ChartPanel } from './features/charts';
@@ -223,8 +222,6 @@ const baseRibbonGroups: RibbonGroup[] = [
   {
     title: '图层',
     tools: [
-      { label: '底图', icon: Layers },
-      { label: '添加数据', icon: Database },
       { label: '从路径添加数据', icon: Upload },
       { label: '添加图形图层', icon: Plus },
     ],
@@ -341,8 +338,8 @@ function createMapRibbonGroups({
                 icon={Ruler}
                 label="距离"
                 options={[
-                  { id: 'distance-space', label: '空间距离' },
-                  { id: 'distance-surface', label: '贴地距离' },
+                  { id: 'distance-space', label: '直线' },
+                  { id: 'distance-surface', label: '贴地' },
                 ]}
                 onActivate={(id) => toggleMeasureTool(id as MeasureToolId)}
               />
@@ -400,6 +397,11 @@ function createMapRibbonGroups({
                 onActivate={(id) => toggleMeasureTool(id as MeasureToolId)}
               />
             ),
+          },
+          {
+            label: '测量设置',
+            icon: SlidersHorizontal,
+            render: () => <MeasureSettingsInline mapMode={mapMode} />,
           },
         ],
       };
@@ -1043,9 +1045,7 @@ function TerrainProfileDockSync({ onOpen, onClose }: { onOpen: () => void; onClo
 function MeasureResultsDockPanel() {
   return (
     <div className="measure-results-stack">
-      <ElevationMeasureResults />
-      <GeometryMeasureResults />
-      <MapMeasureResults />
+      <UnifiedMeasureResults />
     </div>
   );
 }

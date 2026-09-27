@@ -20,20 +20,23 @@ export type MapGroupRenderEntry = {
 
 export type MapGroupRenderState = {
   initialized: boolean;
+  currentGroupId: string | null;
   entries: MapGroupRenderEntry[];
 };
 
 const defaultMapGroupRenderState: MapGroupRenderState = {
   initialized: false,
+  currentGroupId: null,
   entries: [],
 };
 
 let currentState = defaultMapGroupRenderState;
 const listeners = new Set<() => void>();
 
-export function createMapGroupRenderState(groups: MapGroup[]): MapGroupRenderState {
+export function createMapGroupRenderState(groups: MapGroup[], currentGroupId: string): MapGroupRenderState {
   return {
     initialized: true,
+    currentGroupId,
     entries: groups.flatMap((group) => (
       group.layerItems.map((item) => ({
         id: item.layerId === 'basemap'
@@ -86,12 +89,13 @@ function getMapGroupRenderSnapshot() {
 function normalizeMapGroupRenderState(state: MapGroupRenderState) {
   return {
     initialized: state.initialized,
+    currentGroupId: state.currentGroupId ?? null,
     entries: state.entries.map((entry) => ({ ...entry })),
   };
 }
 
 function areMapGroupRenderStatesEqual(left: MapGroupRenderState, right: MapGroupRenderState) {
-  if (left.initialized !== right.initialized || left.entries.length !== right.entries.length) {
+  if (left.initialized !== right.initialized || left.currentGroupId !== right.currentGroupId || left.entries.length !== right.entries.length) {
     return false;
   }
 

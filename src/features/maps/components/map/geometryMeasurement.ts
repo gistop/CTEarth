@@ -8,6 +8,7 @@ export type GeometryMeasurePoint = {
 
 export type AreaMeasureResult = {
   area: number;
+  createdAt?: number;
   id: string;
   isSurfaceArea?: boolean;
   perimeter: number;
@@ -16,6 +17,7 @@ export type AreaMeasureResult = {
 };
 
 export type AngleMeasureResult = {
+  createdAt?: number;
   firstPitch?: number;
   horizontalAngle: number;
   id: string;
@@ -26,6 +28,7 @@ export type AngleMeasureResult = {
 
 export type BearingMeasureResult = {
   bearing: number;
+  createdAt?: number;
   horizontalDistance: number;
   id: string;
   points: [GeometryMeasurePoint, GeometryMeasurePoint];
@@ -413,6 +416,21 @@ export function createBearingResultEntities(
       },
     });
   });
+  if (haversineMeters(start, end) >= 1) {
+    addEntity({
+      polyline: {
+        positions: [toCartesianFromDegrees(Cesium, start), toCartesianFromDegrees(Cesium, end)],
+        width: 3,
+        material: new Cesium.PolylineDashMaterialProperty({
+          color: Cesium.Color.fromAlpha(color, 0.75),
+          gapColor: Cesium.Color.fromAlpha(color, 0),
+          dashLength: 16,
+        }),
+        clampToGround: true,
+        arcType: Cesium.ArcType.GEODESIC,
+      },
+    });
+  }
   addEntity({
     polyline: {
       positions: arcPositions,

@@ -42,7 +42,7 @@ export function GeometryMeasureProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    setResults((current) => [result, ...current]);
+    setResults((current) => [{ ...result, createdAt: result.createdAt ?? Date.now() }, ...current]);
   }, []);
 
   const removeResult = useCallback((id: string) => {
