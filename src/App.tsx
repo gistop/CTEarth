@@ -266,12 +266,14 @@ function createMapRibbonGroups({
   setIdentifyActive,
   setSelectionActive,
   swipeActive,
+  terrainContourActive,
   terrainFloodActive,
   terrainProfileActive,
   toggleMeasureTool,
   toggleRasterSwipe,
   toggleIdentifyActive,
   toggleSelectionActive,
+  toggleTerrainContour,
   toggleTerrainFlood,
   toggleTerrainProfile,
 }: {
@@ -286,12 +288,14 @@ function createMapRibbonGroups({
   setIdentifyActive: (active: boolean) => void;
   setSelectionActive: (active: boolean) => void;
   swipeActive: boolean;
+  terrainContourActive: boolean;
   terrainFloodActive: boolean;
   terrainProfileActive: boolean;
   toggleMeasureTool: (tool: MeasureToolId) => void;
   toggleRasterSwipe: (rasterId?: string) => void;
   toggleIdentifyActive: () => void;
   toggleSelectionActive: () => void;
+  toggleTerrainContour: () => void;
   toggleTerrainFlood: () => void;
   toggleTerrainProfile: () => void;
 }): RibbonGroup[] {
@@ -529,6 +533,14 @@ function createMapRibbonGroups({
           onClick: toggleTerrainProfile,
         },
         {
+          label: '等高线',
+          icon: Mountain,
+          active: terrainContourActive,
+          disabled: !isGlobeMode,
+          muted: !isGlobeMode,
+          onClick: toggleTerrainContour,
+        },
+        {
           label: '淹没分析',
           icon: Waves,
           active: terrainFloodActive,
@@ -736,12 +748,14 @@ function Ribbon({
         setIdentifyActive,
         setSelectionActive,
         swipeActive: Boolean(swipeRasterId),
+        terrainContourActive: terrainTool === 'contour',
         terrainFloodActive: terrainTool === 'flood',
         terrainProfileActive: terrainTool === 'profile',
         toggleMeasureTool,
         toggleRasterSwipe,
         toggleIdentifyActive,
         toggleSelectionActive,
+        toggleTerrainContour: () => toggleTerrainTool('contour'),
         toggleTerrainFlood: () => toggleTerrainTool('flood'),
         toggleTerrainProfile: () => toggleTerrainTool('profile'),
       });

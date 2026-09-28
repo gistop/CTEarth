@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import type { ProfileResult } from './terrainAnalysisCesium';
 
-export type TerrainAnalysisTool = 'profile' | 'flood';
+export type TerrainAnalysisTool = 'profile' | 'flood' | 'contour';
 
 type TerrainAnalysisContextValue = {
   activeTool: TerrainAnalysisTool | null;

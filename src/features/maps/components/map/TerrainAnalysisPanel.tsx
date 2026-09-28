@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Eraser, RefreshCw, Waves, X } from 'lucide-react';
+import { Activity, Eraser, Mountain, RefreshCw, Waves, X } from 'lucide-react';
 import type { MapViewMode } from './MapCommandContext';
 import type { CesiumNamespace, CesiumViewer } from './cesiumRuntime';
 import { suppressDoubleClickZoomWhileHandlerAlive } from './doubleClickZoom';
 import { useTerrainAnalysis } from './TerrainAnalysisContext';
 import {
   buildFloodSampleGrid,
+  buildContourSampleGrid,
+  computeContourRegionFromView,
   computeFloodRegionFromView,
+  contourSpanDegrees,
+  CONTOUR_MAX_SPAN_DEGREES,
+  createContourEntities,
   createFloodEntities,
   createProfileDrawingEntities,
   createProfileResultEntities,
@@ -14,6 +19,8 @@ import {
   floodRegionAreaSquareMeters,
   formatProfileStats,
   pickTerrainPoint,
+  type ContourRegion,
+  type ContourStats,
   type FloodRegion,
   type ProfilePoint,
   type ProfileResult,
@@ -54,6 +61,15 @@ export function TerrainAnalysisPanel({ cesiumScene, mapMode }: TerrainAnalysisPa
   const floodSpeedRef = useRef(floodSpeed);
   const floodLimitsRef = useRef(floodLimits);
   const floodRequestIdRef = useRef(0);
+
+  const [contourRegion, setContourRegion] = useState<ContourRegion | null>(null);
+  const [contourStats, setContourStats] = useState<ContourStats | null>(null);
+  const [contourSampling, setContourSampling] = useState(false);
+  const [contourStatus, setContourStatus] = useState('');
+  const [contourRevision, setContourRevision] = useState(0);
+  const contourEntitiesRef = useRef<unknown[]>([]);
+  const contourViewerRef = useRef<CesiumViewer | null>(null);
+  const contourRequestIdRef = useRef(0);
 
   useEffect(() => {
     profilePointsRef.current = profilePoints;
@@ -383,6 +399,111 @@ export function TerrainAnalysisPanel({ cesiumScene, mapMode }: TerrainAnalysisPa
     };
   }, [cesiumScene, activeTool, floodAutoRise]);
 
+  const clearContourEntities = useCallback(() => {
+    const viewer = contourViewerRef.current;
+
+    contourEntitiesRef.current.forEach((entity) => {
+      if (viewer && !viewer.isDestroyed()) {
+        viewer.entities.remove(entity);
+      }
+    });
+    contourEntitiesRef.current = [];
+
+    if (viewer && !viewer.isDestroyed()) {
+      viewer.scene.requestRender?.();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTool !== 'contour') {
+      setContourRegion(null);
+      setContourStats(null);
+      clearContourEntities();
+    }
+  }, [activeTool, clearContourEntities]);
+
+  const refreshContourFromView = useCallback(() => {
+    if (!cesiumScene) {
+      return;
+    }
+
+    const region = computeContourRegionFromView(cesiumScene.Cesium, cesiumScene.viewer);
+
+    if (!region) {
+      setContourRegion(null);
+      setContourStatus('视野无效，请调整视角后重试');
+      return;
+    }
+
+    const span = contourSpanDegrees(cesiumScene.Cesium, region);
+
+    if (span.width > CONTOUR_MAX_SPAN_DEGREES || span.height > CONTOUR_MAX_SPAN_DEGREES) {
+      setContourRegion(null);
+      setContourStatus('视野过大，请放大后重试');
+      return;
+    }
+
+    setContourRegion(region);
+    setContourRevision((revision) => revision + 1);
+  }, [cesiumScene]);
+
+  useEffect(() => {
+    if (!cesiumScene || activeTool !== 'contour' || mapMode !== 'globe' || contourRegion) {
+      return;
+    }
+
+    refreshContourFromView();
+  }, [cesiumScene, activeTool, mapMode, contourRegion, refreshContourFromView]);
+
+  useEffect(() => {
+    if (!cesiumScene || activeTool !== 'contour' || mapMode !== 'globe' || !contourRegion) {
+      return;
+    }
+
+    const { Cesium, viewer } = cesiumScene;
+    const requestId = ++contourRequestIdRef.current;
+
+    clearContourEntities();
+    contourViewerRef.current = viewer;
+    setContourSampling(true);
+    setContourStats(null);
+    setContourStatus('正在采样地形，生成等高线…');
+
+    Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, buildContourSampleGrid(Cesium, contourRegion))
+      .then((sampled) => {
+        if (requestId !== contourRequestIdRef.current || viewer.isDestroyed()) {
+          return;
+        }
+
+        const heights = sampled.map((item) => (item as { height?: number }).height ?? 0);
+        const { entities, stats } = createContourEntities(Cesium, viewer, contourRegion, heights);
+
+        contourEntitiesRef.current = entities;
+
+        if (!entities.length) {
+          setContourStatus('当前区域无地形起伏，未生成等高线');
+          return;
+        }
+
+        setContourStats(stats);
+        setContourStatus(`${stats.levelCount} 层 · ${stats.lineCount} 条 · 间距 ${Math.round(stats.interval)} m`);
+      })
+      .catch(() => {
+        if (requestId === contourRequestIdRef.current) {
+          setContourStatus('等高线生成失败，请重试');
+        }
+      })
+      .finally(() => {
+        if (requestId === contourRequestIdRef.current) {
+          setContourSampling(false);
+        }
+      });
+
+    return () => {
+      contourRequestIdRef.current += 1;
+    };
+  }, [cesiumScene, activeTool, mapMode, contourRegion, contourRevision, clearContourEntities]);
+
   const floodStatus = useMemo(() => {
     const base = `水位 ${Math.round(floodLevel)} m`;
 
@@ -497,6 +618,46 @@ export function TerrainAnalysisPanel({ cesiumScene, mapMode }: TerrainAnalysisPa
             <output className="map-terrain-value">{floodSpeed} m/s</output>
           </div>
           <div className="map-terrain-status" aria-live="polite">{floodStatus}</div>
+        </div>
+      </aside>
+    );
+  }
+
+  if (activeTool === 'contour') {
+    const toDeg = (radian: number) => cesiumScene.Cesium.Math.toDegrees(radian).toFixed(2);
+
+    return (
+      <aside className="map-terrain-panel" aria-label="等高线">
+        <header className="map-terrain-panel-header">
+          <div>
+            <Mountain size={15} strokeWidth={1.8} />
+            <span>等高线</span>
+          </div>
+          <button type="button" title="关闭" aria-label="关闭" onClick={closeTerrainTool}>
+            <X size={14} strokeWidth={1.8} />
+          </button>
+        </header>
+        <div className="map-terrain-panel-body">
+          <div className="map-terrain-row">
+            <span className="map-terrain-label">区域</span>
+            <span className="map-terrain-region">
+              {contourRegion
+                ? `${toDeg(contourRegion.west)}~${toDeg(contourRegion.east)}°E, ${toDeg(contourRegion.south)}~${toDeg(contourRegion.north)}°N`
+                : '未获取视野范围'}
+            </span>
+            <button
+              className="map-terrain-action"
+              type="button"
+              disabled={contourSampling}
+              onClick={refreshContourFromView}
+            >
+              <RefreshCw size={13} />
+              按视野重生成
+            </button>
+          </div>
+          <div className="map-terrain-status" aria-live="polite">
+            {contourSampling ? '正在采样地形，生成等高线…' : contourStatus}
+          </div>
         </div>
       </aside>
     );

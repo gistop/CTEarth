@@ -162,6 +162,7 @@ export type CesiumNamespace = CesiumLayerNamespace & {
   LabelStyle: {
     FILL_AND_OUTLINE: unknown;
   };
+  DistanceDisplayCondition: new (near: number, far: number) => unknown;
   sampleTerrainMostDetailed: (
     terrainProvider: unknown,
     positions: unknown[],

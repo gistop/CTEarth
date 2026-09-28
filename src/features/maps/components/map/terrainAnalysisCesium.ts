@@ -398,3 +398,286 @@ export function formatProfileStats(result: ProfileResult) {
   return `长度 ${(total / 1000).toFixed(2)} km · 高程 ${Math.round(minH)}~${Math.round(maxH)} m`
     + ` · 平均 ${Math.round(sum / heights.length)} m · 起伏 ${Math.round(maxH - minH)} m`;
 }
+
+export const CONTOUR_GRID_SIZE = 72;
+export const CONTOUR_MAX_SPAN_DEGREES = 8;
+export const CONTOUR_MAX_LEVELS = 24;
+export const CONTOUR_MINOR_COLOR = '#00e5ff';
+export const CONTOUR_MAJOR_COLOR = '#ff8c00';
+export const CONTOUR_LABEL_COLOR = '#8ff6ff';
+
+export type ContourRegion = {
+  east: number;
+  north: number;
+  south: number;
+  west: number;
+};
+
+export type ContourStats = {
+  interval: number;
+  levelCount: number;
+  lineCount: number;
+};
+
+export function computeContourRegionFromView(
+  Cesium: CesiumNamespace,
+  viewer: CesiumViewer,
+): ContourRegion | null {
+  const rectangle = viewer.camera.computeViewRectangle?.();
+
+  if (!rectangle) {
+    return null;
+  }
+
+  const region: ContourRegion = {
+    east: rectangle.east,
+    north: rectangle.north,
+    south: rectangle.south,
+    west: rectangle.west,
+  };
+
+  if (!(region.east > region.west) || !(region.north > region.south)) {
+    return null;
+  }
+
+  return region;
+}
+
+export function contourSpanDegrees(Cesium: CesiumNamespace, region: ContourRegion) {
+  return {
+    height: Cesium.Math.toDegrees(region.north - region.south),
+    width: Cesium.Math.toDegrees(region.east - region.west),
+  };
+}
+
+export function buildContourSampleGrid(
+  Cesium: CesiumNamespace,
+  region: ContourRegion,
+  size = CONTOUR_GRID_SIZE,
+) {
+  const points: unknown[] = [];
+
+  for (let j = 0; j <= size; j += 1) {
+    const lat = region.south + ((region.north - region.south) * j) / size;
+
+    for (let i = 0; i <= size; i += 1) {
+      const lon = region.west + ((region.east - region.west) * i) / size;
+      points.push(new Cesium.Cartographic(lon, lat));
+    }
+  }
+
+  return points;
+}
+
+function niceContourInterval(range: number) {
+  const raw = Math.max(range, 1) / 14;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(raw)));
+  const normalized = raw / magnitude;
+  const step = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
+
+  return step * magnitude;
+}
+
+// Marching Squares：对某一等高层，输出网格坐标 (fx, fy) 下的线段
+function contourSegments(grid: number[][], nx: number, ny: number, level: number) {
+  const segments: Array<[number, number][]> = [];
+  const interp = (v0: number, v1: number) => (level - v0) / (v1 - v0);
+
+  for (let j = 0; j < ny; j += 1) {
+    for (let i = 0; i < nx; i += 1) {
+      // 与 level 相等时微调，避免除零/端点退化
+      const bump = (v: number) => (v === level ? v + 1e-6 : v);
+      const v00 = bump(grid[j][i]);
+      const v10 = bump(grid[j][i + 1]);
+      const v01 = bump(grid[j + 1][i]);
+      const v11 = bump(grid[j + 1][i + 1]);
+
+      let code = 0;
+      if (v00 >= level) code |= 1;
+      if (v10 >= level) code |= 2;
+      if (v11 >= level) code |= 4;
+      if (v01 >= level) code |= 8;
+      if (code === 0 || code === 15) continue;
+
+      // 单元四条边上的交点（网格坐标）
+      const bottom: [number, number] = [i + interp(v00, v10), j];
+      const right: [number, number] = [i + 1, j + interp(v10, v11)];
+      const top: [number, number] = [i + interp(v01, v11), j + 1];
+      const left: [number, number] = [i, j + interp(v00, v01)];
+      const centerAbove = (v00 + v10 + v11 + v01) / 4 >= level;
+
+      switch (code) {
+        case 1: case 14: segments.push([left, bottom]); break;
+        case 2: case 13: segments.push([bottom, right]); break;
+        case 3: case 12: segments.push([left, right]); break;
+        case 4: case 11: segments.push([top, right]); break;
+        case 6: case 9: segments.push([bottom, top]); break;
+        case 7: case 8: segments.push([left, top]); break;
+        case 5:
+          if (centerAbove) segments.push([left, top], [bottom, right]);
+          else segments.push([left, bottom], [top, right]);
+          break;
+        case 10:
+          if (centerAbove) segments.push([left, bottom], [top, right]);
+          else segments.push([left, top], [bottom, right]);
+          break;
+        default: break;
+      }
+    }
+  }
+
+  return segments;
+}
+
+// 把碎片线段按共享端点连接成折线
+function joinContourSegments(segments: Array<[number, number][]>) {
+  const key = (p: [number, number]) => `${Math.round(p[0] * 1e6)}:${Math.round(p[1] * 1e6)}`;
+  const adjacency = new Map<string, Array<{ index: number; end: number }>>();
+
+  segments.forEach((seg, index) => {
+    [0, 1].forEach((end) => {
+      const k = key(seg[end]);
+
+      if (!adjacency.has(k)) {
+        adjacency.set(k, []);
+      }
+
+      adjacency.get(k)!.push({ index, end });
+    });
+  });
+
+  const used = new Array(segments.length).fill(false);
+  const lines: [number, number][][] = [];
+
+  for (let s = 0; s < segments.length; s += 1) {
+    if (used[s]) continue;
+    used[s] = true;
+    const points: [number, number][] = [segments[s][0], segments[s][1]];
+
+    // 从折线两端分别向外延伸
+    for (let end = 1; end >= 0; end -= 1) {
+      let guard = 0;
+
+      while (guard++ < 100000) {
+        const tip = key(points[end === 1 ? points.length - 1 : 0]);
+        const candidates = (adjacency.get(tip) || []).filter((c) => !used[c.index]);
+
+        if (candidates.length === 0) break;
+
+        const next = candidates[0];
+        used[next.index] = true;
+        const other = segments[next.index][next.end === 0 ? 1 : 0];
+
+        if (end === 1) {
+          points.push(other);
+        } else {
+          points.unshift(other);
+        }
+      }
+    }
+
+    lines.push(points);
+  }
+
+  return lines;
+}
+
+export function createContourEntities(
+  Cesium: CesiumNamespace,
+  viewer: CesiumViewer,
+  region: ContourRegion,
+  heights: number[],
+): { entities: unknown[]; stats: ContourStats } {
+  const entities: unknown[] = [];
+  const size = CONTOUR_GRID_SIZE;
+  const grid: number[][] = [];
+  let minH = Infinity;
+  let maxH = -Infinity;
+  let index = 0;
+
+  for (let j = 0; j <= size; j += 1) {
+    const row: number[] = [];
+
+    for (let i = 0; i <= size; i += 1) {
+      const h = heights[index++] ?? 0;
+      row.push(h);
+
+      if (Number.isFinite(h)) {
+        minH = Math.min(minH, h);
+        maxH = Math.max(maxH, h);
+      }
+    }
+
+    grid.push(row);
+  }
+
+  if (!Number.isFinite(minH) || maxH - minH < 1) {
+    return { entities, stats: { interval: 0, levelCount: 0, lineCount: 0 } };
+  }
+
+  const interval = niceContourInterval(maxH - minH);
+  const levels: number[] = [];
+
+  for (let lv = Math.ceil(minH / interval) * interval; lv < maxH; lv += interval) {
+    levels.push(lv);
+
+    if (levels.length >= CONTOUR_MAX_LEVELS) break;
+  }
+
+  const toLon = (fx: number) => region.west + ((region.east - region.west) * fx) / size;
+  const toLat = (fy: number) => region.south + ((region.north - region.south) * fy) / size;
+  const minorColor = Cesium.Color.fromCssColorString(CONTOUR_MINOR_COLOR);
+  const majorColor = Cesium.Color.fromCssColorString(CONTOUR_MAJOR_COLOR);
+  let lineCount = 0;
+
+  levels.forEach((level) => {
+    // 每 5 倍间隔为计曲线，加粗显示
+    const isMajor = Math.abs((level / interval) % 5) < 1e-6;
+    const lines = joinContourSegments(contourSegments(grid, size, size, level));
+    let longest: [number, number][] | null = null;
+
+    lines.forEach((pts) => {
+      if (pts.length < 3) return; // 过滤碎线
+
+      const positions = pts.map((p) => Cesium.Cartesian3.fromRadians(toLon(p[0]), toLat(p[1]), level));
+
+      entities.push(viewer.entities.add({
+        polyline: {
+          positions,
+          width: isMajor ? 3 : 1.6,
+          material: isMajor ? majorColor : minorColor,
+          clampToGround: true,
+        },
+      }));
+      lineCount += 1;
+
+      if (!longest || pts.length > longest.length) {
+        longest = pts;
+      }
+    });
+
+    // 每层在最长的一条线中点放高程标注
+    if (longest) {
+      const mid = longest[Math.floor(longest.length / 2)];
+
+      entities.push(viewer.entities.add({
+        position: Cesium.Cartesian3.fromRadians(toLon(mid[0]), toLat(mid[1]), level + 40),
+        label: {
+          text: `${Math.round(level)} m`,
+          font: '13px sans-serif',
+          fillColor: Cesium.Color.fromCssColorString(CONTOUR_LABEL_COLOR),
+          outlineColor: Cesium.Color.fromCssColorString('#000000'),
+          outlineWidth: 3,
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 80000),
+        },
+      }));
+    }
+  });
+
+  viewer.scene.requestRender?.();
+
+  return { entities, stats: { interval, levelCount: levels.length, lineCount } };
+}
