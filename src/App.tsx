@@ -42,12 +42,14 @@ import {
   Settings,
   Share2,
   SlidersHorizontal,
+  Snowflake,
   Sparkles,
   Square,
   SquareDashedMousePointer,
   Tags,
   Triangle,
   Waves,
+  Wind,
   Wrench,
   Undo2,
   Upload,
@@ -119,6 +121,7 @@ import {
   useGis,
 } from './gisStore';
 import { defaultToolboxCatalog, ToolboxPanel } from './features/toolbox';
+import { TeachingProvider, useTeaching } from './features/education/TeachingContext';
 
 type RibbonTool = {
   active?: boolean;
@@ -145,9 +148,10 @@ const quickTools = [
   { title: '缩小', icon: ZoomOut },
 ];
 
-const ribbonTabs = ['工程', '地图', '布局', '分析', '编辑', '共享', '帮助'] as const;
+const ribbonTabs = ['工程', '地图', '布局', '分析', '编辑', '教学', '共享', '帮助'] as const;
 type RibbonTab = typeof ribbonTabs[number];
 const editRibbonTab = '编辑';
+const teachingRibbonTab = '教学';
 const fieldRibbonTab = '字段';
 
 const dockColumnWidths = {
@@ -695,6 +699,39 @@ function Ribbon({
   const { clearSelection, layers, rasters, swipeRasterId, toggleRasterSwipe } = useGis();
   const { mapCommandState } = useMapCommands();
   const { activeTool: terrainTool, toggleTerrainTool } = useTerrainAnalysis();
+  const { activeDemo: teachingDemo, toggleTeachingDemo } = useTeaching();
+  const isGlobeMode = mapCommandState.mapMode === 'globe';
+
+  const teachingGroups: RibbonGroup[] = [
+    {
+      title: '地球系统',
+      tools: [
+        {
+          label: '地球圈层',
+          icon: Earth,
+          active: teachingDemo === 'earth-layers',
+          disabled: !isGlobeMode,
+          muted: !isGlobeMode,
+          onClick: () => toggleTeachingDemo('earth-layers'),
+        },
+      ],
+    },
+    {
+      title: '地貌演变',
+      tools: [
+        { label: '河流地貌', icon: Waves, muted: true },
+        { label: '冰川地貌', icon: Snowflake, muted: true },
+        { label: '风成地貌', icon: Wind, muted: true },
+      ],
+    },
+    {
+      title: '地质构造',
+      tools: [
+        { label: '褶皱', icon: Mountain, muted: true },
+        { label: '断层', icon: Activity, muted: true },
+      ],
+    },
+  ];
   const {
     activeTool: measureActiveTool,
     activate: activateMeasureTool,
@@ -715,6 +752,8 @@ function Ribbon({
     ? fieldGroups.map((group: AttributeFieldRibbonGroup) => group)
     : activeTab === editRibbonTab
     ? editGroups
+    : activeTab === teachingRibbonTab
+    ? teachingGroups
     : activeTab === '布局'
       ? layoutRibbonGroups.map((group, groupIndex) => {
         if (groupIndex !== 4) {
@@ -1629,6 +1668,7 @@ export default function App() {
           <MapBasemapSelectionProvider>
             <MapSunlightProvider>
             <TerrainAnalysisProvider>
+            <TeachingProvider>
             <TerrainProfileDockSync onOpen={openTerrainProfilePanel} onClose={closeTerrainProfilePanel} />
             <MapMeasureProvider>
             <RibbonDistanceMeasureProvider>
@@ -1678,6 +1718,7 @@ export default function App() {
             </ElevationMeasureProvider>
             </RibbonDistanceMeasureProvider>
             </MapMeasureProvider>
+            </TeachingProvider>
             </TerrainAnalysisProvider>
             </MapSunlightProvider>
           </MapBasemapSelectionProvider>

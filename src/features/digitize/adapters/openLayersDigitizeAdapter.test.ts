@@ -295,7 +295,7 @@ describe('OpenLayers digitize runtime', () => {
     input.vectorOverlay = { name: 'reference', geojson: input.layers[0].geojson };
     const { runtime, draw, memory, source } = setup(input);
     const feature = point(); draw().dispatchEvent(new DrawEvent('drawstart', feature));
-    runtime.sync({ ...input, mapGroups: { initialized: true, entries: [{ id: 'vectorOverlay', layerId: 'vectorOverlay', instanceId: 'overlay', groupId: 'group', visible: false }] } });
+    runtime.sync({ ...input, mapGroups: { initialized: true, currentGroupId: null, entries: [{ id: 'vectorOverlay', layerId: 'vectorOverlay', instanceId: 'overlay', groupId: 'group', visible: false }] } });
     draw().dispatchEvent(new DrawEvent('drawend', feature));
     expect(source(2).getFeatures()).toHaveLength(0); expect(memory.writes).toHaveLength(0);
   });

@@ -19,6 +19,7 @@ import { MapSunlightPanel } from './map/MapSunlightPanel';
 import { SceneModelSyncPanel } from './map/SceneModelSyncPanel';
 import { useMapSunlight } from './map/MapSunlightContext';
 import { TerrainAnalysisPanel } from './map/TerrainAnalysisPanel';
+import { TeachingOverlay } from '../../education/TeachingOverlay';
 import { ElevationMeasurePanel } from './map/ElevationMeasurePanel';
 import { GeometryMeasurePanel } from './map/GeometryMeasurePanel';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
@@ -1064,6 +1065,7 @@ export function MapPanel() {
       <MapMeasurePanel cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       <RibbonDistanceMeasureOverlay cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       <TerrainAnalysisPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <TeachingOverlay cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <ElevationMeasurePanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <GeometryMeasurePanel
         cesiumScene={cesiumScene}

@@ -19,7 +19,7 @@ export type CesiumViewer = {
     computeViewRectangle?: (ellipsoid?: unknown) => { east: number; north: number; south: number; west: number } | undefined;
     zoomIn: (amount?: number) => void;
     zoomOut: (amount?: number) => void;
-    flyTo: (options: { destination: unknown; duration?: number }) => void;
+    flyTo: (options: { destination: unknown; duration?: number; orientation?: Record<string, unknown> }) => void;
     setView: (options: { destination: unknown; orientation?: Record<string, unknown> }) => void;
     pickEllipsoid?: (windowPosition: unknown, ellipsoid?: unknown) => unknown;
     getPickRay?: (windowPosition: unknown) => unknown;
@@ -57,6 +57,7 @@ export type CesiumViewer = {
     backgroundColor: unknown;
     globe: {
       baseColor: unknown;
+      clippingPlanes?: unknown;
       depthTestAgainstTerrain?: boolean;
       ellipsoid?: unknown;
       enableLighting: boolean;
@@ -178,11 +179,30 @@ export type CesiumNamespace = CesiumLayerNamespace & {
     fromDegrees: (longitude: number, latitude: number, height?: number) => unknown;
   };
   Color: {
+    new (red?: number, green?: number, blue?: number, alpha?: number): unknown;
     LIGHTGREY: unknown;
     SKYBLUE: unknown;
     WHITE: unknown;
     fromAlpha: (color: unknown, alpha: number) => unknown;
     fromCssColorString: (color: string) => unknown;
+    multiplyByScalar: (color: unknown, scalar: number, result: unknown) => unknown;
+  };
+  ClippingPlaneCollection?: new (options: {
+    planes: unknown[];
+    unionClippingRegions?: boolean;
+    edgeWidth?: number;
+    edgeColor?: unknown;
+  }) => unknown;
+  ClippingPlane?: new (normal: unknown, distance: number) => unknown;
+  Geometry: new (options: Record<string, unknown>) => unknown;
+  GeometryAttribute: new (options: Record<string, unknown>) => unknown;
+  ComponentDatatype: { DOUBLE: unknown };
+  PrimitiveType: { TRIANGLES: unknown };
+  GeometryInstance: new (options: Record<string, unknown>) => unknown;
+  Primitive: new (options: Record<string, unknown>) => unknown;
+  PerInstanceColorAppearance: new (options: Record<string, unknown>) => unknown;
+  ColorGeometryInstanceAttribute: {
+    fromColor: (color: unknown) => unknown;
   };
   LabelGraphics: new (options: Record<string, unknown>) => unknown;
   VerticalOrigin: {

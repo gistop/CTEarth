@@ -19,7 +19,7 @@
     "@tanstack/react-virtual": "^3.14.10",
     "@vitejs/plugin-react": "^5.0.0",
     "ai": "^7.0.66",
-    "cesium": "^1.115.0",
+    "cesium": "1.145",
     "dockview-react": "^7.0.4",
     "echarts": "^6.1.0",
     "geolibre-wasm": "^1.5.1",

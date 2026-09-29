@@ -530,7 +530,7 @@ function contourSegments(grid: number[][], nx: number, ny: number, level: number
 }
 
 // 把碎片线段按共享端点连接成折线
-function joinContourSegments(segments: Array<[number, number][]>) {
+function joinContourSegments(segments: Array<[number, number][]>): Array<[number, number][]> {
   const key = (p: [number, number]) => `${Math.round(p[0] * 1e6)}:${Math.round(p[1] * 1e6)}`;
   const adjacency = new Map<string, Array<{ index: number; end: number }>>();
 
@@ -633,12 +633,9 @@ export function createContourEntities(
   levels.forEach((level) => {
     // 每 5 倍间隔为计曲线，加粗显示
     const isMajor = Math.abs((level / interval) % 5) < 1e-6;
-    const lines = joinContourSegments(contourSegments(grid, size, size, level));
-    let longest: [number, number][] | null = null;
+    const lines = joinContourSegments(contourSegments(grid, size, size, level)).filter((pts) => pts.length >= 3); // 过滤碎线
 
     lines.forEach((pts) => {
-      if (pts.length < 3) return; // 过滤碎线
-
       const positions = pts.map((p) => Cesium.Cartesian3.fromRadians(toLon(p[0]), toLat(p[1]), level));
 
       entities.push(viewer.entities.add({
@@ -650,13 +647,11 @@ export function createContourEntities(
         },
       }));
       lineCount += 1;
-
-      if (!longest || pts.length > longest.length) {
-        longest = pts;
-      }
     });
 
     // 每层在最长的一条线中点放高程标注
+    const longest = lines.reduce<[number, number][] | null>((acc, pts) => (!acc || pts.length > acc.length ? pts : acc), null);
+
     if (longest) {
       const mid = longest[Math.floor(longest.length / 2)];
 

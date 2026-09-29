@@ -17,7 +17,7 @@ export function createDigitizeInput(layer = createEditableLayer()): DigitizeMapI
     defaultStyle: { pointColor: '#f6c445', pointRadius: 6, pointOpacity: 1, pointStrokeColor: '#17202a', pointStrokeWidth: 1.5, lineColor: '#2f6da5', lineWidth: 2, lineOpacity: 1, fillColor: '#6b9bd2', fillOpacity: 0.22 },
     layerVisibility: { basemap: true, raster: true, vectorOverlay: true }, raster: null, rasterStyles: {}, rasterLayerVisibility: {},
     vectorOverlay: null, vectorOverlayStyle: { fillColor: '#31a354', fillOpacity: 0.28, lineColor: '#16753b', lineWidth: 2 },
-    mapGroups: { initialized: true, entries: [] },
+    mapGroups: { initialized: true, currentGroupId: null, entries: [] },
   };
 }
 

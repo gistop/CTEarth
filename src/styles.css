@@ -5982,6 +5982,63 @@ button {
   font-size: 12px;
 }
 
+.earth-layers-panel {
+  width: 316px;
+}
+
+.earth-layers-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.earth-layer-item {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.earth-layer-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(23, 32, 42, 0.18) inset;
+}
+
+.earth-layer-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.earth-layer-name {
+  font-weight: 600;
+  color: #17202a;
+}
+
+.earth-layer-range {
+  color: #5c6b7a;
+  font-size: 11px;
+}
+
+.earth-layer-note {
+  margin-top: 1px;
+  color: #5c6b7a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.earth-layers-hint {
+  margin: 8px 0 0;
+  padding-top: 8px;
+  border-top: 1px dashed #d5dde6;
+  color: #5c6b7a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .scene-model-place-row input[type="number"]:focus {
   border-color: #2f7ee6;
   outline: none;
