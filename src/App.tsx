@@ -11,6 +11,7 @@ import {
   ArrowUpDown,
   Activity,
   Bell,
+  Camera as CameraIcon,
   ChevronsDown,
   ChevronsUp,
   ChevronDown,
@@ -25,9 +26,11 @@ import {
   LocateFixed,
   Map,
   MapPin,
+  MapPinned,
   Minus,
   MousePointer2,
   Mountain,
+  Orbit as OrbitIcon,
   PanelLeft,
   Pause,
   PenTool,
@@ -53,6 +56,7 @@ import {
   Wrench,
   Undo2,
   Upload,
+  Video as VideoIcon,
   X,
   ZoomIn,
   ZoomOut,
@@ -122,6 +126,9 @@ import {
 } from './gisStore';
 import { defaultToolboxCatalog, ToolboxPanel } from './features/toolbox';
 import { TeachingProvider, useTeaching } from './features/education/TeachingContext';
+import { ScienceEducationPanel } from './features/education/ScienceEducationPanel';
+import { RoamProvider, useRoam } from './features/roam/RoamContext';
+import { RoamCameraPanel } from './features/roam/RoamCameraPanel';
 
 type RibbonTool = {
   active?: boolean;
@@ -685,6 +692,9 @@ function Ribbon({
   fieldDatasetId,
   onChangeTab,
   onSelectFieldContext,
+  onOpenScienceEducationPanel,
+  isRoamPanelOpen,
+  onToggleRoamCameraPanel,
 }: {
   activeTab: RibbonTab;
   collapsed: boolean;
@@ -693,6 +703,9 @@ function Ribbon({
   fieldDatasetId: string | null;
   onChangeTab: (tab: RibbonTab) => void;
   onSelectFieldContext: () => void;
+  onOpenScienceEducationPanel: () => void;
+  isRoamPanelOpen: boolean;
+  onToggleRoamCameraPanel: () => void;
 }) {
   const fieldGroups = useAttributeFieldRibbonGroups(fieldContextVisible ? fieldDatasetId : null);
   const editGroups = useDigitizeRibbonGroups(activeTab === editRibbonTab);
@@ -700,6 +713,7 @@ function Ribbon({
   const { mapCommandState } = useMapCommands();
   const { activeTool: terrainTool, toggleTerrainTool } = useTerrainAnalysis();
   const { activeDemo: teachingDemo, toggleTeachingDemo } = useTeaching();
+  const roam = useRoam();
   const isGlobeMode = mapCommandState.mapMode === 'globe';
 
   const teachingGroups: RibbonGroup[] = [
@@ -717,8 +731,9 @@ function Ribbon({
       ],
     },
     {
-      title: '地貌演变',
+      title: '地貌',
       tools: [
+        { label: '典型地貌库', icon: MapPinned, onClick: onOpenScienceEducationPanel },
         { label: '河流地貌', icon: Waves, muted: true },
         { label: '冰川地貌', icon: Snowflake, muted: true },
         { label: '风成地貌', icon: Wind, muted: true },
@@ -748,6 +763,58 @@ function Ribbon({
   }, [activateMeasureTool, deactivateMeasureTools, measureActiveTool]);
   const { identifyActive, setIdentifyActive, toggleIdentifyActive } = useMapIdentify();
   const { selectionActive, setSelectionActive, toggleSelectionActive } = useMapSelection();
+  const roamRecording = roam.recordingState.active;
+  const roamRecordGroup: RibbonGroup = {
+    title: '漫游录制',
+    tools: [
+      {
+        label: '环绕',
+        icon: OrbitIcon,
+        active: roam.playbackState === 'playing' || roamRecording,
+        disabled: !isGlobeMode || roamRecording,
+        muted: !isGlobeMode,
+        onClick: () => {
+          if (!roam.executor) {
+            return;
+          }
+          if (roam.playbackState === 'playing') {
+            roam.executor.stop();
+
+            return;
+          }
+          if (roam.executor.generateOrbit()) {
+            if (roam.recordArmed) {
+              roam.executor.record();
+            } else {
+              roam.executor.play();
+            }
+          }
+        },
+      },
+      {
+        label: '相机',
+        icon: CameraIcon,
+        active: isRoamPanelOpen,
+        onClick: onToggleRoamCameraPanel,
+      },
+      {
+        label: '录制',
+        icon: VideoIcon,
+        active: roam.recordArmed || roamRecording,
+        disabled: !isGlobeMode,
+        muted: !isGlobeMode,
+        onClick: () => {
+          if (roamRecording) {
+            roam.executor?.cancelRecord();
+          } else {
+            roam.toggleRecordArmed();
+          }
+        },
+      },
+    ],
+  };
+  const withRoamRecordGroup = (groups: RibbonGroup[], tab: RibbonTab) =>
+    tab === '地图' ? [...groups, roamRecordGroup] : groups;
   const activeGroups: RibbonGroup[] = fieldContextSelected
     ? fieldGroups.map((group: AttributeFieldRibbonGroup) => group)
     : activeTab === editRibbonTab
@@ -775,7 +842,7 @@ function Ribbon({
           }),
         };
       })
-      : createMapRibbonGroups({
+      : withRoamRecordGroup(createMapRibbonGroups({
         activeTab,
         clearSelection,
         hasLayers: layers.length > 0,
@@ -797,7 +864,7 @@ function Ribbon({
         toggleTerrainContour: () => toggleTerrainTool('contour'),
         toggleTerrainFlood: () => toggleTerrainTool('flood'),
         toggleTerrainProfile: () => toggleTerrainTool('profile'),
-      });
+      }), activeTab);
 
   return (
     <section className={`ribbon${activeTab === ribbonTabs[2] ? ' layout-ribbon' : ''}${fieldContextVisible ? ' field-context-ribbon' : ''}`} aria-label="功能区">
@@ -1360,6 +1427,7 @@ export default function App() {
   const [fieldContextSelected, setFieldContextSelected] = useState(false);
   const [isRibbonCollapsed, setIsRibbonCollapsed] = useState(false);
   const [isAiAssistantPanelVisible, setIsAiAssistantPanelVisible] = useState(false);
+  const [isRoamPanelOpen, setIsRoamPanelOpen] = useState(false);
   const dockviewApiRef = useRef<DockviewApi | null>(null);
   const aiAssistantPanelRef = useRef<IDockviewPanel | null>(null);
 
@@ -1370,10 +1438,12 @@ export default function App() {
       attributeTable: AttributeTableDockPanel,
       attributeFields: AttributeFieldsDockPanel,
       contents: EmbeddedContentsPanel,
+      scienceEducation: ScienceEducationPanel,
       layout: LayoutPanel,
       map: MapSurfaceDockPanel,
       inspector: InspectorPanel,
       python: PythonPanel,
+      roamCamera: RoamCameraPanel,
       placeholder: PlaceholderPanel,
       terrainProfile: TerrainProfileDockPanel,
       measureResults: MeasureResultsDockPanel,
@@ -1385,6 +1455,70 @@ export default function App() {
     setActiveRibbonTab(tab);
     setFieldContextSelected(false);
   }, []);
+
+  const openScienceEducationPanel = useCallback(() => {
+    const api = dockviewApiRef.current;
+    const panel = api?.getPanel('science-education');
+
+    if (panel) {
+      panel.api.setActive();
+    } else if (api) {
+      api.addPanel({
+        id: 'science-education',
+        component: 'scienceEducation',
+        title: '科教',
+        position: { direction: 'left' },
+        minimumWidth: 180,
+        minimumHeight: 120,
+      }).api.setActive();
+    }
+  }, []);
+
+  const openRoamCameraPanel = useCallback(() => {
+    const api = dockviewApiRef.current;
+    const existing = api?.getPanel('roam-camera');
+
+    if (existing) {
+      existing.api.setActive();
+      setIsRoamPanelOpen(true);
+
+      return;
+    }
+    if (!api) {
+      return;
+    }
+    const inspector = api.getPanel('inspector');
+    const panel = api.addPanel({
+      id: 'roam-camera',
+      component: 'roamCamera',
+      title: '相机',
+      position: inspector
+        ? { direction: 'within', referencePanel: 'inspector' }
+        : { direction: 'right' },
+      minimumWidth: 260,
+      minimumHeight: 220,
+    });
+
+    panel.api.setActive();
+    // 右列默认 180px 偏窄，尝试把所在组加宽到 320
+    const groupApi = panel.api.group?.api as { setSize?: (size: { width?: number }) => void } | undefined;
+
+    groupApi?.setSize?.({ width: 320 });
+    setIsRoamPanelOpen(true);
+  }, []);
+
+  const closeRoamCameraPanel = useCallback(() => {
+    dockviewApiRef.current?.getPanel('roam-camera')?.api.close();
+    setIsRoamPanelOpen(false);
+  }, []);
+
+  const toggleRoamCameraPanel = useCallback(() => {
+    if (dockviewApiRef.current?.getPanel('roam-camera')) {
+      closeRoamCameraPanel();
+    } else {
+      openRoamCameraPanel();
+    }
+  }, [openRoamCameraPanel, closeRoamCameraPanel]);
 
   const addAiAssistantPanel = useCallback((api: DockviewApi) => {
     const existingPanel = api.getPanel(aiAssistantPanelId);
@@ -1584,6 +1718,9 @@ export default function App() {
         aiAssistantPanelRef.current = null;
         setIsAiAssistantPanelVisible(false);
       }
+      if (panel.id === 'roam-camera') {
+        setIsRoamPanelOpen(false);
+      }
     });
 
     const contents = event.api.addPanel({
@@ -1591,6 +1728,16 @@ export default function App() {
       component: 'contents',
       title: '内容',
       initialWidth: dockColumnWidths.contents,
+      minimumWidth: 180,
+      minimumHeight: 120,
+    });
+
+    event.api.addPanel({
+      id: 'science-education',
+      component: 'scienceEducation',
+      title: '科教',
+      inactive: true,
+      position: { direction: 'within', referencePanel: contents, index: 0 },
       minimumWidth: 180,
       minimumHeight: 120,
     });
@@ -1669,6 +1816,7 @@ export default function App() {
             <MapSunlightProvider>
             <TerrainAnalysisProvider>
             <TeachingProvider>
+            <RoamProvider>
             <TerrainProfileDockSync onOpen={openTerrainProfilePanel} onClose={closeTerrainProfilePanel} />
             <MapMeasureProvider>
             <RibbonDistanceMeasureProvider>
@@ -1695,6 +1843,9 @@ export default function App() {
                   fieldDatasetId={getAttributeFieldsLayerId(activeDockPanelId ?? undefined)}
                   onChangeTab={changeRibbonTab}
                   onSelectFieldContext={() => setFieldContextSelected(true)}
+                  onOpenScienceEducationPanel={openScienceEducationPanel}
+                  isRoamPanelOpen={isRoamPanelOpen}
+                  onToggleRoamCameraPanel={toggleRoamCameraPanel}
                 />
                 <main className="workspace">
                   <DockviewReact
@@ -1718,6 +1869,7 @@ export default function App() {
             </ElevationMeasureProvider>
             </RibbonDistanceMeasureProvider>
             </MapMeasureProvider>
+            </RoamProvider>
             </TeachingProvider>
             </TerrainAnalysisProvider>
             </MapSunlightProvider>

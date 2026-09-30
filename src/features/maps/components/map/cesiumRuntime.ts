@@ -21,6 +21,10 @@ export type CesiumViewer = {
     zoomOut: (amount?: number) => void;
     flyTo: (options: { destination: unknown; duration?: number; orientation?: Record<string, unknown> }) => void;
     setView: (options: { destination: unknown; orientation?: Record<string, unknown> }) => void;
+    cancelFlight?: () => void;
+    heading?: number;
+    pitch?: number;
+    roll?: number;
     pickEllipsoid?: (windowPosition: unknown, ellipsoid?: unknown) => unknown;
     getPickRay?: (windowPosition: unknown) => unknown;
     viewMatrix?: ArrayLike<number>;
@@ -61,6 +65,7 @@ export type CesiumViewer = {
       depthTestAgainstTerrain?: boolean;
       ellipsoid?: unknown;
       enableLighting: boolean;
+      tilesLoaded?: boolean;
       getHeight?: (cartographic: unknown) => number | undefined;
       pick?: (ray: unknown, scene: unknown) => unknown | undefined;
       shadows?: unknown;
@@ -78,6 +83,10 @@ export type CesiumViewer = {
     postRender: {
       addEventListener: (callback: () => void) => () => void;
     };
+    preRender?: {
+      addEventListener: (callback: () => void) => () => void;
+    };
+    render?: () => void;
     postProcessStages: {
       fxaa: {
         enabled: boolean;

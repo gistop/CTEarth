@@ -20,6 +20,9 @@ import { SceneModelSyncPanel } from './map/SceneModelSyncPanel';
 import { useMapSunlight } from './map/MapSunlightContext';
 import { TerrainAnalysisPanel } from './map/TerrainAnalysisPanel';
 import { TeachingOverlay } from '../../education/TeachingOverlay';
+import { LandformFlyToBridge } from '../../education/LandformFlyToBridge';
+import { RoamSceneBridge } from '../../roam/RoamSceneBridge';
+import { RoamMapEntities } from '../../roam/RoamMapEntities';
 import { ElevationMeasurePanel } from './map/ElevationMeasurePanel';
 import { GeometryMeasurePanel } from './map/GeometryMeasurePanel';
 import { createCesiumImageryProvider, createCesiumTerrainProvider, type CesiumImageryId, type CesiumTerrainId } from './map/cesiumLayerOptions';
@@ -1066,6 +1069,9 @@ export function MapPanel() {
       <RibbonDistanceMeasureOverlay cesiumScene={cesiumScene} map={mapRef.current} mapMode={mapCommandState.mapMode} mapReady={mapReady} />
       <TerrainAnalysisPanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <TeachingOverlay cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <LandformFlyToBridge cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <RoamSceneBridge cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
+      <RoamMapEntities cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <ElevationMeasurePanel cesiumScene={cesiumScene} mapMode={mapCommandState.mapMode} />
       <GeometryMeasurePanel
         cesiumScene={cesiumScene}
